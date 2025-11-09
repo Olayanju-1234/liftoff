@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Tenant Service Schema ---
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String   @unique // e.g., "Acme Inc."
+  subdomain String   @unique // e.g., "acme"
+  status    TenantStatus @default(PROVISIONING)
+  planId    String
+  
+  plan      Plan     @relation(fields: [planId], references: [id])
+  users     User[]   // A tenant can have many users
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  password  String   // Will be a hashed password
+  role      UserRole @default(USER)
+  
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade) // If tenant is deleted, delete users
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Plan {
+  id        String   @id @default(cuid()) // e.g., "plan_basic", "plan_enterprise"
+  name      String   @unique // e.g., "Basic", "Enterprise"
+  maxUsers  Int
+  maxApiKeys Int
+  
+  tenants   Tenant[] // A plan can be used by many tenants
+
+  createdAt DateTime @default(now())
+}
+
+// --- Enums ---
+
+enum TenantStatus {
+  PROVISIONING
+  ACTIVE
+  SUSPENDED
+  FAILED
+}
+
+enum UserRole {
+  ADMIN
+  USER
+}
