@@ -1,13 +1,13 @@
 // apps/tenant-service/src/tenants/tenants.service.ts
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, ConflictException } from '@nestjs/common'; // 1. Import ConflictException
 import { PrismaService } from '../prisma.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
-import { AmqpConnection } from '@golevelup/nestjs-rabbitmq'; // <-- 1. Import
+import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
+import { Prisma } from '@prisma/client'; // 2. Import Prisma types
 
 @Injectable()
 export class TenantsService {
-    // 2. Inject AmqpConnection
     constructor(
         private prisma: PrismaService,
         private readonly amqpConnection: AmqpConnection,
@@ -26,30 +26,44 @@ export class TenantsService {
             },
         });
 
-        const tenant = await this.prisma.tenant.create({
-            data: {
-                name: createTenantDto.name,
-                subdomain: createTenantDto.subdomain,
-                planId: createTenantDto.planId,
-            },
-        });
+        // 3. --- ADD THE TRY/CATCH BLOCK ---
+        try {
+            const tenant = await this.prisma.tenant.create({
+                data: {
+                    name: createTenantDto.name,
+                    subdomain: createTenantDto.subdomain,
+                    planId: createTenantDto.planId,
+                },
+            });
 
-        // 3. --- NEW ---
-        // After saving to DB, publish the event
-        const eventPayload = {
-            tenantId: tenant.id,
-            subdomain: tenant.subdomain,
-            planId: tenant.planId,
-        };
+            // If create is successful, publish the event
+            const eventPayload = {
+                tenantId: tenant.id,
+                subdomain: tenant.subdomain,
+                planId: tenant.planId,
+            };
 
-        // Publish to our exchange with a "routing key"
-        // Any service listening for this key will get the message.
-        await this.amqpConnection.publish(
-            'provisioning.direct', // Exchange
-            'tenant.requested',    // Routing Key
-            eventPayload,          // Payload
-        );
+            await this.amqpConnection.publish(
+                'provisioning.direct',
+                'tenant.requested',
+                eventPayload,
+            );
 
-        return tenant;
+            return tenant;
+        } catch (error) {
+            // 4. --- INSPECT THE ERROR ---
+            if (
+                error instanceof Prisma.PrismaClientKnownRequestError &&
+                error.code === 'P2002'
+            ) {
+                // We know this is a unique constraint violation
+                // The 'target' tells us which field failed.
+                const target = (error.meta?.target as string[])?.[0];
+                throw new ConflictException(`A tenant with this ${target} already exists.`);
+            }
+
+            // If it's some other error, just throw it
+            throw error;
+        }
     }
 }

@@ -12,6 +12,9 @@ import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq'; // <-- 1. Import
         {
           name: 'provisioning.direct',
           type: 'direct',
+          options: {
+            durable: true // <-- CORRECT
+          }
         },
       ],
       uri: 'amqp://devuser:devpassword@localhost:5672',
