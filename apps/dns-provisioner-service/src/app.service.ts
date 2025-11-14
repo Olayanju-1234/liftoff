@@ -1,14 +1,12 @@
-// apps/dns-provisioner-service/src/app.service.ts
-
 import { Injectable } from '@nestjs/common';
-import { RabbitSubscribe, AmqpConnection } from '@golevelup/nestjs-rabbitmq';
+import {
+  RabbitSubscribe,
+  AmqpConnection,
+  Nack,
+} from '@golevelup/nestjs-rabbitmq';
+import * as sharedTypes from '@liftoff/shared-types';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-interface TenantDbReadyPayload {
-  tenantId: string;
-  subdomain: string;
-}
 
 @Injectable()
 export class AppService {
@@ -20,31 +18,30 @@ export class AppService {
     queue: 'dns-provisioner-queue',
     queueOptions: {
       durable: true,
+      deadLetterExchange: 'dlx.provisioning',
+      deadLetterRoutingKey: 'dns-provisioner.failed',
     },
   })
-  public async handleTenantDbReady(payload: TenantDbReadyPayload) {
+  public async handleTenantDbReady(payload: sharedTypes.TenantDbReadyPayload) {
     console.log(
       `RECEIVED EVENT: Mock creating DNS record for ${payload.subdomain}`,
     );
 
     try {
-      // --- THIS IS THE MOCK ---
-      // We "pretend" to be calling an API by waiting for 2 seconds
       await sleep(2000);
-      // -------------------------
 
       console.log(
         `SUCCESS: Mock created DNS record for ${payload.subdomain}`,
       );
 
-      // Publish the next event just like the real service would
       await this.amqpConnection.publish(
         'provisioning.direct',
-        'tenant.dns.ready', // The next routing key
+        'tenant.dns.ready',
         payload,
       );
     } catch (error) {
       console.error(`FAILED to mock DNS record: ${error.message}`);
+      return new Nack(false);
     }
   }
 }

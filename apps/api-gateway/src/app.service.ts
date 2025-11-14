@@ -1,40 +1,53 @@
-// apps/api-gateway/src/app.service.ts
-
 import { HttpService } from '@nestjs/axios';
-import { HttpException, Injectable } from '@nestjs/common'; // 1. Import HttpException
+import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { firstValueFrom } from 'rxjs';
-import { AxiosError } from 'axios'; // 2. Import AxiosError
-
-export class CreateTenantDto {
-  name: string;
-  subdomain: string;
-  planId: string;
-}
+import { AxiosError } from 'axios';
+import { CreateTenantDto } from '@liftoff/shared-types';
 
 @Injectable()
 export class AppService {
+  private readonly logger = new Logger(AppService.name);
+
   constructor(private readonly httpService: HttpService) { }
 
-  // ... getHello() method might be here ...
+  getHealth(): { status: string } {
+    return { status: 'ok' };
+  }
+
+  getHello(): string {
+    this.logger.log('GET /hello requested');
+    return 'Hello from API Gateway!';
+  }
 
   async createTenant(createTenantDto: CreateTenantDto) {
-    // 3. --- ADD TRY/CATCH ---
+    this.logger.log(
+      { name: createTenantDto.name, subdomain: createTenantDto.subdomain },
+      'Attempting to create tenant...',
+    );
     try {
       const { data } = await firstValueFrom(
         this.httpService.post('/tenants', createTenantDto),
       );
+      this.logger.log(
+        { tenantId: data.id },
+        'Successfully initiated tenant creation.',
+      );
       return data;
     } catch (error) {
-      // 4. --- HANDLE THE ERROR ---
       if (error instanceof AxiosError) {
-        // This means the tenant-service sent us a clean error (like 409)
-        // We just re-throw it so the user gets the clean message.
+        this.logger.error(
+          {
+            err: error.response?.data,
+            status: error.response?.status,
+          },
+          'Error received from downstream service.',
+        );
         throw new HttpException(
-          error.response?.data, // The JSON { message: "...", statusCode: 409 }
-          error.response?.status || 500, // The 409 status, or 500 if undefined
+          error.response?.data,
+          error.response?.status!,
         );
       }
-      // If it's not an Axios error, it's an unexpected crash
+      this.logger.error({ err: error }, 'Unknown error in createTenant.');
       throw error;
     }
   }

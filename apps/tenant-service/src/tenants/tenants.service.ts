@@ -1,10 +1,12 @@
-// apps/tenant-service/src/tenants/tenants.service.ts
-
-import { Injectable, ConflictException } from '@nestjs/common'; // 1. Import ConflictException
+import { Injectable, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
-import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
-import { Prisma } from '@prisma/client'; // 2. Import Prisma types
+import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
+import { Prisma } from '@prisma/client';
+import type {
+    ProvisioningCompletePayload,
+    TenantRequestedPayload,
+} from '@liftoff/shared-types';
 
 @Injectable()
 export class TenantsService {
@@ -14,7 +16,6 @@ export class TenantsService {
     ) { }
 
     async create(createTenantDto: CreateTenantDto) {
-        // This test code for the Plan can stay for now
         await this.prisma.plan.upsert({
             where: { id: createTenantDto.planId },
             update: {},
@@ -26,7 +27,6 @@ export class TenantsService {
             },
         });
 
-        // 3. --- ADD THE TRY/CATCH BLOCK ---
         try {
             const tenant = await this.prisma.tenant.create({
                 data: {
@@ -36,8 +36,7 @@ export class TenantsService {
                 },
             });
 
-            // If create is successful, publish the event
-            const eventPayload = {
+            const eventPayload: TenantRequestedPayload = {
                 tenantId: tenant.id,
                 subdomain: tenant.subdomain,
                 planId: tenant.planId,
@@ -51,19 +50,50 @@ export class TenantsService {
 
             return tenant;
         } catch (error) {
-            // 4. --- INSPECT THE ERROR ---
             if (
                 error instanceof Prisma.PrismaClientKnownRequestError &&
                 error.code === 'P2002'
             ) {
-                // We know this is a unique constraint violation
-                // The 'target' tells us which field failed.
                 const target = (error.meta?.target as string[])?.[0];
-                throw new ConflictException(`A tenant with this ${target} already exists.`);
+                throw new ConflictException(
+                    `A tenant with this ${target} already exists.`,
+                );
             }
-
-            // If it's some other error, just throw it
             throw error;
+        }
+    }
+
+    @RabbitSubscribe({
+        exchange: 'provisioning.direct',
+        routingKey: 'tenant.provisioning.complete',
+        queue: 'tenant-service-completion-queue',
+        queueOptions: {
+            durable: true,
+        },
+    })
+    public async handleProvisioningComplete(
+        payload: ProvisioningCompletePayload,
+    ) {
+        console.log(
+            `RECEIVED FINAL EVENT: Activating tenant ${payload.tenantId}`,
+        );
+
+        try {
+            await this.prisma.tenant.update({
+                where: {
+                    id: payload.tenantId,
+                },
+                data: {
+                    status: 'ACTIVE',
+                },
+            });
+
+            console.log(`SUCCESS: Tenant ${payload.tenantId} is now ACTIVE.`);
+        } catch (error) {
+            console.error(
+                `FAILED to activate tenant ${payload.tenantId}:`,
+                error.message,
+            );
         }
     }
 }

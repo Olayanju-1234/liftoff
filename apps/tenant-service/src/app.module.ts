@@ -2,10 +2,23 @@ import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TenantsModule } from './tenants/tenants.module';
+import { LoggerModule } from 'nestjs-pino';
 
 @Module({
   imports: [
-    TenantsModule, // <-- Only import this
+    LoggerModule.forRoot({
+      pinoHttp: {
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            singleLine: true,
+            colorize: true,
+            levelFirst: false,
+          },
+        },
+      },
+    }),
+    TenantsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

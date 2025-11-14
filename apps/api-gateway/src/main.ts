@@ -4,20 +4,20 @@ import {
   NestFastifyApplication,
 } from '@nestjs/platform-fastify';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common'; // Import ValidationPipe
+import { ValidationPipe } from '@nestjs/common';
+import { Logger } from 'nestjs-pino';
 
 async function bootstrap() {
   const adapter = new FastifyAdapter();
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     adapter,
+    { bufferLogs: true },
   );
 
-  // Enable validation for any DTOs this gateway might use
+  app.useLogger(app.get(Logger));
   app.useGlobalPipes(new ValidationPipe());
 
-  // Run the gateway on port 3000
   await app.listen(3000, '0.0.0.0');
-  console.log(`ApiGateway is running on: ${await app.getUrl()}`);
 }
 bootstrap();

@@ -1,19 +1,26 @@
-import { Controller, Post, Body, Get } from '@nestjs/common';
-import { AppService, CreateTenantDto } from './app.service';
+import { Controller, Post, Body, Get, UseGuards } from '@nestjs/common';
+import { AppService } from './app.service';
+import { CreateTenantDto } from '@liftoff/shared-types';
+import { AuthGuard } from './auth/auth.guard';
 
 @Controller()
 export class AppController {
   constructor(private readonly appService: AppService) { }
 
-  @Get()
-  getHello(): string {
-    return 'Hello from API Gateway!';
+  @Get('health')
+  getHealth(): { status: string } {
+    return this.appService.getHealth();
   }
 
-  // 1. Create the public-facing POST /tenants endpoint
+  @Get()
+  @UseGuards(AuthGuard)
+  getHello(): string {
+    return this.appService.getHello();
+  }
+
   @Post('tenants')
+  @UseGuards(AuthGuard)
   createTenant(@Body() createTenantDto: CreateTenantDto) {
-    // 2. Call the service to proxy the request
     return this.appService.createTenant(createTenantDto);
   }
 }

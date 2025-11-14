@@ -1,13 +1,35 @@
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { HttpModule } from '@nestjs/axios'; // <-- 1. Import
+import { HttpModule } from '@nestjs/axios';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { LoggerModule } from 'nestjs-pino';
 
 @Module({
   imports: [
-    HttpModule.register({
-      timeout: 5000,
-      baseURL: 'http://localhost:3001', // <-- 3. Set base URL
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: './apps/api-gateway/.env',
+    }),
+    LoggerModule.forRoot({
+      pinoHttp: {
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            singleLine: true,
+            colorize: true,
+            levelFirst: false,
+          },
+        },
+      },
+    }),
+    HttpModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        timeout: 5000,
+        baseURL: configService.get<string>('TENANT_SERVICE_URL'),
+      }),
+      inject: [ConfigService],
     }),
   ],
   controllers: [AppController],
