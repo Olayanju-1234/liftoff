@@ -12,9 +12,12 @@ export class AuthGuard implements CanActivate {
     private readonly masterApiKey: string;
 
     constructor(private readonly configService: ConfigService) {
-        const apiKey = this.configService.get<string>('API_KEY');
+        // Try ConfigService first, then fallback to process.env
+        const apiKey = this.configService.get<string>('API_KEY') || process.env.API_KEY;
         if (!apiKey) {
-            throw new Error('API_KEY is not set in .env file for api-gateway');
+            throw new Error(
+                'API_KEY is not set. Please set it in apps/api-gateway/.env file or as an environment variable.',
+            );
         }
         this.masterApiKey = apiKey;
     }

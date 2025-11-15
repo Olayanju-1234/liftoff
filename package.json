@@ -5,11 +5,15 @@
   "description": "B2B Tenant Provisioning System (Microservices)",
   "author": "Your Name Here",
   "license": "MIT",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "docker-compose up -d && pnpm -r --parallel run dev",
-    "build": "pnpm -r run build",
-    "lint": "pnpm -r run lint",
-    "test": "pnpm -r run test",
+    "dev": "docker-compose up -d && npm run dev --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
     "test:e2e": "echo 'Running E2E tests... (to be configured)'"
   },
   "devDependencies": {

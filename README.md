@@ -38,7 +38,7 @@ Secure: The api-gateway is protected by a Bearer Token API key.
 
 System Architecture
 
-The project uses an event-driven microservice architecture. All services are independent NestJS applications managed in a pnpm monorepo.
+The project uses an event-driven microservice architecture. All services are independent NestJS applications managed in an npm workspaces monorepo.
 
 The Workflow Saga
 
@@ -62,7 +62,7 @@ The tenant-service (which is also a consumer) hears this final event and updates
 
 Tech Stack
 
-Monorepo: pnpm Workspaces
+Monorepo: npm Workspaces
 
 Services: NestJS (with Fastify adapter)
 
@@ -88,7 +88,7 @@ Prerequisites
 
 Node.js (v18+)
 
-pnpm (run npm install -g pnpm)
+npm (comes with Node.js)
 
 Docker Desktop
 
@@ -101,7 +101,7 @@ cd lift-off
 
 # Install all dependencies for all services
 
-pnpm install
+npm install
 
 # Start the infrastructure (PostgreSQL, RabbitMQ)
 
@@ -113,13 +113,13 @@ The services with databases (tenant-service, credentials-service) need to have t
 
 # (Run from root)
 
-pnpm --filter tenant-service prisma migrate dev
-pnpm --filter credentials-service prisma migrate dev
+cd apps/tenant-service && npx prisma migrate dev && cd ../..
+cd apps/credentials-service && npx prisma migrate dev && cd ../..
 
 # This ensures all Prisma clients are generated
 
-pnpm --filter tenant-service run build
-pnpm --filter credentials-service run build
+npm run build --workspace=apps/tenant-service
+npm run build --workspace=apps/credentials-service
 
 3. Run the Services
 
@@ -127,31 +127,33 @@ You must run all 7 services in their own separate terminals.
 
 # Terminal 1: API Gateway (Dev Mode)
 
-pnpm --filter api-gateway run start:dev
+npm run start:dev --workspace=apps/api-gateway
 
-# Terminal 2: Tenant Service (Prod Mode to avoid file locks)
+# Terminal 2: Tenant Service (Dev Mode)
+# Note: If you need to regenerate Prisma clients, stop this service first to avoid file locks on Windows
 
-pnpm --filter tenant-service run start:prod
+npm run start:dev --workspace=apps/tenant-service
 
 # Terminal 3: DB Provisioner (Dev Mode)
 
-pnpm --filter db-provisioner-service run start:dev
+npm run start:dev --workspace=apps/db-provisioner-service
 
 # Terminal 4: DNS Provisioner (Dev Mode)
 
-pnpm --filter dns-provisioner-service run start:dev
+npm run start:dev --workspace=apps/dns-provisioner-service
 
-# Terminal 5: Credentials Service (Prod Mode to avoid file locks)
+# Terminal 5: Credentials Service (Dev Mode)
+# Note: If you need to regenerate Prisma clients, stop this service first to avoid file locks on Windows
 
-pnpm --filter credentials-service run start:prod
+npm run start:dev --workspace=apps/credentials-service
 
 # Terminal 6: Billing Service (Dev Mode)
 
-pnpm --filter billing-service run start:dev
+npm run start:dev --workspace=apps/billing-service
 
 # Terminal 7: Notification Service (Dev Mode)
 
-pnpm --filter notification-service run start:dev
+npm run start:dev --workspace=apps/notification-service
 
 Testing the Full Flow
 

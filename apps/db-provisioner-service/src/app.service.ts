@@ -5,7 +5,7 @@ import {
   Nack,
 } from '@golevelup/nestjs-rabbitmq';
 import { PrismaService } from './prisma.service';
-import type { TenantRequestedPayload } from '@liftoff/shared-types';
+import type { TenantRequestedPayload, TenantDbReadyPayload } from '@liftoff/shared-types';
 
 @Injectable()
 export class AppService {
@@ -47,7 +47,11 @@ export class AppService {
       await this.amqpConnection.publish(
         'provisioning.direct',
         'tenant.db.ready',
-        payload,
+        {
+          tenantId: payload.tenantId,
+          subdomain: payload.subdomain,
+          planId: payload.planId,
+        },
       );
     } catch (error) {
       this.logger.error(

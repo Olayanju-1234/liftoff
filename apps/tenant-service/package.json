@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@golevelup/nestjs-rabbitmq": "^6.0.2",
-    "@liftoff/shared-types": "workspace:*",
+    "@liftoff/shared-types": "*",
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",

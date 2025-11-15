@@ -41,7 +41,11 @@ export class AppService {
       await this.amqpConnection.publish(
         'provisioning.direct',
         'tenant.billing.active',
-        payload,
+        {
+          tenantId: payload.tenantId,
+          subdomain: payload.subdomain,
+          planId: payload.planId,
+        },
       );
     } catch (error) {
       console.error(

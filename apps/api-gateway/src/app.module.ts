@@ -4,12 +4,33 @@ import { AppService } from './app.service';
 import { HttpModule } from '@nestjs/axios';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { LoggerModule } from 'nestjs-pino';
+import { join } from 'path';
+import { existsSync } from 'fs';
+import { AuthGuard } from './auth/auth.guard';
+
+// Determine the correct .env file path
+const getEnvPath = (): string => {
+  const possiblePaths = [
+    join(process.cwd(), 'apps', 'api-gateway', '.env'),
+    join(process.cwd(), '.env'),
+    '.env',
+  ];
+  
+  for (const path of possiblePaths) {
+    if (existsSync(path)) {
+      return path;
+    }
+  }
+  
+  // Return the most likely path even if it doesn't exist yet
+  return join(process.cwd(), 'apps', 'api-gateway', '.env');
+};
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: './apps/api-gateway/.env',
+      envFilePath: getEnvPath(),
     }),
     LoggerModule.forRoot({
       pinoHttp: {
@@ -33,6 +54,6 @@ import { LoggerModule } from 'nestjs-pino';
     }),
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, AuthGuard],
 })
 export class AppModule { }

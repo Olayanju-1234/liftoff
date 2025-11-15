@@ -39,7 +39,10 @@ export class AppService {
       await this.amqpConnection.publish(
         'provisioning.direct',
         'tenant.provisioning.complete',
-        payload,
+        {
+          tenantId: payload.tenantId,
+          subdomain: payload.subdomain,
+        },
       );
     } catch (error) {
       console.error(

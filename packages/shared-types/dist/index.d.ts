@@ -11,10 +11,12 @@ export interface TenantRequestedPayload {
 export interface TenantDbReadyPayload {
     tenantId: string;
     subdomain: string;
+    planId: string;
 }
 export interface TenantDnsReadyPayload {
     tenantId: string;
     subdomain: string;
+    planId: string;
 }
 export interface TenantCredentialsReadyPayload {
     tenantId: string;
@@ -24,7 +26,9 @@ export interface TenantCredentialsReadyPayload {
 export interface TenantBillingActivePayload {
     tenantId: string;
     subdomain: string;
+    planId: string;
 }
 export interface ProvisioningCompletePayload {
     tenantId: string;
+    subdomain: string;
 }

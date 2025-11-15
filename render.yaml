@@ -1,0 +1,127 @@
+    databases:
+      - name: liftoff-postgres
+        databaseName: liftoff_db
+        plan: free
+      - name: liftoff-redis
+        plan: free
+
+    services:
+      # 1. The Public Web Service
+      - type: web
+        name: api-gateway
+        plan: free
+        autoDeploy: true
+        healthCheck:
+          path: /health
+        dockerfilePath: ./Dockerfile
+        dockerContext: .
+        dockerBuildArgs:
+          APP_NAME: api-gateway
+        envVars:
+          - key: PORT
+            value: 10000
+          - key: API_KEY
+            value: "your-strong-production-api-key-here"
+          - fromService:
+              type: web
+              name: tenant-service
+              envVarKey: TENANT_SERVICE_URL
+          - fromDatabase:
+              name: liftoff-redis
+              property: connectionString
+            key: REDIS_URL
+
+      # 2. The Internal Web Service
+      - type: web
+        name: tenant-service
+        plan: free
+        autoDeploy: true
+        healthCheck:
+          path: /health
+        # This makes the service private (not on the public internet)
+        internalPort: 3001
+        dockerfilePath: ./Dockerfile
+        dockerContext: .
+        dockerBuildArgs:
+          APP_NAME: tenant-service
+        envVars:
+          - fromDatabase:
+              name: liftoff-postgres
+              property: connectionString
+            key: DATABASE_URL
+          - key: AMQP_URL
+            # Paste your CloudAMQP URL here
+            value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
+          - fromDatabase:
+              name: liftoff-redis
+              property: connectionString
+            key: REDIS_URL
+
+      # 3. The Workers
+      - type: worker
+        name: db-provisioner-service
+        plan: free
+        autoDeploy: true
+        dockerfilePath: ./Dockerfile
+        dockerContext: .
+        dockerBuildArgs:
+          APP_NAME: db-provisioner-service
+        envVars:
+          - fromDatabase:
+              name: liftoff-postgres
+              property: connectionString
+            key: DATABASE_URL
+          - key: AMQP_URL
+            value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
+
+      - type: worker
+        name: dns-provisioner-service
+        plan: free
+        autoDeploy: true
+        dockerfilePath: ./Dockerfile
+        dockerContext: .
+        dockerBuildArgs:
+          APP_NAME: dns-provisioner-service
+        envVars:
+          - key: AMQP_URL
+            value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
+
+      - type: worker
+        name: credentials-service
+        plan: free
+        autoDeploy: true
+        dockerfilePath: ./Dockerfile
+        dockerContext: .
+        dockerBuildArgs:
+          APP_NAME: credentials-service
+        envVars:
+          - fromDatabase:
+              name: liftoff-postgres
+              property: connectionString
+            key: DATABASE_URL
+          - key: AMQP_URL
+            value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
+
+      - type: worker
+        name: billing-service
+        plan: free
+        autoDeploy: true
+        dockerfilePath: ./Dockerfile
+        dockerContext: .
+        dockerBuildArgs:
+          APP_NAME: billing-service
+        envVars:
+          - key: AMQP_URL
+            value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
+
+      - type: worker
+        name: notification-service
+        plan: free
+        autoDeploy: true
+        dockerfilePath: ./Dockerfile
+        dockerContext: .
+        dockerBuildArgs:
+          APP_NAME: notification-service
+        envVars:
+          - key: AMQP_URL
+            value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"

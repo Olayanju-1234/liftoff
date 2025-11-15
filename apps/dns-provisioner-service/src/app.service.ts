@@ -37,7 +37,11 @@ export class AppService {
       await this.amqpConnection.publish(
         'provisioning.direct',
         'tenant.dns.ready',
-        payload,
+        {
+          tenantId: payload.tenantId,
+          subdomain: payload.subdomain,
+          planId: payload.planId,
+        },
       );
     } catch (error) {
       console.error(`FAILED to mock DNS record: ${error.message}`);
