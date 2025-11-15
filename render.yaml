@@ -12,10 +12,8 @@ services:
     autoDeploy: true
     healthCheck:
       path: /health
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./apps/api-gateway/Dockerfile
     dockerContext: .
-    dockerBuildArgs:
-      APP_NAME: api-gateway
     envVars:
       - key: PORT
         value: 10000
@@ -37,10 +35,8 @@ services:
     healthCheck:
       path: /health
     internalPort: 3001
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./apps/tenant-service/Dockerfile
     dockerContext: .
-    dockerBuildArgs:
-      APP_NAME: tenant-service
     envVars:
       - fromDatabase:
           name: liftoff-postgres
@@ -57,10 +53,8 @@ services:
     name: db-provisioner-service
     plan: free
     autoDeploy: true
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./apps/db-provisioner-service/Dockerfile
     dockerContext: .
-    dockerBuildArgs:
-      APP_NAME: db-provisioner-service
     envVars:
       - fromDatabase:
           name: liftoff-postgres
@@ -73,10 +67,8 @@ services:
     name: dns-provisioner-service
     plan: free
     autoDeploy: true
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./apps/dns-provisioner-service/Dockerfile
     dockerContext: .
-    dockerBuildArgs:
-      APP_NAME: dns-provisioner-service
     envVars:
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
@@ -85,10 +77,8 @@ services:
     name: credentials-service
     plan: free
     autoDeploy: true
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./apps/credentials-service/Dockerfile
     dockerContext: .
-    dockerBuildArgs:
-      APP_NAME: credentials-service
     envVars:
       - fromDatabase:
           name: liftoff-postgres
@@ -101,10 +91,8 @@ services:
     name: billing-service
     plan: free
     autoDeploy: true
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./apps/billing-service/Dockerfile
     dockerContext: .
-    dockerBuildArgs:
-      APP_NAME: billing-service
     envVars:
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
@@ -113,10 +101,8 @@ services:
     name: notification-service
     plan: free
     autoDeploy: true
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./apps/notification-service/Dockerfile
     dockerContext: .
-    dockerBuildArgs:
-      APP_NAME: notification-service
     envVars:
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
