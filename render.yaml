@@ -10,8 +10,8 @@ services:
     name: api-gateway
     plan: free
     autoDeploy: true
-    healthCheck:
-      path: /health
+    # healthCheck:
+    #   path: /health
     dockerfilePath: ./apps/api-gateway/Dockerfile
     dockerContext: .
     envVars:
@@ -32,8 +32,8 @@ services:
     name: tenant-service
     plan: free
     autoDeploy: true
-    healthCheck:
-      path: /health
+    # healthCheck:
+    #   path: /health
     internalPort: 3001
     dockerfilePath: ./apps/tenant-service/Dockerfile
     dockerContext: .
