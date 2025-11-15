@@ -34,7 +34,7 @@ services:
     autoDeploy: true
     # healthCheck:
     #   path: /health
-    internalPort: 3001
+    # internalPort: 3001
     dockerfilePath: ./apps/tenant-service/Dockerfile
     dockerContext: .
     envVars:
