@@ -11,8 +11,8 @@ services:
     runtime: docker
     plan: free
     autoDeploy: true
-    # healthCheck:
-    #   path: /health
+    healthCheck:
+      path: /health
     dockerfilePath: ./apps/api-gateway/Dockerfile
     dockerContext: .
     envVars:
@@ -20,36 +20,37 @@ services:
         value: 10000
       - key: API_KEY
         value: "your-strong-production-api-key-here"
-      - fromService:
+      - key: TENANT_SERVICE_URL
+        fromService:
           type: web
           name: tenant-service
-          envVarKey: TENANT_SERVICE_URL
-      - fromDatabase:
+          envVarKey: RENDER_INTERNAL_HOSTNAME
+      - key: REDIS_URL
+        fromDatabase:
           name: liftoff-redis
           property: connectionString
-        key: REDIS_URL
 
   - type: web
     name: tenant-service
     runtime: docker
     plan: free
     autoDeploy: true
-    # healthCheck:
-    #   path: /health
-    # internalPort: 3001
+    healthCheck:
+      path: /health
+    internalPort: 3001
     dockerfilePath: ./apps/tenant-service/Dockerfile
     dockerContext: .
     envVars:
-      - fromDatabase:
+      - key: DATABASE_URL
+        fromDatabase:
           name: liftoff-postgres
           property: connectionString
-        key: DATABASE_URL
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
-      - fromDatabase:
+      - key: REDIS_URL
+        fromDatabase:
           name: liftoff-redis
           property: connectionString
-        key: REDIS_URL
 
   - type: worker
     name: db-provisioner-service
@@ -59,10 +60,10 @@ services:
     dockerfilePath: ./apps/db-provisioner-service/Dockerfile
     dockerContext: .
     envVars:
-      - fromDatabase:
+      - key: DATABASE_URL
+        fromDatabase:
           name: liftoff-postgres
           property: connectionString
-        key: DATABASE_URL
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
 
@@ -85,10 +86,10 @@ services:
     dockerfilePath: ./apps/credentials-service/Dockerfile
     dockerContext: .
     envVars:
-      - fromDatabase:
+      - key: DATABASE_URL
+        fromDatabase:
           name: liftoff-postgres
           property: connectionString
-        key: DATABASE_URL
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
 
@@ -111,5 +112,8 @@ services:
     dockerfilePath: ./apps/notification-service/Dockerfile
     dockerContext: .
     envVars:
-      - key: AMQP_URL
-        value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
+      - key: AMQP_T_SERVICE_URL
+        fromService:
+          type: web
+          name: tenant-service
+          envVarKey: RENDER_INTERNAL_HOSTNAME
