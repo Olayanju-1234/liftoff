@@ -11,8 +11,6 @@ services:
     runtime: docker
     plan: free
     autoDeploy: true
-    healthCheck:
-      path: /health
     dockerfilePath: ./apps/api-gateway/Dockerfile
     dockerContext: .
     envVars:
@@ -35,9 +33,6 @@ services:
     runtime: docker
     plan: free
     autoDeploy: true
-    healthCheck:
-      path: /health
-    internalPort: 3001
     dockerfilePath: ./apps/tenant-service/Dockerfile
     dockerContext: .
     envVars:
