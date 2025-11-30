@@ -18,6 +18,6 @@ async function bootstrap() {
   app.useLogger(app.get(Logger));
   app.useGlobalPipes(new ValidationPipe());
 
-  await app.listen(3000, '0.0.0.0');
+  await app.listen(process.env.PORT || 3000, '0.0.0.0');
 }
 bootstrap();

@@ -15,13 +15,13 @@ const getEnvPath = (): string => {
     join(process.cwd(), '.env'),
     '.env',
   ];
-  
+
   for (const path of possiblePaths) {
     if (existsSync(path)) {
       return path;
     }
   }
-  
+
   // Return the most likely path even if it doesn't exist yet
   return join(process.cwd(), 'apps', 'api-gateway', '.env');
 };
@@ -34,14 +34,15 @@ const getEnvPath = (): string => {
     }),
     LoggerModule.forRoot({
       pinoHttp: {
-        transport: {
+        transport: process.env.NODE_ENV !== 'production' ? {
           target: 'pino-pretty',
           options: {
             singleLine: true,
             colorize: true,
             levelFirst: false,
           },
-        },
+        } : undefined,
+        level: process.env.LOG_LEVEL || 'info',
       },
     }),
     HttpModule.registerAsync({

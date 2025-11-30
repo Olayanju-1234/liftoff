@@ -12,6 +12,7 @@ COPY apps/notification-service/package.json ./apps/notification-service/
 RUN npm install
 COPY . .
 RUN npm run build --workspace=db-provisioner-service
+
 FROM node:18-alpine
 WORKDIR /usr/src/app
 ARG APP_NAME="db-provisioner-service"
@@ -21,4 +22,8 @@ COPY apps/${APP_NAME}/package.json ./apps/${APP_NAME}/
 RUN npm install --omit=dev --workspaces --filter=${APP_NAME}...
 COPY --from=builder /usr/src/app/packages/shared-types/dist ./packages/shared-types/dist
 COPY --from=builder /usr/src/app/apps/${APP_NAME}/dist ./apps/${APP_NAME}/dist
-CMD node apps/db-provisioner-service/dist/main
+COPY --from=builder /usr/src/app/apps/${APP_NAME}/prisma ./apps/${APP_NAME}/prisma
+COPY apps/${APP_NAME}/docker-entrypoint.sh ./docker-entrypoint.sh
+RUN cd apps/${APP_NAME} && npx prisma generate
+RUN chmod +x ./docker-entrypoint.sh
+CMD ["sh", "./docker-entrypoint.sh"]

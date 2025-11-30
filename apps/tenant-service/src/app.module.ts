@@ -8,14 +8,15 @@ import { LoggerModule } from 'nestjs-pino';
   imports: [
     LoggerModule.forRoot({
       pinoHttp: {
-        transport: {
+        transport: process.env.NODE_ENV !== 'production' ? {
           target: 'pino-pretty',
           options: {
             singleLine: true,
             colorize: true,
             levelFirst: false,
           },
-        },
+        } : undefined,
+        level: process.env.LOG_LEVEL || 'info',
       },
     }),
     TenantsModule,
