@@ -16,13 +16,12 @@ services:
     envVars:
       - key: PORT
         value: 10000
+      - key: NODE_ENV
+        value: production
       - key: API_KEY
-        value: "your-strong-production-api-key-here"
+        generateValue: true
       - key: TENANT_SERVICE_URL
-        fromService:
-          type: web
-          name: tenant-service
-          envVarKey: RENDER_INTERNAL_HOSTNAME
+        value: "http://tenant-service:3001"
       - key: REDIS_URL
         fromDatabase:
           name: liftoff-redis
@@ -36,6 +35,10 @@ services:
     dockerfilePath: ./apps/tenant-service/Dockerfile
     dockerContext: .
     envVars:
+      - key: PORT
+        value: 3001
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: liftoff-postgres
@@ -55,6 +58,8 @@ services:
     dockerfilePath: ./apps/db-provisioner-service/Dockerfile
     dockerContext: .
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: liftoff-postgres
@@ -70,6 +75,8 @@ services:
     dockerfilePath: ./apps/dns-provisioner-service/Dockerfile
     dockerContext: .
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
 
@@ -81,6 +88,8 @@ services:
     dockerfilePath: ./apps/credentials-service/Dockerfile
     dockerContext: .
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: liftoff-postgres
@@ -96,6 +105,8 @@ services:
     dockerfilePath: ./apps/billing-service/Dockerfile
     dockerContext: .
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
 
@@ -107,8 +118,7 @@ services:
     dockerfilePath: ./apps/notification-service/Dockerfile
     dockerContext: .
     envVars:
-      - key: AMQP_T_SERVICE_URL
-        fromService:
-          type: web
-          name: tenant-service
-          envVarKey: RENDER_INTERNAL_HOSTNAME
+      - key: NODE_ENV
+        value: production
+      - key: AMQP_URL
+        value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
