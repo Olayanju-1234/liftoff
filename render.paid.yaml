@@ -1,16 +1,16 @@
 databases:
   - name: liftoff-postgres
     databaseName: liftoff_db
-    plan: free
+    plan: starter  # Paid plan
   - name: liftoff-redis
-    plan: free
+    plan: starter  # Paid plan
 
 services:
   # API Gateway - Public facing API
   - type: web
     name: api-gateway
     runtime: docker
-    plan: free
+    plan: starter  # $7/month - No sleep, better performance
     autoDeploy: true
     dockerfilePath: ./apps/api-gateway/Dockerfile
     dockerContext: .
@@ -32,7 +32,7 @@ services:
   - type: web
     name: tenant-service
     runtime: docker
-    plan: free
+    plan: starter  # $7/month - No sleep, better performance
     autoDeploy: true
     dockerfilePath: ./apps/tenant-service/Dockerfile
     dockerContext: .
@@ -52,11 +52,11 @@ services:
           name: liftoff-redis
           property: connectionString
 
-  # DB Provisioner - Running as web service (free tier compatible)
-  - type: web
+  # DB Provisioner - Background worker (PAID PLAN REQUIRED)
+  - type: worker
     name: db-provisioner-service
     runtime: docker
-    plan: free
+    plan: starter  # $7/month
     autoDeploy: true
     dockerfilePath: ./apps/db-provisioner-service/Dockerfile
     dockerContext: .
@@ -70,11 +70,11 @@ services:
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
 
-  # DNS Provisioner - Running as web service (free tier compatible)
-  - type: web
+  # DNS Provisioner - Background worker (PAID PLAN REQUIRED)
+  - type: worker
     name: dns-provisioner-service
     runtime: docker
-    plan: free
+    plan: starter  # $7/month
     autoDeploy: true
     dockerfilePath: ./apps/dns-provisioner-service/Dockerfile
     dockerContext: .
@@ -84,11 +84,11 @@ services:
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
 
-  # Credentials Service - Running as web service (free tier compatible)
-  - type: web
+  # Credentials Service - Background worker (PAID PLAN REQUIRED)
+  - type: worker
     name: credentials-service
     runtime: docker
-    plan: free
+    plan: starter  # $7/month
     autoDeploy: true
     dockerfilePath: ./apps/credentials-service/Dockerfile
     dockerContext: .
@@ -102,11 +102,11 @@ services:
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
 
-  # Billing Service - Running as web service (free tier compatible)
-  - type: web
+  # Billing Service - Background worker (PAID PLAN REQUIRED)
+  - type: worker
     name: billing-service
     runtime: docker
-    plan: free
+    plan: starter  # $7/month
     autoDeploy: true
     dockerfilePath: ./apps/billing-service/Dockerfile
     dockerContext: .
@@ -116,11 +116,11 @@ services:
       - key: AMQP_URL
         value: "amqps://vqfrwqmw:dqOpui_y6M02B-HNpDjNA1994Xl7WH9b@moose.rmq.cloudamqp.com/vqfrwqmw"
 
-  # Notification Service - Running as web service (free tier compatible)
-  - type: web
+  # Notification Service - Background worker (PAID PLAN REQUIRED)
+  - type: worker
     name: notification-service
     runtime: docker
-    plan: free
+    plan: starter  # $7/month
     autoDeploy: true
     dockerfilePath: ./apps/notification-service/Dockerfile
     dockerContext: .
