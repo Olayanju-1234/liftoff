@@ -132,6 +132,7 @@ services:
     autoDeploy: true
     dockerfilePath: ./apps/notification-service/Dockerfile
     dockerContext: .
+    healthCheckPath: /health
     envVars:
       - key: PORT
         value: 3005

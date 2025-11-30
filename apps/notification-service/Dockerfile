@@ -21,4 +21,5 @@ COPY apps/${APP_NAME}/package.json ./apps/${APP_NAME}/
 RUN npm install --omit=dev --workspaces --filter=${APP_NAME}...
 COPY --from=builder /usr/src/app/packages/shared-types/dist ./packages/shared-types/dist
 COPY --from=builder /usr/src/app/apps/${APP_NAME}/dist ./apps/${APP_NAME}/dist
+EXPOSE 3005
 CMD node apps/notification-service/dist/main
