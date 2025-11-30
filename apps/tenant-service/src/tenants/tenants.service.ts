@@ -2,7 +2,7 @@ import { Injectable, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
-import { Prisma } from '@prisma/client';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import type {
     ProvisioningCompletePayload,
     TenantRequestedPayload,
@@ -51,7 +51,7 @@ export class TenantsService {
             return tenant;
         } catch (error) {
             if (
-                error instanceof Prisma.PrismaClientKnownRequestError &&
+                error instanceof PrismaClientKnownRequestError &&
                 error.code === 'P2002'
             ) {
                 const target = (error.meta?.target as string[])?.[0];
