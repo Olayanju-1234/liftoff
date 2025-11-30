@@ -61,6 +61,8 @@ services:
     dockerfilePath: ./apps/db-provisioner-service/Dockerfile
     dockerContext: .
     envVars:
+      - key: PORT
+        value: 3002
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
@@ -79,6 +81,8 @@ services:
     dockerfilePath: ./apps/dns-provisioner-service/Dockerfile
     dockerContext: .
     envVars:
+      - key: PORT
+        value: 3003
       - key: NODE_ENV
         value: production
       - key: AMQP_URL
@@ -93,6 +97,8 @@ services:
     dockerfilePath: ./apps/credentials-service/Dockerfile
     dockerContext: .
     envVars:
+      - key: PORT
+        value: 3006
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
@@ -111,6 +117,8 @@ services:
     dockerfilePath: ./apps/billing-service/Dockerfile
     dockerContext: .
     envVars:
+      - key: PORT
+        value: 3004
       - key: NODE_ENV
         value: production
       - key: AMQP_URL
@@ -125,6 +133,8 @@ services:
     dockerfilePath: ./apps/notification-service/Dockerfile
     dockerContext: .
     envVars:
+      - key: PORT
+        value: 3005
       - key: NODE_ENV
         value: production
       - key: AMQP_URL
