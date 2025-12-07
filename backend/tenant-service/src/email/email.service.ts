@@ -3,62 +3,63 @@ import { ConfigService } from '@nestjs/config';
 import * as sgMail from '@sendgrid/mail';
 
 export interface EmailOptions {
-    to: string;
-    subject: string;
-    text?: string;
-    html?: string;
+  to: string;
+  subject: string;
+  text?: string;
+  html?: string;
 }
 
 @Injectable()
 export class EmailService {
-    private readonly logger = new Logger(EmailService.name);
-    private readonly fromEmail: string;
-    private readonly isConfigured: boolean;
+  private readonly logger = new Logger(EmailService.name);
+  private readonly fromEmail: string;
+  private readonly isConfigured: boolean;
 
-    constructor(private configService: ConfigService) {
-        const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
-        this.fromEmail = this.configService.get<string>('EMAIL_FROM') || 'noreply@tenantops.com';
+  constructor(private configService: ConfigService) {
+    const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
+    this.fromEmail = this.configService.get<string>('EMAIL_FROM') || 'noreply@tenantops.com';
 
-        if (apiKey) {
-            sgMail.setApiKey(apiKey);
-            this.isConfigured = true;
-            this.logger.log('SendGrid email service configured');
-        } else {
-            this.isConfigured = false;
-            this.logger.warn('SendGrid API key not configured - emails will be logged only');
-        }
+    if (apiKey) {
+      sgMail.setApiKey(apiKey);
+      this.isConfigured = true;
+      this.logger.log('SendGrid email service configured');
+    } else {
+      this.isConfigured = false;
+      this.logger.warn('SendGrid API key not configured - emails will be logged only');
+    }
+  }
+
+  async sendEmail(options: EmailOptions): Promise<boolean> {
+    if (!this.isConfigured) {
+      this.logger.log(`[DEV MODE] Would send email to ${options.to}: ${options.subject}`);
+      this.logger.log(`Content: ${options.text || options.html}`);
+      return true;
     }
 
-    async sendEmail(options: EmailOptions): Promise<boolean> {
-        if (!this.isConfigured) {
-            this.logger.log(`[DEV MODE] Would send email to ${options.to}: ${options.subject}`);
-            this.logger.log(`Content: ${options.text || options.html}`);
-            return true;
-        }
-
-        try {
-            await sgMail.send({
-                to: options.to,
-                from: this.fromEmail,
-                subject: options.subject,
-                text: options.text,
-                html: options.html,
-            });
-            this.logger.log(`Email sent successfully to ${options.to}`);
-            return true;
-        } catch (error: any) {
-            this.logger.error(`Failed to send email to ${options.to}:`, error.message);
-            return false;
-        }
+    try {
+      const message: sgMail.MailDataRequired = {
+        to: options.to,
+        from: this.fromEmail,
+        subject: options.subject,
+        text: options.text || '',
+        html: options.html || '',
+      };
+      await sgMail.send(message);
+      this.logger.log(`Email sent successfully to ${options.to}`);
+      return true;
+    } catch (error: any) {
+      this.logger.error(`Failed to send email to ${options.to}:`, error.message);
+      return false;
     }
+  }
 
-    async sendVerificationEmail(email: string, token: string, name?: string): Promise<boolean> {
-        const verifyUrl = `${this.configService.get('FRONTEND_URL') || 'http://localhost:5173'}/verify-email?token=${token}`;
+  async sendVerificationEmail(email: string, token: string, name?: string): Promise<boolean> {
+    const verifyUrl = `${this.configService.get('FRONTEND_URL') || 'http://localhost:5173'}/verify-email?token=${token}`;
 
-        return this.sendEmail({
-            to: email,
-            subject: 'Verify your TenantOps account',
-            html: `
+    return this.sendEmail({
+      to: email,
+      subject: 'Verify your TenantOps account',
+      html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h1 style="color: #6366f1;">Welcome to TenantOps${name ? `, ${name}` : ''}!</h1>
           <p>Thank you for registering. Please verify your email address by clicking the button below:</p>
@@ -72,17 +73,17 @@ export class EmailService {
           </p>
         </div>
       `,
-            text: `Welcome to TenantOps! Please verify your email by visiting: ${verifyUrl}`,
-        });
-    }
+      text: `Welcome to TenantOps! Please verify your email by visiting: ${verifyUrl}`,
+    });
+  }
 
-    async sendPasswordResetEmail(email: string, token: string): Promise<boolean> {
-        const resetUrl = `${this.configService.get('FRONTEND_URL') || 'http://localhost:5173'}/reset-password?token=${token}`;
+  async sendPasswordResetEmail(email: string, token: string): Promise<boolean> {
+    const resetUrl = `${this.configService.get('FRONTEND_URL') || 'http://localhost:5173'}/reset-password?token=${token}`;
 
-        return this.sendEmail({
-            to: email,
-            subject: 'Reset your TenantOps password',
-            html: `
+    return this.sendEmail({
+      to: email,
+      subject: 'Reset your TenantOps password',
+      html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h1 style="color: #6366f1;">Password Reset Request</h1>
           <p>We received a request to reset your password. Click the button below to set a new password:</p>
@@ -96,15 +97,15 @@ export class EmailService {
           </p>
         </div>
       `,
-            text: `Reset your password by visiting: ${resetUrl}`,
-        });
-    }
+      text: `Reset your password by visiting: ${resetUrl}`,
+    });
+  }
 
-    async sendWelcomeEmail(email: string, name?: string): Promise<boolean> {
-        return this.sendEmail({
-            to: email,
-            subject: 'Welcome to TenantOps!',
-            html: `
+  async sendWelcomeEmail(email: string, name?: string): Promise<boolean> {
+    return this.sendEmail({
+      to: email,
+      subject: 'Welcome to TenantOps!',
+      html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h1 style="color: #6366f1;">Welcome aboard${name ? `, ${name}` : ''}! 🎉</h1>
           <p>Your TenantOps account is now active. Here's what you can do:</p>
@@ -122,6 +123,6 @@ export class EmailService {
           </p>
         </div>
       `,
-        });
-    }
+    });
+  }
 }
