@@ -1,15 +1,17 @@
-import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, Activity, GitBranch, Heart, AlertTriangle, Settings, HelpCircle, LogOut } from 'lucide-react';
+import { ReactNode } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { LayoutDashboard, Users, Activity, GitBranch, Heart, AlertTriangle, Settings, HelpCircle, LogOut, User } from 'lucide-react';
+import { useAuth } from '../lib/auth';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 
 const navItems = [
-    { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
+    { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Tenants', path: '/tenants', icon: Users },
     { name: 'Events', path: '/events', icon: Activity },
-    { name: 'Pipelines', path: '/pipeline', icon: GitBranch },
+    { name: 'Pipeline', path: '/pipeline', icon: GitBranch },
     { name: 'Health', path: '/health', icon: Heart },
-    { name: 'Failed Jobs', path: '/jobs', icon: AlertTriangle },
+    { name: 'Failed Jobs', path: '/failed-jobs', icon: AlertTriangle },
 ];
 
 const bottomNavItems = [
@@ -17,20 +19,24 @@ const bottomNavItems = [
     { name: 'Support', path: '/support', icon: HelpCircle },
 ];
 
-export default function Layout() {
+interface LayoutProps {
+    children: ReactNode;
+}
+
+export default function Layout({ children }: LayoutProps) {
     const location = useLocation();
     const navigate = useNavigate();
+    const { user, logout } = useAuth();
 
-    const handleLogout = () => {
-        // Clear any stored data
-        localStorage.removeItem('user_settings');
+    const handleLogout = async () => {
+        await logout();
         toast.success('Logged out successfully');
-        // Navigate to dashboard (since we don't have a login page)
-        navigate('/dashboard');
+        navigate('/login');
     };
 
     const NavItem = ({ item }: { item: typeof navItems[0] }) => {
-        const isActive = location.pathname === item.path;
+        const isActive = location.pathname === item.path ||
+            (item.path !== '/' && location.pathname.startsWith(item.path));
 
         return (
             <NavLink
@@ -77,12 +83,31 @@ export default function Layout() {
                         Logout
                     </button>
                 </div>
+
+                {/* User Info */}
+                {user && (
+                    <div className="p-4 border-t border-border">
+                        <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
+                                <User size={16} className="text-primary" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium truncate">
+                                    {user.name || user.email}
+                                </p>
+                                <p className="text-xs text-muted-foreground truncate">
+                                    {user.role}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </aside>
 
             {/* Main Content */}
             <main className="flex-1 overflow-auto">
                 <div className="p-8">
-                    <Outlet />
+                    {children}
                 </div>
             </main>
         </div>

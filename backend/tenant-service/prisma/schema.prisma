@@ -27,21 +27,24 @@ model Tenant {
   billingStatus     StepStatus @default(PENDING)
   notificationStatus StepStatus @default(PENDING)
   
+  deletedAt DateTime? // Soft delete
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  password  String   // Will be a hashed password
-  role      UserRole @default(USER)
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  password     String   // Hashed password
+  refreshToken String?  // For JWT refresh token rotation
+  role         UserRole @default(USER)
   
   tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade) // If tenant is deleted, delete users
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   settings  Settings?
   
+  deletedAt DateTime? // Soft delete
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

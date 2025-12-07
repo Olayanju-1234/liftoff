@@ -3,14 +3,16 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HttpModule } from '@nestjs/axios';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { AuthGuard } from './auth/auth.guard';
 
 // Determine the correct .env file path
 const getEnvPath = (): string => {
   const possiblePaths = [
+    join(process.cwd(), 'backend', 'api-gateway', '.env'),
     join(process.cwd(), 'apps', 'api-gateway', '.env'),
     join(process.cwd(), '.env'),
     '.env',
@@ -21,9 +23,7 @@ const getEnvPath = (): string => {
       return path;
     }
   }
-
-  // Return the most likely path even if it doesn't exist yet
-  return join(process.cwd(), 'apps', 'api-gateway', '.env');
+  return '.env';
 };
 
 @Module({
@@ -32,6 +32,11 @@ const getEnvPath = (): string => {
       isGlobal: true,
       envFilePath: getEnvPath(),
     }),
+    // Rate limiting: 100 requests per minute per IP
+    ThrottlerModule.forRoot([{
+      ttl: 60000,  // 1 minute
+      limit: 100,   // 100 requests
+    }]),
     LoggerModule.forRoot({
       pinoHttp: {
         transport: process.env.NODE_ENV !== 'production' ? {
@@ -48,13 +53,20 @@ const getEnvPath = (): string => {
     HttpModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
-        timeout: 5000,
-        baseURL: configService.get<string>('TENANT_SERVICE_URL'),
+        timeout: 10000,
+        baseURL: configService.get<string>('TENANT_SERVICE_URL') || 'http://localhost:3001',
       }),
       inject: [ConfigService],
     }),
   ],
   controllers: [AppController],
-  providers: [AppService, AuthGuard],
+  providers: [
+    AppService,
+    // Global rate limiter
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule { }
