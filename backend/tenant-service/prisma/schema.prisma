@@ -36,9 +36,23 @@ model User {
   id           String   @id @default(cuid())
   email        String   @unique
   name         String?
-  password     String   // Hashed password
+  password     String?  // Nullable for OAuth-only users
   refreshToken String?  // For JWT refresh token rotation
   role         UserRole @default(USER)
+  
+  // OAuth fields
+  provider     String?  // 'local', 'google', 'github'
+  providerId   String?  // OAuth provider's user ID
+  picture      String?  // Profile picture URL from OAuth
+  
+  // Email verification
+  emailVerified    Boolean   @default(false)
+  verificationToken String?
+  verificationExpiry DateTime?
+  
+  // Password reset
+  resetToken       String?
+  resetTokenExpiry DateTime?
   
   tenantId  String
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -47,6 +61,8 @@ model User {
   deletedAt DateTime? // Soft delete
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([provider, providerId])
 }
 
 model Plan {

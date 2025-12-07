@@ -1,12 +1,16 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TenantsModule } from './tenants/tenants.module';
 import { SettingsModule } from './settings/settings.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
+import { EmailModule } from './email/email.module';
+import { SentryModule } from './sentry/sentry.module';
+import { SentryExceptionFilter } from './sentry/sentry-exception.filter';
+import { SentryService } from './sentry/sentry.service';
 import { LoggerModule } from 'nestjs-pino';
 
 @Module({
@@ -30,6 +34,8 @@ import { LoggerModule } from 'nestjs-pino';
     AuthModule,
     TenantsModule,
     SettingsModule,
+    EmailModule,
+    SentryModule,
   ],
   controllers: [AppController],
   providers: [
@@ -38,6 +44,12 @@ import { LoggerModule } from 'nestjs-pino';
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
+    },
+    // Global Sentry exception filter
+    {
+      provide: APP_FILTER,
+      useFactory: (sentry: SentryService) => new SentryExceptionFilter(sentry),
+      inject: [SentryService],
     },
   ],
 })
