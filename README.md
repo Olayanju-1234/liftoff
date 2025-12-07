@@ -1,204 +1,173 @@
-LiftOff 🚀
+# TenantOps - B2B Tenant Provisioning Platform
 
-An automated, event-driven provisioning platform for B2B SaaS companies. LiftOff provides a single API endpoint to asynchronously provision an entire new customer environment, including databases, credentials, and billing, using a resilient microservice saga.
+A production-ready multi-tenant provisioning platform built with a microservices architecture. This system automates the onboarding of new B2B customers by orchestrating database creation, DNS configuration, credential generation, billing setup, and notifications.
 
-The Problem
+![Architecture](https://img.shields.io/badge/Architecture-Microservices-blue)
+![Backend](https://img.shields.io/badge/Backend-NestJS-red)
+![Frontend](https://img.shields.io/badge/Frontend-React-61DAFB)
+![Database](https://img.shields.io/badge/Database-PostgreSQL-336791)
+![Message Queue](https://img.shields.io/badge/Queue-RabbitMQ-FF6600)
 
-When a new B2B customer (an "Organization" or "Tenant") signs up for a SaaS product, the technical onboarding is often a slow, manual, or brittle process. This can involve:
+## 🏗️ Architecture Overview
 
-Manually creating a new database or schema.
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Frontend (React)                         │
+│                    Dashboard • Tenant Management                 │
+└─────────────────────────────────┬───────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      API Gateway (NestJS)                        │
+│           REST API • Rate Limiting • Request Routing             │
+└─────────────────────────────────┬───────────────────────────────┘
+                                  │
+         ┌────────────────────────┴────────────────────────┐
+         ▼                                                 ▼
+┌─────────────────┐                              ┌─────────────────┐
+│  Tenant Service │                              │    RabbitMQ     │
+│  (PostgreSQL)   │                              │  Message Queue  │
+└────────┬────────┘                              └────────┬────────┘
+         │                                                │
+         └────────────────────────┬───────────────────────┘
+                                  │
+    ┌──────────────┬──────────────┼──────────────┬──────────────┐
+    ▼              ▼              ▼              ▼              ▼
+┌────────┐  ┌────────────┐  ┌──────────┐  ┌─────────┐  ┌────────────┐
+│   DB   │  │ Credentials│  │   DNS    │  │ Billing │  │Notification│
+│Provis. │  │  Service   │  │ Provis.  │  │ Service │  │  Service   │
+└────────┘  └────────────┘  └──────────┘  └─────────┘  └────────────┘
+```
 
-Running scripts to provision DNS records.
+## ✨ Features
 
-Generating and securely sharing API keys.
+### Backend
+- **Multi-tenant Architecture** - Isolated tenant data with dedicated schemas
+- **Event-Driven Provisioning** - Async pipeline via RabbitMQ
+- **Health Monitoring** - Built-in health check endpoints
+- **Settings Persistence** - User preferences stored in database
+- **RESTful API** - Full CRUD operations for tenants
 
-Activating a subscription in a billing system.
+### Frontend
+- **Modern Dashboard** - Real-time stats and system health
+- **Tenant Management** - Search, filter, create, and delete tenants
+- **Event Logs** - Filter by tenant/type with live tail polling
+- **Pipeline Visualization** - Track provisioning progress
+- **Service Health** - Monitor all microservices
+- **Failed Jobs** - View errors and retry failed operations
+- **Settings** - Profile, notifications, and security preferences
+- **Toast Notifications** - User feedback for all actions
 
-This process is a scalability bottleneck. It's error-prone, wastes developer time, and leads to a slow "Time-to-Value" for new customers.
+## 🚀 Quick Start
 
-The Solution
+### Prerequisites
+- Node.js 18+
+- Docker & Docker Compose
+- npm or yarn
 
-LiftOff solves this by providing a robust, event-driven engine that automates this entire workflow.
-
-A B2B company simply makes a single, secure API call to LiftOff to request a new tenant. LiftOff immediately responds with a "Provisioning" status and then handles the entire multi-step process in the background using a Saga Pattern over a message queue.
-
-Key Features
-
-Asynchronous Workflow: A new tenant request returns in <100ms, while the full provisioning saga runs in the background.
-
-Resilient & Decoupled: Each step is a separate microservice. If the dns-provisioner fails, it doesn't crash the credentials-service.
-
-Event-Driven: Services communicate using RabbitMQ, publishing and subscribing to events.
-
-Idempotent Workers: Services are designed to handle duplicate messages without error (e.g., credentials-service won't create duplicate keys).
-
-Failure Handling: Implements a Dead Letter Queue (DLQ) pattern to catch and isolate "toxic" messages for manual review.
-
-Secure: The api-gateway is protected by a Bearer Token API key.
-
-System Architecture
-
-The project uses an event-driven microservice architecture. All services are independent NestJS applications managed in an npm workspaces monorepo.
-
-The Workflow Saga
-
-A user sends a POST /tenants request with an API key to the api-gateway.
-
-The api-gateway authenticates the request and synchronously calls the tenant-service.
-
-The tenant-service creates a Tenant record with a PROVISIONING status and publishes a tenant.requested event to RabbitMQ.
-
-The db-provisioner-service consumes this event, creates a new schema in the database, and publishes tenant.db.ready.
-
-The dns-provisioner-service consumes this, (mock) creates a DNS record, and publishes tenant.dns.ready.
-
-The credentials-service consumes this, generates API keys, saves them to its own table, and publishes tenant.credentials.ready.
-
-The billing-service consumes this, (mock) creates a Stripe subscription, and publishes tenant.billing.active.
-
-The notification-service consumes this, (mock) sends a welcome email, and publishes the final event: tenant.provisioning.complete.
-
-The tenant-service (which is also a consumer) hears this final event and updates the tenant's status from PROVISIONING to ACTIVE.
-
-Tech Stack
-
-Monorepo: npm Workspaces
-
-Services: NestJS (with Fastify adapter)
-
-Language: TypeScript
-
-Message Queue: RabbitMQ (via @golevelup/nestjs-rabbitmq)
-
-Database: PostgreSQL
-
-ORM: Prisma
-
-Authentication: NestJS Guards (API Key)
-
-Logging: nestjs-pino
-
-Shared Code: @liftoff/shared-types local package
-
-Infrastructure: Docker Compose
-
-Getting Started
-
-Prerequisites
-
-Node.js (v18+)
-
-npm (comes with Node.js)
-
-Docker Desktop
-
-1. Initial Setup
-
-# Clone the repository
-
-git clone [https://github.com/YOUR_USERNAME/lift-off.git](https://github.com/YOUR_USERNAME/lift-off.git)
-cd lift-off
-
-# Install all dependencies for all services
-
+### 1. Clone and Install
+```bash
+git clone https://github.com/Olayanju-1234/liftoff.git
+cd liftoff
 npm install
+```
 
-# Start the infrastructure (PostgreSQL, RabbitMQ)
-
+### 2. Start Infrastructure
+```bash
 docker-compose up -d
+```
+This starts PostgreSQL, RabbitMQ, and Redis.
 
-2. Run Migrations & Generate Clients
+### 3. Setup Database
+```bash
+cd backend/tenant-service
+npx prisma generate
+npx prisma migrate dev
+npx prisma db seed
+```
 
-The services with databases (tenant-service, credentials-service) need to have their Prisma clients built.
+### 4. Start Services
+```bash
+# Terminal 1 - Tenant Service
+cd backend/tenant-service && npm run start:dev
 
-# (Run from root)
+# Terminal 2 - API Gateway
+cd backend/api-gateway && npm run start:dev
 
-cd apps/tenant-service && npx prisma migrate dev && cd ../..
-cd apps/credentials-service && npx prisma migrate dev && cd ../..
+# Terminal 3 - Frontend
+cd frontend && npm run dev
+```
 
-# This ensures all Prisma clients are generated
+### 5. Access the App
+- **Frontend:** http://localhost:5173
+- **API Gateway:** http://localhost:4000
+- **RabbitMQ UI:** http://localhost:15672 (devuser/devpassword)
 
-npm run build --workspace=apps/tenant-service
-npm run build --workspace=apps/credentials-service
+## 📁 Project Structure
 
-3. Run the Services
+```
+├── backend/                    # Backend microservices
+│   ├── api-gateway/           # REST API gateway (port 4000)
+│   ├── tenant-service/        # Core tenant management (port 3001)
+│   ├── credentials-service/   # API key generation
+│   ├── db-provisioner-service/# Database provisioning
+│   ├── dns-provisioner-service/# DNS configuration
+│   ├── billing-service/       # Billing setup
+│   └── notification-service/  # Email notifications
+├── frontend/                  # React application
+│   ├── src/
+│   │   ├── components/       # Reusable UI components
+│   │   ├── pages/            # Page components
+│   │   └── lib/              # API layer & types
+└── packages/                  # Shared code
+    └── shared-types/         # TypeScript interfaces
+```
 
-You must run all 7 services in their own separate terminals.
+## 🔧 Environment Variables
 
-# Terminal 1: API Gateway (Dev Mode)
+### Backend Services
+```env
+DATABASE_URL="postgresql://devuser:devpassword@localhost:5432/tenant_db"
+RABBITMQ_URL="amqp://devuser:devpassword@localhost:5672"
+```
 
-npm run start:dev --workspace=apps/api-gateway
+### Frontend
+```env
+VITE_API_URL="http://localhost:4000"
+```
 
-# Terminal 2: Tenant Service (Dev Mode)
-# Note: If you need to regenerate Prisma clients, stop this service first to avoid file locks on Windows
+## 📡 API Endpoints
 
-npm run start:dev --workspace=apps/tenant-service
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| GET | `/tenants` | List all tenants |
+| POST | `/tenants` | Create tenant |
+| GET | `/tenants/:id` | Get tenant by ID |
+| DELETE | `/tenants/:id` | Delete tenant |
+| GET | `/tenants/:id/events` | Get tenant events |
+| GET | `/events` | List all events |
+| GET | `/settings` | Get user settings |
+| PUT | `/settings` | Update settings |
 
-# Terminal 3: DB Provisioner (Dev Mode)
+## 🧪 Tech Stack
 
-npm run start:dev --workspace=apps/db-provisioner-service
+| Layer | Technology |
+|-------|------------|
+| Frontend | React 18, TypeScript, Vite, Tailwind CSS |
+| Backend | NestJS, TypeScript, Prisma |
+| Database | PostgreSQL |
+| Message Queue | RabbitMQ |
+| Cache | Redis |
 
-# Terminal 4: DNS Provisioner (Dev Mode)
+## 📝 License
 
-npm run start:dev --workspace=apps/dns-provisioner-service
+MIT License - See [LICENSE](LICENSE) for details.
 
-# Terminal 5: Credentials Service (Dev Mode)
-# Note: If you need to regenerate Prisma clients, stop this service first to avoid file locks on Windows
+## 🤝 Contributing
 
-npm run start:dev --workspace=apps/credentials-service
-
-# Terminal 6: Billing Service (Dev Mode)
-
-npm run start:dev --workspace=apps/billing-service
-
-# Terminal 7: Notification Service (Dev Mode)
-
-npm run start:dev --workspace=apps/notification-service
-
-Testing the Full Flow
-
-Use curl to send a request to the api-gateway. You must provide your secret API key (defined in apps/api-gateway/.env) as a Bearer Token.
-
-Make sure to use a unique name and subdomain for each test.
-
-Test 1: Successful Request
-
-This will trigger the entire 7-service saga.
-
-curl -X POST http://localhost:3000/tenants \
--H "Content-Type: application/json" \
--H "Authorization: Bearer sk_live_123456789_this_is_a_secret_key" \
--d '{"name": "New Test Corp", "subdomain": "newcorp", "planId": "plan_enterprise"}'
-
-Expected Response: A 201 Created status with the new tenant object.
-
-Watch your 7 service terminals to see the event logs ripple through the entire system, ending with the tenant-service logging:
-SUCCESS: Tenant ... is now ACTIVE.
-
-Test 2: Duplicate Request (Error Handling)
-
-If you run the exact same command a second time, the tenant-service will catch the unique constraint error and return a clean 409 Conflict.
-
-Expected Response:
-
-{
-"message": "A tenant with this name already exists.",
-"error": "Conflict",
-"statusCode": 409
-}
-
-Test 3: Unauthorized Request
-
-If you forget the API key or use a bad one:
-
-curl -X POST http://localhost:3000/tenants \
--H "Content-Type: application/json" \
--d '{"name": "Bad Key", "subdomain": "badkey", "planId": "plan_basic"}'
-
-Expected Response:
-
-{
-"message": "Authorization header is missing",
-"error": "Unauthorized",
-"statusCode": 401
-}
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'feat: add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
