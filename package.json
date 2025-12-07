@@ -1,0 +1,27 @@
+{
+  "name": "tenant-provisioning-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "B2B Tenant Provisioning System (Microservices)",
+  "author": "Your Name Here",
+  "license": "MIT",
+  "workspaces": [
+    "backend/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "docker-compose up -d && npm run start:dev --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "echo 'Running E2E tests... (to be configured)'"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5",
+    "rimraf": "^5.0.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
