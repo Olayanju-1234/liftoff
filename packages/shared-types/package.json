@@ -1,0 +1,14 @@
+{
+  "name": "@liftoff/shared-types",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "class-validator": "^0.14.1",
+    "class-transformer": "^0.5.1"
+  }
+}
