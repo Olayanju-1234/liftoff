@@ -35,12 +35,6 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
-  // Health check endpoint
-  const fastifyInstance = app.getHttpAdapter().getInstance();
-  fastifyInstance.get('/health', async () => {
-    return { status: 'ok', service: 'tenant-service', timestamp: new Date().toISOString() };
-  });
-
   const port = process.env.PORT || 3001;
   await app.listen(port, '0.0.0.0');
 
