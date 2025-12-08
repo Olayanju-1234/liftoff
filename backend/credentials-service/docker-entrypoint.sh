@@ -5,7 +5,7 @@ echo "🚀 Starting credentials-service initialization..."
 
 # Run Prisma migrations
 echo "📦 Running Prisma migrations..."
-cd /usr/src/app/apps/credentials-service
+cd /usr/src/app/backend/credentials-service
 npx prisma migrate deploy
 
 echo "✅ Migrations completed successfully"
@@ -13,4 +13,4 @@ echo "✅ Migrations completed successfully"
 # Start the application
 echo "🎯 Starting application..."
 cd /usr/src/app
-exec node apps/credentials-service/dist/src/main
+exec node backend/credentials-service/dist/main
