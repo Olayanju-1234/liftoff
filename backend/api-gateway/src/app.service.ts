@@ -158,6 +158,19 @@ export class AppService {
     }
   }
 
+  async cancelTenant(id: string, cancelDto: any, auth?: string) {
+    this.logger.log({ tenantId: id }, 'Attempting to cancel tenant provisioning...');
+    try {
+      const { data } = await firstValueFrom(
+        this.httpService.post(`/tenants/${id}/cancel`, cancelDto, this.getAuthHeaders(auth)),
+      );
+      this.logger.log({ tenantId: id }, 'Successfully cancelled tenant provisioning.');
+      return data;
+    } catch (error) {
+      this.handleError(error);
+    }
+  }
+
   // ============ SETTINGS METHODS ============
 
   async getSettings(auth?: string) {
