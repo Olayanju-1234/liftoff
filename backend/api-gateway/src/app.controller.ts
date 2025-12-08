@@ -81,6 +81,15 @@ export class AppController {
     return this.appService.deleteTenant(id, auth);
   }
 
+  @Post('tenants/:id/cancel')
+  cancelTenant(
+    @Param('id') id: string,
+    @Body() cancelDto: any,
+    @Headers('authorization') auth: string
+  ) {
+    return this.appService.cancelTenant(id, cancelDto, auth);
+  }
+
   // ============ SETTINGS ENDPOINTS ============
 
   @Get('settings')
