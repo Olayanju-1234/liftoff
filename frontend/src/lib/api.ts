@@ -11,6 +11,8 @@ export const getTenant = (id: string) => api.get<Tenant>(`/tenants/${id}`).then(
 export const createTenant = (data: { name: string; subdomain: string; planId: string }) =>
     api.post<Tenant>('/tenants', data).then(res => res.data);
 export const deleteTenant = (id: string) => api.delete(`/tenants/${id}`).then(res => res.data);
+export const cancelTenant = (id: string, reason?: string) =>
+    api.post<Tenant>(`/tenants/${id}/cancel`, { reason }).then(res => res.data);
 
 // Event APIs
 export const getEvents = () => api.get<EventLog[]>('/events').then(res => res.data);
