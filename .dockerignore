@@ -1,0 +1,48 @@
+# Dependencies
+node_modules
+*/node_modules
+
+# Build outputs
+dist
+*/dist
+build
+*/build
+
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage
+.nyc_output
+
+# Documentation
+README.md
+docs
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Frontend (if building only backend)
+frontend
+
+# Misc
+*.md
+!ENV_KEYS_GUIDE.md
