@@ -1,38 +1,49 @@
-version: "3.8"
-
 services:
-  # 1. PostgreSQL Database
-  # Our main database for the tenant-service, credentials-service, etc.
+  # ============================================
+  # Infrastructure Services
+  # ============================================
+  
+  # PostgreSQL Database
   postgres_db:
-    image: postgres:15
+    image: postgres:15-alpine
     container_name: local_postgres_db
     environment:
       POSTGRES_USER: devuser
       POSTGRES_PASSWORD: devpassword
       POSTGRES_DB: tenant_db
     ports:
-      - "5432:5432" # Expose port 5432 to our host machine
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - tenant_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devuser -d tenant_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
-  # 2. RabbitMQ Message Queue
-  # Our event bus for async communication
+  # RabbitMQ Message Queue
   rabbitmq:
-    image: rabbitmq:3.12-management
+    image: rabbitmq:3.12-management-alpine
     container_name: local_rabbitmq
     ports:
-      - "5672:5672" # AMQP protocol port
+      - "5672:5672"   # AMQP protocol port
       - "15672:15672" # Management UI port
     environment:
       RABBITMQ_DEFAULT_USER: devuser
       RABBITMQ_DEFAULT_PASS: devpassword
     networks:
       - tenant_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
-  # 3. Redis Cache
-  # For rate limiting, caching, etc.
+  # Redis Cache
   redis_cache:
     image: redis:7.2-alpine
     container_name: local_redis_cache
@@ -40,12 +51,171 @@ services:
       - "6379:6379"
     networks:
       - tenant_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # Application Services
+  # ============================================
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: backend/api-gateway/Dockerfile
+    container_name: api_gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - REDIS_HOST=redis_cache
+      - REDIS_PORT=6379
+      - RABBITMQ_URL=amqp://devuser:devpassword@rabbitmq:5672
+    depends_on:
+      redis_cache:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tenant_network
+    restart: unless-stopped
+
+  # Tenant Service
+  tenant-service:
+    build:
+      context: .
+      dockerfile: backend/tenant-service/Dockerfile
+    container_name: tenant_service
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - DATABASE_URL=postgresql://devuser:devpassword@postgres_db:5432/tenant_db?schema=public
+      - RABBITMQ_URL=amqp://devuser:devpassword@rabbitmq:5672
+      - REDIS_HOST=redis_cache
+      - REDIS_PORT=6379
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis_cache:
+        condition: service_healthy
+    networks:
+      - tenant_network
+    restart: unless-stopped
+
+  # DB Provisioner Service
+  db-provisioner-service:
+    build:
+      context: .
+      dockerfile: backend/db-provisioner-service/Dockerfile
+    container_name: db_provisioner_service
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=development
+      - PORT=3002
+      - DATABASE_URL=postgresql://devuser:devpassword@postgres_db:5432/tenant_db?schema=public
+      - RABBITMQ_URL=amqp://devuser:devpassword@rabbitmq:5672
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tenant_network
+    restart: unless-stopped
+
+  # Credentials Service
+  credentials-service:
+    build:
+      context: .
+      dockerfile: backend/credentials-service/Dockerfile
+    container_name: credentials_service
+    ports:
+      - "3003:3003"
+    environment:
+      - NODE_ENV=development
+      - PORT=3003
+      - DATABASE_URL=postgresql://devuser:devpassword@postgres_db:5432/tenant_db?schema=public
+      - RABBITMQ_URL=amqp://devuser:devpassword@rabbitmq:5672
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tenant_network
+    restart: unless-stopped
+
+  # DNS Provisioner Service
+  dns-provisioner-service:
+    build:
+      context: .
+      dockerfile: backend/dns-provisioner-service/Dockerfile
+    container_name: dns_provisioner_service
+    ports:
+      - "3004:3004"
+    environment:
+      - NODE_ENV=development
+      - PORT=3004
+      - RABBITMQ_URL=amqp://devuser:devpassword@rabbitmq:5672
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tenant_network
+    restart: unless-stopped
+
+  # Billing Service
+  billing-service:
+    build:
+      context: .
+      dockerfile: backend/billing-service/Dockerfile
+    container_name: billing_service
+    ports:
+      - "3005:3005"
+    environment:
+      - NODE_ENV=development
+      - PORT=3005
+      - RABBITMQ_URL=amqp://devuser:devpassword@rabbitmq:5672
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tenant_network
+    restart: unless-stopped
+
+  # Notification Service
+  notification-service:
+    build:
+      context: .
+      dockerfile: backend/notification-service/Dockerfile
+    container_name: notification_service
+    ports:
+      - "3006:3006"
+    environment:
+      - NODE_ENV=development
+      - PORT=3006
+      - RABBITMQ_URL=amqp://devuser:devpassword@rabbitmq:5672
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - tenant_network
+    restart: unless-stopped
 
 # Define a shared network so all containers can find each other
 networks:
   tenant_network:
     driver: bridge
 
-# Define volumes to persist data (so our DB isn't wiped on restart)
+# Define volumes to persist data
 volumes:
   postgres_data:
