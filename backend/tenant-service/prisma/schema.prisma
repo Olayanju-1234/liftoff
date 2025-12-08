@@ -27,6 +27,10 @@ model Tenant {
   billingStatus     StepStatus @default(PENDING)
   notificationStatus StepStatus @default(PENDING)
   
+  // Cancellation fields
+  cancelledAt  DateTime?
+  cancelReason String?
+  
   deletedAt DateTime? // Soft delete
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -103,6 +107,17 @@ model Settings {
   updatedAt          DateTime @updatedAt
 }
 
+// --- Credentials Service Schema ---
+
+model Credential {
+  id        String   @id @default(cuid())
+  tenantId  String   @unique // Foreign key to the tenant
+  apiKey    String   @unique
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 // --- Enums ---
 
 enum TenantStatus {
@@ -110,6 +125,7 @@ enum TenantStatus {
   ACTIVE
   SUSPENDED
   FAILED
+  CANCELLED
 }
 
 enum UserRole {
@@ -122,4 +138,5 @@ enum StepStatus {
   IN_PROGRESS
   SUCCESS
   FAILED
+  CANCELLED
 }
