@@ -1,6 +1,7 @@
-import { Controller, Post, Body, Get, Param, Delete } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Delete, BadRequestException, NotFoundException } from '@nestjs/common';
 import { TenantsService } from './tenants.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
+import { CancelTenantDto } from './dto/cancel-tenant.dto';
 
 @Controller('tenants')
 export class TenantsController {
@@ -31,8 +32,27 @@ export class TenantsController {
         return this.tenantsService.findEvents(id);
     }
 
+    @Post(':id/cancel')
+    async cancel(@Param('id') id: string, @Body() cancelDto: CancelTenantDto) {
+        try {
+            return await this.tenantsService.cancel(id, cancelDto.reason);
+        } catch (error) {
+            if (error.message.includes('not found')) {
+                throw new NotFoundException(error.message);
+            }
+            throw new BadRequestException(error.message);
+        }
+    }
+
     @Delete(':id')
-    delete(@Param('id') id: string) {
-        return this.tenantsService.delete(id);
+    async delete(@Param('id') id: string) {
+        try {
+            return await this.tenantsService.delete(id);
+        } catch (error) {
+            if (error.message.includes('not found')) {
+                throw new NotFoundException(error.message);
+            }
+            throw new BadRequestException(error.message);
+        }
     }
 }
