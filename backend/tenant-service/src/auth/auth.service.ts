@@ -118,7 +118,7 @@ export class AuthService {
             where: { email: dto.email, deletedAt: null },
         });
 
-        if (!user) {
+        if (!user || !user.password) {
             throw new UnauthorizedException('Invalid credentials');
         }
 
@@ -126,6 +126,7 @@ export class AuthService {
         if (!passwordValid) {
             throw new UnauthorizedException('Invalid credentials');
         }
+
 
         const tokens = await this.generateTokens(user);
         await this.updateRefreshToken(user.id, tokens.refreshToken);
