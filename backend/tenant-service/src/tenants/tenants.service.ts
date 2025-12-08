@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
-import { StepStatus } from '@prisma/client';
+import { StepStatus, TenantStatus } from '@prisma/client';
 import type {
     ProvisioningCompletePayload,
     TenantRequestedPayload,
@@ -21,23 +21,34 @@ export class TenantsService {
     ) { }
 
     async create(createTenantDto: CreateTenantDto) {
-        await this.prisma.plan.upsert({
-            where: { id: createTenantDto.planId },
-            update: {},
-            create: {
-                id: createTenantDto.planId,
-                name: createTenantDto.planId,
-                maxUsers: 5,
-                maxApiKeys: 3,
-            },
+        // Get or create plan - check by both id and name to avoid unique constraint issues
+        let plan = await this.prisma.plan.findFirst({
+            where: {
+                OR: [
+                    { id: createTenantDto.planId },
+                    { name: createTenantDto.planId }
+                ]
+            }
         });
+
+        if (!plan) {
+            plan = await this.prisma.plan.create({
+                data: {
+                    id: createTenantDto.planId,
+                    name: createTenantDto.planId,
+                    maxUsers: 5,
+                    maxApiKeys: 3,
+                },
+            });
+        }
+
 
         try {
             const tenant = await this.prisma.tenant.create({
                 data: {
                     name: createTenantDto.name,
                     subdomain: createTenantDto.subdomain,
-                    planId: createTenantDto.planId,
+                    planId: plan.id,
                     dbStatus: StepStatus.IN_PROGRESS, // Start first step
                 },
             });
@@ -90,17 +101,28 @@ export class TenantsService {
         exchange: 'provisioning.direct',
         routingKey: 'tenant.db.ready',
         queue: 'tenant-service-db-ready-queue',
+        queueOptions: {
+            durable: true,
+        },
     })
     public async handleDbReady(payload: TenantDbReadyPayload) {
-        await this.prisma.tenant.update({
-            where: { id: payload.tenantId },
-            data: {
-                dbStatus: StepStatus.SUCCESS,
-                dnsStatus: StepStatus.IN_PROGRESS
-            },
-        });
-        await this.logEvent(payload.tenantId, 'tenant.db.ready', 'Success', payload);
+        console.log(`[HANDLER] handleDbReady received:`, payload);
+        try {
+            await this.prisma.tenant.update({
+                where: { id: payload.tenantId },
+                data: {
+                    dbStatus: StepStatus.SUCCESS,
+                    dnsStatus: StepStatus.IN_PROGRESS
+                },
+            });
+            await this.logEvent(payload.tenantId, 'tenant.db.ready', 'Success', payload);
+            console.log(`[HANDLER] handleDbReady completed for tenant:`, payload.tenantId);
+        } catch (error) {
+            console.error(`[HANDLER] handleDbReady failed:`, error);
+            throw error;
+        }
     }
+
 
     @RabbitSubscribe({
         exchange: 'provisioning.direct',
@@ -214,10 +236,70 @@ export class TenantsService {
         });
     }
 
+    async cancel(id: string, reason?: string) {
+        const tenant = await this.prisma.tenant.findUnique({ where: { id } });
+
+        if (!tenant) {
+            throw new Error(`Tenant ${id} not found`);
+        }
+
+        if (tenant.status !== TenantStatus.PROVISIONING) {
+            throw new Error(`Cannot cancel tenant with status ${tenant.status}`);
+        }
+
+        const cancelReason = reason || 'Cancelled by user';
+
+        // Update tenant status and all pending/in-progress steps to CANCELLED
+        const updatedTenant = await this.prisma.tenant.update({
+            where: { id },
+            data: {
+                status: TenantStatus.CANCELLED,
+                cancelledAt: new Date(),
+                cancelReason,
+                dbStatus: tenant.dbStatus === StepStatus.PENDING || tenant.dbStatus === StepStatus.IN_PROGRESS ? StepStatus.CANCELLED : tenant.dbStatus,
+                dnsStatus: tenant.dnsStatus === StepStatus.PENDING || tenant.dnsStatus === StepStatus.IN_PROGRESS ? StepStatus.CANCELLED : tenant.dnsStatus,
+                credentialsStatus: tenant.credentialsStatus === StepStatus.PENDING || tenant.credentialsStatus === StepStatus.IN_PROGRESS ? StepStatus.CANCELLED : tenant.credentialsStatus,
+                billingStatus: tenant.billingStatus === StepStatus.PENDING || tenant.billingStatus === StepStatus.IN_PROGRESS ? StepStatus.CANCELLED : tenant.billingStatus,
+                notificationStatus: tenant.notificationStatus === StepStatus.PENDING || tenant.notificationStatus === StepStatus.IN_PROGRESS ? StepStatus.CANCELLED : tenant.notificationStatus,
+            },
+            include: { plan: true },
+        });
+
+        await this.logEvent(id, 'tenant.cancelled', 'Success', { reason: cancelReason });
+
+        // Publish cancellation event for other services to potentially clean up resources
+        await this.amqpConnection.publish(
+            'provisioning.direct',
+            'tenant.cancelled',
+            { tenantId: id, subdomain: tenant.subdomain, reason: cancelReason },
+        );
+
+        console.log(`Tenant ${id} cancelled: ${cancelReason}`);
+        return updatedTenant;
+    }
+
     async delete(id: string) {
+        const tenant = await this.prisma.tenant.findUnique({ where: { id } });
+
+        if (!tenant) {
+            throw new Error(`Tenant ${id} not found`);
+        }
+
+        // Publish deletion event for other services to clean up resources (schemas, DNS, credentials, etc.)
+        await this.amqpConnection.publish(
+            'provisioning.direct',
+            'tenant.deleted',
+            { tenantId: id, subdomain: tenant.subdomain },
+        );
+
+        await this.logEvent(id, 'tenant.deleted', 'Success', { subdomain: tenant.subdomain });
+
         // Events are cascade deleted due to Prisma schema onDelete: Cascade
-        return this.prisma.tenant.delete({
+        const deletedTenant = await this.prisma.tenant.delete({
             where: { id }
         });
+
+        console.log(`Tenant ${id} (${tenant.subdomain}) deleted`);
+        return deletedTenant;
     }
 }
