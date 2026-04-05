@@ -729,3 +729,133 @@ Contributions are welcome! Please read our contributing guidelines before submit
 ---
 
 **Built with ❤️ to demonstrate production-grade backend engineering skills.**
+
+---
+
+## System Architecture
+
+```mermaid
+graph LR
+    subgraph Frontend
+        UI[React Dashboard]
+    end
+
+    subgraph API Gateway
+        GW[NestJS API Gateway
+Port 3000]
+    end
+
+    subgraph Microservices
+        DB[DB Provisioner
+Service]
+        DNS[DNS Provisioner
+Service]
+        CRED[Credentials
+Service]
+        BILL[Billing Service
+Stripe SDK]
+        NOTIF[Notification
+Service]
+    end
+
+    subgraph Infrastructure
+        PG[(PostgreSQL)]
+        MQ[RabbitMQ
+direct exchange]
+        DLX[Dead Letter
+Exchange]
+    end
+
+    UI -->|REST| GW
+    GW -->|tenant.requested| MQ
+    MQ --> DB
+    DB -->|tenant.db.ready| MQ
+    MQ --> DNS
+    DNS -->|tenant.dns.ready| MQ
+    MQ --> CRED
+    CRED -->|tenant.credentials.ready| MQ
+    MQ --> BILL
+    BILL -->|Stripe Customer + Subscription| BILL
+    BILL -->|tenant.billing.active| MQ
+    MQ --> NOTIF
+    NOTIF -->|tenant.provisioning.complete| GW
+    DB --> PG
+    CRED --> PG
+    MQ --> DLX
+```
+
+## Provisioning Pipeline
+
+```mermaid
+sequenceDiagram
+    participant Admin
+    participant Gateway
+    participant RabbitMQ
+    participant DB as DB Provisioner
+    participant DNS as DNS Provisioner
+    participant Creds as Credentials
+    participant Billing as Billing (Stripe)
+    participant Notify as Notification
+
+    Admin->>Gateway: POST /tenants {name, subdomain, planId}
+    Gateway->>RabbitMQ: publish tenant.requested
+
+    RabbitMQ->>DB: consume tenant.requested
+    DB->>DB: Create isolated DB schema
+    DB->>RabbitMQ: publish tenant.db.ready
+
+    RabbitMQ->>DNS: consume tenant.db.ready
+    DNS->>DNS: Register subdomain
+    DNS->>RabbitMQ: publish tenant.dns.ready
+
+    RabbitMQ->>Creds: consume tenant.dns.ready
+    Creds->>Creds: Generate API keys
+    Creds->>RabbitMQ: publish tenant.credentials.ready
+
+    RabbitMQ->>Billing: consume tenant.credentials.ready
+    Billing->>Billing: stripe.customers.create()
+    Billing->>Billing: stripe.subscriptions.create() + 14-day trial
+    Billing->>RabbitMQ: publish tenant.billing.active
+
+    RabbitMQ->>Notify: consume tenant.billing.active
+    Notify->>Admin: Send welcome email
+    Notify->>RabbitMQ: publish tenant.provisioning.complete
+```
+
+## Data Model — ERD
+
+```mermaid
+erDiagram
+    Tenant {
+        uuid id
+        string name
+        string subdomain
+        string planId
+        string stripeCustomerId
+        string stripeSubscriptionId
+        enum billingStatus
+        enum status
+    }
+
+    PipelineJob {
+        uuid id
+        uuid tenantId
+        enum step
+        enum status
+        json metadata
+        int retryCount
+        timestamp failedAt
+    }
+
+    ApiCredential {
+        uuid id
+        uuid tenantId
+        string keyHash
+        bool isActive
+        timestamp expiresAt
+    }
+
+    Tenant ||--o{ PipelineJob : "tracks"
+    Tenant ||--o{ ApiCredential : "has"
+```
+
