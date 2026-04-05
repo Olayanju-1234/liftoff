@@ -40,12 +40,17 @@ export interface TenantCredentialsReadyPayload {
   tenantId: string;
   subdomain: string;
   planId: string;
+  adminEmail: string;
 }
 
 export interface TenantBillingActivePayload {
   tenantId: string;
   subdomain: string;
   planId: string;
+  stripeCustomerId: string;
+  stripeSubscriptionId: string;
+  subscriptionStatus: string;
+  trialEnd: string | null;
 }
 
 export interface ProvisioningCompletePayload {
