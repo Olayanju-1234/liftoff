@@ -40,7 +40,6 @@ export interface TenantCredentialsReadyPayload {
   tenantId: string;
   subdomain: string;
   planId: string;
-  adminEmail: string;
 }
 
 export interface TenantBillingActivePayload {

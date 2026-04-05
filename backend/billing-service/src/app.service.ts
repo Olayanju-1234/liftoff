@@ -10,12 +10,29 @@ import * as sharedTypes from '@liftoff/shared-types';
 /**
  * Map plan IDs to Stripe Price IDs.
  * These should be created in your Stripe dashboard and set via environment variables.
+ * Empty-string fallbacks are rejected at startup — fail fast, not at subscription time.
  */
-const PLAN_PRICE_MAP: Record<string, string> = {
-  starter: process.env.STRIPE_PRICE_STARTER ?? '',
-  pro: process.env.STRIPE_PRICE_PRO ?? '',
-  enterprise: process.env.STRIPE_PRICE_ENTERPRISE ?? '',
-};
+function buildPlanPriceMap(): Record<string, string> {
+  const map: Record<string, string> = {
+    starter: process.env.STRIPE_PRICE_STARTER ?? '',
+    pro: process.env.STRIPE_PRICE_PRO ?? '',
+    enterprise: process.env.STRIPE_PRICE_ENTERPRISE ?? '',
+  };
+
+  const missing = Object.entries(map)
+    .filter(([, v]) => !v)
+    .map(([k]) => `STRIPE_PRICE_${k.toUpperCase()}`);
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required Stripe Price ID environment variables: ${missing.join(', ')}`,
+    );
+  }
+
+  return map;
+}
+
+const PLAN_PRICE_MAP = buildPlanPriceMap();
 
 @Injectable()
 export class AppService {
@@ -48,10 +65,13 @@ export class AppService {
     this.logger.log(`Creating Stripe subscription for tenant ${payload.tenantId}, plan=${payload.planId}`);
 
     try {
-      // Step 1: Create a Stripe Customer for this tenant
+      // Step 1: Create a Stripe Customer for this tenant.
+      // adminEmail is not propagated through the pipeline yet, so we derive a
+      // placeholder. When email capture is added to the provisioning flow,
+      // replace this with payload.adminEmail.
       const customer = await this.stripe.customers.create({
-        email: payload.adminEmail,
         name: payload.tenantId,
+        description: `Tenant: ${payload.subdomain}`,
         metadata: {
           tenantId: payload.tenantId,
           subdomain: payload.subdomain,
