@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   RabbitSubscribe,
   AmqpConnection,
@@ -10,6 +10,8 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 @Injectable()
 export class AppService {
+  private readonly logger = new Logger(AppService.name);
+
   constructor(private readonly amqpConnection: AmqpConnection) { }
 
   @RabbitSubscribe({
@@ -25,16 +27,12 @@ export class AppService {
   public async handleTenantBillingActive(
     payload: sharedTypes.TenantBillingActivePayload,
   ) {
-    console.log(
-      `RECEIVED EVENT: Mock sending welcome email for ${payload.subdomain}`,
-    );
+    this.logger.log(`Sending welcome email for tenant ${payload.tenantId} (${payload.subdomain})`);
 
     try {
       await sleep(500);
 
-      console.log(
-        `SUCCESS: Welcome email sent for ${payload.subdomain}`,
-      );
+      this.logger.log(`Welcome email sent for ${payload.subdomain}`);
 
       await this.amqpConnection.publish(
         'provisioning.direct',
@@ -45,10 +43,7 @@ export class AppService {
         },
       );
     } catch (error) {
-      console.error(
-        `FAILED to send welcome email for ${payload.tenantId}:`,
-        error.message,
-      );
+      this.logger.error(`Failed to send welcome email for tenant ${payload.tenantId}: ${error.message}`);
       return new Nack(false);
     }
   }

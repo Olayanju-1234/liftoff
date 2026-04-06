@@ -1,0 +1,148 @@
+services:
+  # ============================================================
+  # API Gateway — the single public-facing entry point
+  # ============================================================
+  - type: web
+    name: api-gateway
+    runtime: docker
+    dockerfilePath: ./backend/api-gateway/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: RABBITMQ_URL
+        sync: false
+      - key: TENANT_SERVICE_URL
+        sync: false
+
+  # ============================================================
+  # Tenant Service — core tenant lifecycle and orchestration
+  # ============================================================
+  - type: web
+    name: tenant-service
+    runtime: docker
+    dockerfilePath: ./backend/tenant-service/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: DATABASE_URL
+        sync: false
+      - key: RABBITMQ_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+
+  # ============================================================
+  # DB Provisioner — creates isolated DB schemas per tenant
+  # ============================================================
+  - type: web
+    name: db-provisioner-service
+    runtime: docker
+    dockerfilePath: ./backend/db-provisioner-service/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3002
+      - key: DATABASE_URL
+        sync: false
+      - key: RABBITMQ_URL
+        sync: false
+
+  # ============================================================
+  # Credentials Service — generates API keys per tenant
+  # ============================================================
+  - type: web
+    name: credentials-service
+    runtime: docker
+    dockerfilePath: ./backend/credentials-service/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3003
+      - key: DATABASE_URL
+        sync: false
+      - key: RABBITMQ_URL
+        sync: false
+
+  # ============================================================
+  # DNS Provisioner — registers subdomains per tenant
+  # ============================================================
+  - type: web
+    name: dns-provisioner-service
+    runtime: docker
+    dockerfilePath: ./backend/dns-provisioner-service/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3004
+      - key: RABBITMQ_URL
+        sync: false
+
+  # ============================================================
+  # Billing Service — Stripe customer and subscription creation
+  # ============================================================
+  - type: web
+    name: billing-service
+    runtime: docker
+    dockerfilePath: ./backend/billing-service/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3005
+      - key: RABBITMQ_URL
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PRICE_STARTER
+        sync: false
+      - key: STRIPE_PRICE_PRO
+        sync: false
+      - key: STRIPE_PRICE_ENTERPRISE
+        sync: false
+
+  # ============================================================
+  # Notification Service — sends welcome emails via SendGrid
+  # ============================================================
+  - type: web
+    name: notification-service
+    runtime: docker
+    dockerfilePath: ./backend/notification-service/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3006
+      - key: RABBITMQ_URL
+        sync: false
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: SENDGRID_FROM_EMAIL
+        sync: false

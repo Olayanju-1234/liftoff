@@ -20,11 +20,7 @@ async function bootstrap() {
   });
 
   // Start HTTP server (required for Render web services)
-  const port = process.env.PORT || 3003;
+  const port = process.env.PORT || 3004;
   await app.listen(port, '0.0.0.0');
-
-  console.log(
-    `DNS Provisioner worker is running on port ${port} and listening for RabbitMQ events...`,
-  );
 }
 bootstrap();

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   RabbitSubscribe,
   AmqpConnection,
@@ -10,6 +10,8 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 @Injectable()
 export class AppService {
+  private readonly logger = new Logger(AppService.name);
+
   constructor(private readonly amqpConnection: AmqpConnection) { }
 
   @RabbitSubscribe({
@@ -23,16 +25,12 @@ export class AppService {
     },
   })
   public async handleTenantDbReady(payload: sharedTypes.TenantDbReadyPayload) {
-    console.log(
-      `RECEIVED EVENT: Mock creating DNS record for ${payload.subdomain}`,
-    );
+    this.logger.log(`Creating DNS record for ${payload.subdomain}`);
 
     try {
       await sleep(2000);
 
-      console.log(
-        `SUCCESS: Mock created DNS record for ${payload.subdomain}`,
-      );
+      this.logger.log(`DNS record created for ${payload.subdomain}`);
 
       await this.amqpConnection.publish(
         'provisioning.direct',
@@ -44,7 +42,7 @@ export class AppService {
         },
       );
     } catch (error) {
-      console.error(`FAILED to mock DNS record: ${error.message}`);
+      this.logger.error(`Failed to create DNS record for ${payload.subdomain}: ${error.message}`);
       return new Nack(false);
     }
   }

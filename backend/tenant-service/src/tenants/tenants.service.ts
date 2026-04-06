@@ -1,4 +1,4 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import { Injectable, Logger, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
@@ -15,6 +15,8 @@ import type {
 
 @Injectable()
 export class TenantsService {
+    private readonly logger = new Logger(TenantsService.name);
+
     constructor(
         private prisma: PrismaService,
         private readonly amqpConnection: AmqpConnection,
@@ -93,7 +95,7 @@ export class TenantsService {
                 },
             });
         } catch (e) {
-            console.error('Failed to log event:', e);
+            this.logger.error(`Failed to log event: ${e.message}`);
         }
     }
 
@@ -106,7 +108,7 @@ export class TenantsService {
         },
     })
     public async handleDbReady(payload: TenantDbReadyPayload) {
-        console.log(`[HANDLER] handleDbReady received:`, payload);
+        this.logger.log(`DB ready for tenant ${payload.tenantId}`);
         try {
             await this.prisma.tenant.update({
                 where: { id: payload.tenantId },
@@ -116,9 +118,8 @@ export class TenantsService {
                 },
             });
             await this.logEvent(payload.tenantId, 'tenant.db.ready', 'Success', payload);
-            console.log(`[HANDLER] handleDbReady completed for tenant:`, payload.tenantId);
         } catch (error) {
-            console.error(`[HANDLER] handleDbReady failed:`, error);
+            this.logger.error(`handleDbReady failed for tenant ${payload.tenantId}: ${error.message}`);
             throw error;
         }
     }
@@ -183,9 +184,7 @@ export class TenantsService {
     public async handleProvisioningComplete(
         payload: ProvisioningCompletePayload,
     ) {
-        console.log(
-            `RECEIVED FINAL EVENT: Activating tenant ${payload.tenantId}`,
-        );
+        this.logger.log(`Activating tenant ${payload.tenantId}`);
 
         try {
             await this.prisma.tenant.update({
@@ -199,12 +198,9 @@ export class TenantsService {
             });
 
             await this.logEvent(payload.tenantId, 'tenant.provisioning.complete', 'Success', payload);
-            console.log(`SUCCESS: Tenant ${payload.tenantId} is now ACTIVE.`);
+            this.logger.log(`Tenant ${payload.tenantId} is now ACTIVE`);
         } catch (error) {
-            console.error(
-                `FAILED to activate tenant ${payload.tenantId}:`,
-                error.message,
-            );
+            this.logger.error(`Failed to activate tenant ${payload.tenantId}: ${error.message}`);
             await this.logEvent(payload.tenantId, 'tenant.provisioning.complete', 'Error', { error: error.message });
         }
     }
@@ -274,7 +270,7 @@ export class TenantsService {
             { tenantId: id, subdomain: tenant.subdomain, reason: cancelReason },
         );
 
-        console.log(`Tenant ${id} cancelled: ${cancelReason}`);
+        this.logger.log(`Tenant ${id} cancelled: ${cancelReason}`);
         return updatedTenant;
     }
 
@@ -299,7 +295,7 @@ export class TenantsService {
             where: { id }
         });
 
-        console.log(`Tenant ${id} (${tenant.subdomain}) deleted`);
+        this.logger.log(`Tenant ${id} (${tenant.subdomain}) deleted`);
         return deletedTenant;
     }
 }
