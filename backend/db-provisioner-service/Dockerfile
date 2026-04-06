@@ -57,7 +57,7 @@ COPY --from=builder /usr/src/app/backend/db-provisioner-service/dist ./backend/d
 COPY --from=builder /usr/src/app/backend/db-provisioner-service/prisma ./backend/db-provisioner-service/prisma
 
 # Generate Prisma client
-RUN cd backend/db-provisioner-service && npx prisma generate
+RUN cd backend/db-provisioner-service && DATABASE_URL="postgresql://x:x@localhost:5432/x" npx prisma generate
 
 # Copy entrypoint script
 COPY backend/db-provisioner-service/docker-entrypoint.sh ./docker-entrypoint.sh

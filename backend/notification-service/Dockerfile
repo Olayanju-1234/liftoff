@@ -65,4 +65,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3006/health || exit 1
 
 # Start the application
-CMD ["node", "backend/notification-service/dist/main"]
+CMD ["node", "backend/notification-service/dist/src/main"]

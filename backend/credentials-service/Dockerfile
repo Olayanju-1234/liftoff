@@ -57,7 +57,7 @@ COPY --from=builder /usr/src/app/backend/credentials-service/dist ./backend/cred
 COPY --from=builder /usr/src/app/backend/credentials-service/prisma ./backend/credentials-service/prisma
 
 # Generate Prisma client
-RUN cd backend/credentials-service && npx prisma generate
+RUN cd backend/credentials-service && DATABASE_URL="postgresql://x:x@localhost:5432/x" npx prisma generate
 
 # Copy entrypoint script
 COPY backend/credentials-service/docker-entrypoint.sh ./docker-entrypoint.sh

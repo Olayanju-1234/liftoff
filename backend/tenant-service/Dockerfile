@@ -57,7 +57,7 @@ COPY --from=builder /usr/src/app/backend/tenant-service/dist ./backend/tenant-se
 COPY --from=builder /usr/src/app/backend/tenant-service/prisma ./backend/tenant-service/prisma
 
 # Generate Prisma client
-RUN cd backend/tenant-service && npx prisma generate
+RUN cd backend/tenant-service && DATABASE_URL="postgresql://x:x@localhost:5432/x" npx prisma generate
 
 # Copy entrypoint script
 COPY backend/tenant-service/docker-entrypoint.sh ./docker-entrypoint.sh

@@ -8,4 +8,4 @@ npx prisma db push --skip-generate
 echo "Schema applied."
 
 cd /usr/src/app
-exec node backend/credentials-service/dist/main
+exec node backend/credentials-service/dist/src/main
