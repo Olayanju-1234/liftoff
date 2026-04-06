@@ -57,12 +57,12 @@ RUN chown -R nodejs:nodejs /usr/src/app
 # Switch to non-root user
 USER nodejs
 
-# Expose port
-EXPOSE 3004
+# Expose port (Render injects PORT=10000 at runtime)
+EXPOSE 10000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3004/health || exit 1
+# Health check using runtime PORT env var
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-10000}/health || exit 1
 
 # Start the application
 CMD ["node", "backend/dns-provisioner-service/dist/src/main"]

@@ -70,11 +70,11 @@ RUN chown -R nodejs:nodejs /usr/src/app
 USER nodejs
 
 # Expose port
-EXPOSE 3001
+EXPOSE 10000
 
-# Health check
+# Health check using runtime PORT env var
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-10000}/health || exit 1
 
 # Start the application
 CMD ["sh", "./docker-entrypoint.sh"]
