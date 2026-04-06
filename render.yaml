@@ -16,6 +16,8 @@ services:
         sync: false
       - key: TENANT_SERVICE_URL
         sync: false
+      - key: FRONTEND_URL
+        sync: false
 
   # ============================================================
   # Tenant Service — core tenant lifecycle and orchestration
@@ -38,15 +40,14 @@ services:
         sync: false
 
   # ============================================================
-  # DB Provisioner — creates isolated DB schemas per tenant
+  # DB Provisioner — queue consumer, runs continuously
   # ============================================================
-  - type: web
+  - type: worker
     name: db-provisioner-service
     runtime: docker
     dockerfilePath: ./backend/db-provisioner-service/Dockerfile
     dockerContext: .
-    plan: free
-    healthCheckPath: /health
+    plan: starter
     envVars:
       - key: NODE_ENV
         value: production
@@ -56,15 +57,14 @@ services:
         sync: false
 
   # ============================================================
-  # Credentials Service — generates API keys per tenant
+  # Credentials Service — queue consumer, runs continuously
   # ============================================================
-  - type: web
+  - type: worker
     name: credentials-service
     runtime: docker
     dockerfilePath: ./backend/credentials-service/Dockerfile
     dockerContext: .
-    plan: free
-    healthCheckPath: /health
+    plan: starter
     envVars:
       - key: NODE_ENV
         value: production
@@ -74,15 +74,14 @@ services:
         sync: false
 
   # ============================================================
-  # DNS Provisioner — registers subdomains per tenant
+  # DNS Provisioner — queue consumer, runs continuously
   # ============================================================
-  - type: web
+  - type: worker
     name: dns-provisioner-service
     runtime: docker
     dockerfilePath: ./backend/dns-provisioner-service/Dockerfile
     dockerContext: .
-    plan: free
-    healthCheckPath: /health
+    plan: starter
     envVars:
       - key: NODE_ENV
         value: production
@@ -90,15 +89,14 @@ services:
         sync: false
 
   # ============================================================
-  # Billing Service — Stripe customer and subscription creation
+  # Billing Service — queue consumer, runs continuously
   # ============================================================
-  - type: web
+  - type: worker
     name: billing-service
     runtime: docker
     dockerfilePath: ./backend/billing-service/Dockerfile
     dockerContext: .
-    plan: free
-    healthCheckPath: /health
+    plan: starter
     envVars:
       - key: NODE_ENV
         value: production
@@ -114,15 +112,14 @@ services:
         sync: false
 
   # ============================================================
-  # Notification Service — sends welcome emails via SendGrid
+  # Notification Service — queue consumer, runs continuously
   # ============================================================
-  - type: web
+  - type: worker
     name: notification-service
     runtime: docker
     dockerfilePath: ./backend/notification-service/Dockerfile
     dockerContext: .
-    plan: free
-    healthCheckPath: /health
+    plan: starter
     envVars:
       - key: NODE_ENV
         value: production
