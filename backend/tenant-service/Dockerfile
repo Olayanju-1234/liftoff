@@ -24,6 +24,9 @@ RUN npm ci
 # Copy source code
 COPY . .
 
+# Generate Prisma client before building (types required at compile time)
+RUN cd backend/tenant-service && npx prisma generate
+
 # Build the service
 RUN npm run build --workspace=tenant-service
 
