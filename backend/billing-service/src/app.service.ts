@@ -7,37 +7,11 @@ import {
 import Stripe from 'stripe';
 import * as sharedTypes from '@liftoff/shared-types';
 
-/**
- * Map plan IDs to Stripe Price IDs.
- * These should be created in your Stripe dashboard and set via environment variables.
- * Empty-string fallbacks are rejected at startup — fail fast, not at subscription time.
- */
-function buildPlanPriceMap(): Record<string, string> {
-  const map: Record<string, string> = {
-    starter: process.env.STRIPE_PRICE_STARTER ?? '',
-    pro: process.env.STRIPE_PRICE_PRO ?? '',
-    enterprise: process.env.STRIPE_PRICE_ENTERPRISE ?? '',
-  };
-
-  const missing = Object.entries(map)
-    .filter(([, v]) => !v)
-    .map(([k]) => `STRIPE_PRICE_${k.toUpperCase()}`);
-
-  if (missing.length > 0) {
-    throw new Error(
-      `Missing required Stripe Price ID environment variables: ${missing.join(', ')}`,
-    );
-  }
-
-  return map;
-}
-
-const PLAN_PRICE_MAP = buildPlanPriceMap();
-
 @Injectable()
 export class AppService {
   private readonly logger = new Logger(AppService.name);
   private readonly stripe: Stripe;
+  private readonly planPriceMap: Record<string, string>;
 
   constructor(private readonly amqpConnection: AmqpConnection) {
     if (!process.env.STRIPE_SECRET_KEY) {
@@ -47,6 +21,19 @@ export class AppService {
     this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
       apiVersion: '2025-02-24.acacia',
     });
+
+    const map: Record<string, string> = {
+      starter: process.env.STRIPE_PRICE_STARTER ?? '',
+      pro: process.env.STRIPE_PRICE_PRO ?? '',
+      enterprise: process.env.STRIPE_PRICE_ENTERPRISE ?? '',
+    };
+    const missing = Object.entries(map)
+      .filter(([, v]) => !v)
+      .map(([k]) => `STRIPE_PRICE_${k.toUpperCase()}`);
+    if (missing.length > 0) {
+      throw new Error(`Missing Stripe Price ID env vars: ${missing.join(', ')}`);
+    }
+    this.planPriceMap = map;
   }
 
   @RabbitSubscribe({
@@ -65,10 +52,6 @@ export class AppService {
     this.logger.log(`Creating Stripe subscription for tenant ${payload.tenantId}, plan=${payload.planId}`);
 
     try {
-      // Step 1: Create a Stripe Customer for this tenant.
-      // adminEmail is not propagated through the pipeline yet, so we derive a
-      // placeholder. When email capture is added to the provisioning flow,
-      // replace this with payload.adminEmail.
       const customer = await this.stripe.customers.create({
         name: payload.tenantId,
         description: `Tenant: ${payload.subdomain}`,
@@ -81,13 +64,11 @@ export class AppService {
 
       this.logger.log(`Stripe customer created: ${customer.id} for tenant ${payload.tenantId}`);
 
-      // Step 2: Look up the Price ID for this plan
-      const priceId = PLAN_PRICE_MAP[payload.planId];
+      const priceId = this.planPriceMap[payload.planId];
       if (!priceId) {
         throw new Error(`No Stripe Price ID configured for plan: ${payload.planId}`);
       }
 
-      // Step 3: Create the subscription with a 14-day trial
       const subscription = await this.stripe.subscriptions.create({
         customer: customer.id,
         items: [{ price: priceId }],
@@ -105,7 +86,6 @@ export class AppService {
 
       this.logger.log(`Stripe subscription created: ${subscription.id} (status=${subscription.status}) for tenant ${payload.tenantId}`);
 
-      // Step 4: Publish billing.active so the next pipeline stage proceeds
       await this.amqpConnection.publish(
         'provisioning.direct',
         'tenant.billing.active',
