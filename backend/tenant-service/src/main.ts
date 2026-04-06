@@ -12,7 +12,6 @@ async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     adapter,
-    { bufferLogs: true },
   );
 
   app.useLogger(app.get(Logger));
@@ -41,4 +40,7 @@ async function bootstrap() {
   const logger = app.get(Logger);
   logger.log(`Tenant Service is running on port ${port}`);
 }
-bootstrap();
+bootstrap().catch((err) => {
+  console.error('Fatal startup error:', err);
+  process.exit(1);
+});

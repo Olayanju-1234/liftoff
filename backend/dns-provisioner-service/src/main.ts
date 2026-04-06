@@ -11,22 +11,23 @@ async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     adapter,
-    { bufferLogs: true },
   );
 
   app.useLogger(app.get(Logger));
 
   const fastifyInstance = app.getHttpAdapter().getInstance();
   fastifyInstance.get('/health', async () => {
-    return { status: 'ok', service: 'dns-provisioner-service', worker: true };
+    return { status: 'ok', service: 'dns-provisioner-service' };
   });
 
   const port = process.env.PORT || 10000;
   await app.listen(port, '0.0.0.0');
 
   const logger = app.get(Logger);
-  logger.log(
-    `DNS Provisioner worker is running on port ${port} and listening for RabbitMQ events...`,
-  );
+  logger.log(`DNS Provisioner running on port ${port}`);
 }
-bootstrap();
+
+bootstrap().catch((err) => {
+  console.error('Fatal startup error:', err);
+  process.exit(1);
+});

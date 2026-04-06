@@ -12,7 +12,6 @@ async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     adapter,
-    { bufferLogs: true },
   );
 
   app.useLogger(app.get(Logger));
@@ -32,4 +31,7 @@ async function bootstrap() {
     `Notification worker is running on port ${port} and listening for RabbitMQ events...`,
   );
 }
-bootstrap();
+bootstrap().catch((err) => {
+  console.error('Fatal startup error:', err);
+  process.exit(1);
+});
