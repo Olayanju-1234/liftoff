@@ -1,16 +1,11 @@
 #!/bin/sh
 set -e
 
-echo "🚀 Starting db-provisioner-service initialization..."
-
-# Run Prisma migrations
-echo "📦 Running Prisma migrations..."
+echo "Starting db-provisioner-service..."
+echo "Applying Prisma schema..."
 cd /usr/src/app/backend/db-provisioner-service
-npx prisma migrate deploy
+npx prisma db push --skip-generate
+echo "Schema applied."
 
-echo "✅ Migrations completed successfully"
-
-# Start the application
-echo "🎯 Starting application..."
 cd /usr/src/app
 exec node backend/db-provisioner-service/dist/main
