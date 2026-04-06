@@ -289,7 +289,7 @@ export default function TenantManagement() {
                             filteredTenants.map((tenant) => (
                                 <tr key={tenant.id} className="hover:bg-muted/50 transition-colors">
                                     <td className="px-6 py-4 font-medium">{tenant.name}</td>
-                                    <td className="px-6 py-4 text-muted-foreground">{tenant.subdomain}.saas.com</td>
+                                    <td className="px-6 py-4 text-muted-foreground font-mono text-sm">{tenant.subdomain}</td>
                                     <td className="px-6 py-4">{getStatusBadge(tenant.status)}</td>
                                     <td className="px-6 py-4">{tenant.planId}</td>
                                     <td className="px-6 py-4 text-muted-foreground">

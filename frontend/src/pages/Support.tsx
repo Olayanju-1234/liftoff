@@ -1,55 +1,52 @@
 import { Book, Users, Mail, Ticket, ExternalLink } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../lib/auth';
+
+const GITHUB_REPO = 'https://github.com/Olayanju-1234/liftoff';
+const SUPPORT_EMAIL = 'josepholayanju2003@gmail.com';
 
 export default function Support() {
+    const { user } = useAuth();
+
     const handleOpenTicket = () => {
-        const subject = encodeURIComponent('Support Request - Tenant Provisioning Platform');
-        const body = encodeURIComponent(`
-Hello Support Team,
-
-I need help with:
-
-[Please describe your issue here]
-
----
-Platform: Tenant Provisioning Platform
-User: ${localStorage.getItem('user_settings') ? JSON.parse(localStorage.getItem('user_settings')!).email : 'Unknown'}
-        `.trim());
-
-        window.open(`mailto:support@saascompany.com?subject=${subject}&body=${body}`, '_blank');
+        const subject = encodeURIComponent('Support Request — Liftoff Provisioning Platform');
+        const body = encodeURIComponent(
+            `Hello,\n\nI need help with:\n\n[Describe your issue here]\n\n---\nUser: ${user?.email ?? 'Unknown'}`
+        );
+        window.open(`mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`, '_blank');
         toast.success('Opening email client...');
     };
 
     const supportCards = [
         {
             title: 'Documentation',
-            description: 'Read our comprehensive documentation to learn about features and best practices.',
+            description: 'Read the README for setup guides, architecture overview, and API reference.',
             icon: Book,
             action: () => {
-                window.open('https://github.com', '_blank');
+                window.open(`${GITHUB_REPO}#readme`, '_blank');
                 toast.success('Opening documentation...');
             },
             actionLabel: 'View Docs',
             color: 'bg-blue-500/10 text-blue-500',
         },
         {
-            title: 'Community Forum',
-            description: 'Join our community to discuss features, share ideas, and get help from other users.',
+            title: 'GitHub Issues',
+            description: 'Report bugs or request features directly on the GitHub repository.',
             icon: Users,
             action: () => {
-                window.open('https://github.com/discussions', '_blank');
-                toast.success('Opening community forum...');
+                window.open(`${GITHUB_REPO}/issues`, '_blank');
+                toast.success('Opening GitHub Issues...');
             },
-            actionLabel: 'Join Community',
+            actionLabel: 'Open Issue',
             color: 'bg-purple-500/10 text-purple-500',
         },
         {
-            title: 'Contact Support',
-            description: 'Get in touch with our support team for urgent issues or account-related questions.',
+            title: 'Contact',
+            description: 'Reach out directly for urgent issues or account-related questions.',
             icon: Mail,
             action: () => {
-                const subject = encodeURIComponent('Support Inquiry');
-                window.open(`mailto:support@saascompany.com?subject=${subject}`, '_blank');
+                const subject = encodeURIComponent('Liftoff Support Inquiry');
+                window.open(`mailto:${SUPPORT_EMAIL}?subject=${subject}`, '_blank');
                 toast.success('Opening email client...');
             },
             actionLabel: 'Email Us',
@@ -62,7 +59,7 @@ User: ${localStorage.getItem('user_settings') ? JSON.parse(localStorage.getItem(
             <div>
                 <h2 className="text-3xl font-bold tracking-tight">Support</h2>
                 <p className="text-muted-foreground mt-2">
-                    Get help with your account, explore documentation, or reach out to our support team.
+                    Get help with your account, explore documentation, or reach out directly.
                 </p>
             </div>
 
@@ -96,7 +93,7 @@ User: ${localStorage.getItem('user_settings') ? JSON.parse(localStorage.getItem(
                 <h3 className="text-xl font-bold mb-2">Need More Help?</h3>
                 <p className="text-muted-foreground max-w-md mx-auto mb-6">
                     If you're experiencing issues that require immediate attention, open a support ticket
-                    and our team will get back to you as soon as possible.
+                    and we'll get back to you as soon as possible.
                 </p>
                 <button
                     onClick={handleOpenTicket}
@@ -111,27 +108,29 @@ User: ${localStorage.getItem('user_settings') ? JSON.parse(localStorage.getItem(
             <div className="bg-card border border-border rounded-xl p-6">
                 <h3 className="text-lg font-semibold mb-4">Frequently Asked Questions</h3>
                 <div className="space-y-4">
-                    <div className="p-4 bg-muted/30 rounded-lg">
-                        <h4 className="font-medium mb-2">How do I create a new tenant?</h4>
-                        <p className="text-sm text-muted-foreground">
-                            Navigate to Tenant Management and click the "New Tenant" button. Fill in the required
-                            information and the provisioning will start automatically.
-                        </p>
-                    </div>
-                    <div className="p-4 bg-muted/30 rounded-lg">
-                        <h4 className="font-medium mb-2">What happens when provisioning fails?</h4>
-                        <p className="text-sm text-muted-foreground">
-                            Failed provisioning jobs appear in the Failed Jobs section. You can view the error
-                            details and retry the job from there.
-                        </p>
-                    </div>
-                    <div className="p-4 bg-muted/30 rounded-lg">
-                        <h4 className="font-medium mb-2">How can I monitor my services?</h4>
-                        <p className="text-sm text-muted-foreground">
-                            The Service Health page shows real-time status of all platform services. You can
-                            also view event logs for detailed activity tracking.
-                        </p>
-                    </div>
+                    {[
+                        {
+                            q: 'How do I create a new tenant?',
+                            a: 'Navigate to Tenant Management and click "New Tenant". Fill in the required details and provisioning starts automatically via the RabbitMQ pipeline.',
+                        },
+                        {
+                            q: 'What happens when provisioning fails?',
+                            a: 'Failed provisioning jobs appear in the Failed Jobs section with full error details. You can inspect the error and retry from there.',
+                        },
+                        {
+                            q: 'How can I monitor my services?',
+                            a: 'The Service Health page shows real-time status and latency for all microservices. The Events page gives a detailed activity log.',
+                        },
+                        {
+                            q: 'Can I cancel a tenant that is still provisioning?',
+                            a: 'Yes. From the Pipeline view or Tenant Management, you can cancel an in-progress provisioning job for a tenant.',
+                        },
+                    ].map((item) => (
+                        <div key={item.q} className="p-4 bg-muted/30 rounded-lg">
+                            <h4 className="font-medium mb-2">{item.q}</h4>
+                            <p className="text-sm text-muted-foreground">{item.a}</p>
+                        </div>
+                    ))}
                 </div>
             </div>
         </div>

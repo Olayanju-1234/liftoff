@@ -13,6 +13,7 @@ import Health from './pages/Health';
 import FailedJobs from './pages/FailedJobs';
 import Settings from './pages/Settings';
 import Support from './pages/Support';
+import NotFound from './pages/NotFound';
 
 function App() {
   return (
@@ -39,6 +40,7 @@ function App() {
                     <Route path="/failed-jobs" element={<FailedJobs />} />
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/support" element={<Support />} />
+                    <Route path="*" element={<NotFound />} />
                   </Routes>
                 </Layout>
               </ProtectedRoute>

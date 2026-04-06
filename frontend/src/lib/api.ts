@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { Tenant, EventLog, UserSettings } from './types';
 
 const api = axios.create({
-    baseURL: import.meta.env.VITE_API_URL || 'http://localhost:4000',
+    baseURL: import.meta.env.VITE_API_URL,
 });
 
 // Tenant APIs
@@ -31,20 +31,8 @@ export const checkHealth = async () => {
 
 // Settings APIs
 export const getSettings = async (): Promise<UserSettings> => {
-    try {
-        const response = await api.get<UserSettings>('/settings');
-        return response.data;
-    } catch (error) {
-        // Fallback to defaults if API fails
-        console.error('Failed to fetch settings from API, using defaults', error);
-        return {
-            firstName: 'DevOps',
-            lastName: 'Engineer',
-            email: 'ops@saascompany.com',
-            emailNotifications: true,
-            failedJobAlerts: true,
-        };
-    }
+    const response = await api.get<UserSettings>('/settings');
+    return response.data;
 };
 
 export const saveSettings = async (settings: Partial<UserSettings>): Promise<UserSettings> => {
