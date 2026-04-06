@@ -1,12 +1,12 @@
-import { NestFactory } from '@nestjs/core';
+import { NestFactory } from "@nestjs/core";
 import {
   FastifyAdapter,
   NestFastifyApplication,
-} from '@nestjs/platform-fastify';
-import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
-import { Logger } from 'nestjs-pino';
-import helmet from '@fastify/helmet';
+} from "@nestjs/platform-fastify";
+import { AppModule } from "./app.module";
+import { ValidationPipe } from "@nestjs/common";
+import { Logger } from "nestjs-pino";
+import helmet from "@fastify/helmet";
 
 async function bootstrap() {
   const adapter = new FastifyAdapter();
@@ -23,7 +23,7 @@ async function bootstrap() {
       directives: {
         defaultSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:', 'https:'],
+        imgSrc: ["'self'", "data:", "https:"],
         scriptSrc: ["'self'"],
       },
     },
@@ -31,30 +31,44 @@ async function bootstrap() {
   });
 
   // Global validation pipe with strict settings
-  app.useGlobalPipes(new ValidationPipe({
-    whitelist: true,
-    forbidNonWhitelisted: true,
-    transform: true,
-    transformOptions: {
-      enableImplicitConversion: true,
-    },
-  }));
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+      transformOptions: {
+        enableImplicitConversion: true,
+      },
+    }),
+  );
 
   // CORS Configuration
+  const allowedOrigins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(",").map((u) => u.trim()) : []),
+  ];
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    origin: (origin, callback) => {
+      // Allow requests with no origin (curl, Postman, server-to-server)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS: origin ${origin} not allowed`), false);
+      }
+    },
+    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   });
 
   const port = process.env.PORT || 10000;
-  await app.listen(port, '0.0.0.0');
+  await app.listen(port, "0.0.0.0");
 
   const logger = app.get(Logger);
   logger.log(`API Gateway is running on port ${port}`);
 }
 bootstrap().catch((err) => {
-  console.error('Fatal startup error:', err);
+  console.error("Fatal startup error:", err);
   process.exit(1);
 });
