@@ -24,7 +24,7 @@ async function bootstrap() {
   });
 
   // Start HTTP server (required for Render web services)
-  const port = process.env.PORT || 3004;
+  const port = process.env.PORT || 10000;
   await app.listen(port, '0.0.0.0');
 
   const logger = app.get(Logger);

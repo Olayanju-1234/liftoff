@@ -35,7 +35,7 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
-  const port = process.env.PORT || 3001;
+  const port = process.env.PORT || 10000;
   await app.listen(port, '0.0.0.0');
 
   const logger = app.get(Logger);

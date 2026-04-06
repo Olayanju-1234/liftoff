@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger } from 'nestjs-pino';
@@ -25,7 +24,7 @@ async function bootstrap() {
   });
 
   // Start HTTP server (required for Render web services)
-  const port = process.env.PORT || 3003;
+  const port = process.env.PORT || 10000;
 
   await app.listen(port, '0.0.0.0');
 
