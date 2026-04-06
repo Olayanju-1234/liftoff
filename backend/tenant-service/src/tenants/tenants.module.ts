@@ -31,7 +31,7 @@ import { ProvisioningTimeoutService } from './provisioning-timeout.service';
         },
       ],
       uri: process.env.RABBITMQ_URL || 'amqp://devuser:devpassword@localhost:5672',
-      connectionInitOptions: { wait: false },
+      connectionInitOptions: { wait: false, reject: false },
       prefetchCount: 10,
       enableControllerDiscovery: true,
     }),
