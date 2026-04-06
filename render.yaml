@@ -12,8 +12,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 4000
       - key: RABBITMQ_URL
         sync: false
       - key: TENANT_SERVICE_URL
@@ -32,8 +30,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 3001
       - key: DATABASE_URL
         sync: false
       - key: RABBITMQ_URL
@@ -54,8 +50,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 3002
       - key: DATABASE_URL
         sync: false
       - key: RABBITMQ_URL
@@ -74,8 +68,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 3003
       - key: DATABASE_URL
         sync: false
       - key: RABBITMQ_URL
@@ -94,8 +86,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 3004
       - key: RABBITMQ_URL
         sync: false
 
@@ -112,8 +102,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 3005
       - key: RABBITMQ_URL
         sync: false
       - key: STRIPE_SECRET_KEY
@@ -138,8 +126,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 3006
       - key: RABBITMQ_URL
         sync: false
       - key: SENDGRID_API_KEY
