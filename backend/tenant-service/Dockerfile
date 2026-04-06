@@ -25,7 +25,8 @@ RUN npm ci
 COPY . .
 
 # Generate Prisma client before building (types required at compile time)
-RUN cd backend/tenant-service && npx prisma generate
+# DATABASE_URL is not used during generate — only the schema is read
+RUN cd backend/tenant-service && DATABASE_URL="postgresql://x:x@localhost:5432/x" npx prisma generate
 
 # Build the service
 RUN npm run build --workspace=tenant-service
