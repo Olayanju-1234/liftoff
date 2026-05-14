@@ -38,6 +38,9 @@ services:
         sync: false
       - key: JWT_SECRET
         sync: false
+      - key: JWT_REFRESH_SECRET
+        # Auto-generated on first deploy; must be >=32 chars (enforced by Joi).
+        generateValue: true
 
   # ============================================================
   # DB Provisioner — creates isolated DB schemas per tenant
