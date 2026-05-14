@@ -1,4 +1,10 @@
-import { Injectable, Logger, ConflictException } from '@nestjs/common';
+import {
+    BadRequestException,
+    ConflictException,
+    Injectable,
+    Logger,
+    NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
@@ -192,7 +198,7 @@ export class TenantsService {
                     id: payload.tenantId,
                 },
                 data: {
-                    status: 'ACTIVE',
+                    status: TenantStatus.ACTIVE,
                     notificationStatus: StepStatus.SUCCESS
                 },
             });
@@ -207,28 +213,44 @@ export class TenantsService {
 
     async findAll() {
         return this.prisma.tenant.findMany({
-            include: { plan: true }
+            include: { plan: true },
+            orderBy: { createdAt: 'desc' },
         });
     }
 
     async findOne(id: string) {
-        return this.prisma.tenant.findUnique({
+        const tenant = await this.prisma.tenant.findUnique({
             where: { id },
-            include: { plan: true, events: { orderBy: { timestamp: 'desc' } } }
+            include: {
+                plan: true,
+                events: { orderBy: { timestamp: 'desc' }, take: 100 },
+            },
         });
+        if (!tenant) {
+            throw new NotFoundException(`Tenant ${id} not found`);
+        }
+        return tenant;
     }
 
     async findEvents(id: string) {
         return this.prisma.eventLog.findMany({
             where: { tenantId: id },
-            orderBy: { timestamp: 'desc' }
+            orderBy: { timestamp: 'desc' },
+            take: 200,
         });
     }
 
     async findAllEvents() {
+        // Project tenant down to identifying fields only — avoid leaking
+        // future-added sensitive columns (e.g. stripe IDs) and keep payload small.
         return this.prisma.eventLog.findMany({
-            include: { tenant: true },
-            orderBy: { timestamp: 'desc' }
+            orderBy: { timestamp: 'desc' },
+            take: 200,
+            include: {
+                tenant: {
+                    select: { id: true, name: true, subdomain: true },
+                },
+            },
         });
     }
 
@@ -236,11 +258,13 @@ export class TenantsService {
         const tenant = await this.prisma.tenant.findUnique({ where: { id } });
 
         if (!tenant) {
-            throw new Error(`Tenant ${id} not found`);
+            throw new NotFoundException(`Tenant ${id} not found`);
         }
 
         if (tenant.status !== TenantStatus.PROVISIONING) {
-            throw new Error(`Cannot cancel tenant with status ${tenant.status}`);
+            throw new BadRequestException(
+                `Cannot cancel tenant with status ${tenant.status}`,
+            );
         }
 
         const cancelReason = reason || 'Cancelled by user';
@@ -278,7 +302,7 @@ export class TenantsService {
         const tenant = await this.prisma.tenant.findUnique({ where: { id } });
 
         if (!tenant) {
-            throw new Error(`Tenant ${id} not found`);
+            throw new NotFoundException(`Tenant ${id} not found`);
         }
 
         // Publish deletion event for other services to clean up resources (schemas, DNS, credentials, etc.)
