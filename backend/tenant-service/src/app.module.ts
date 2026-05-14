@@ -12,11 +12,14 @@ import { SentryModule } from './sentry/sentry.module';
 import { SentryExceptionFilter } from './sentry/sentry-exception.filter';
 import { SentryService } from './sentry/sentry.service';
 import { LoggerModule } from 'nestjs-pino';
+import { envValidationSchema } from './config/env.validation';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      validationSchema: envValidationSchema,
+      validationOptions: { abortEarly: false },
     }),
     LoggerModule.forRoot({
       pinoHttp: {

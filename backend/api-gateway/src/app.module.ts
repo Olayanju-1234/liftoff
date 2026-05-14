@@ -8,6 +8,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
 import { join } from 'path';
 import { existsSync } from 'fs';
+import { envValidationSchema } from './config/env.validation';
 
 // Determine the correct .env file path
 const getEnvPath = (): string => {
@@ -31,6 +32,8 @@ const getEnvPath = (): string => {
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: getEnvPath(),
+      validationSchema: envValidationSchema,
+      validationOptions: { abortEarly: false },
     }),
     // Rate limiting: 100 requests per minute per IP
     ThrottlerModule.forRoot([{

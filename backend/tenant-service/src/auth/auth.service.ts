@@ -148,7 +148,7 @@ export class AuthService {
     async refreshTokens(refreshToken: string): Promise<TokenResponse> {
         try {
             const payload = this.jwtService.verify(refreshToken, {
-                secret: this.configService.get<string>('JWT_REFRESH_SECRET') || 'refresh-secret',
+                secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
             });
 
             const user = await this.prisma.user.findUnique({
@@ -210,11 +210,11 @@ export class AuthService {
 
         const [accessToken, refreshToken] = await Promise.all([
             this.jwtService.signAsync(payload, {
-                secret: this.configService.get<string>('JWT_SECRET') || 'jwt-secret',
+                secret: this.configService.getOrThrow<string>('JWT_SECRET'),
                 expiresIn: '15m',
             }),
             this.jwtService.signAsync(payload, {
-                secret: this.configService.get<string>('JWT_REFRESH_SECRET') || 'refresh-secret',
+                secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
                 expiresIn: '7d',
             }),
         ]);
