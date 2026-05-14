@@ -1,228 +1,160 @@
 import { HttpService } from '@nestjs/axios';
-import { HttpException, Injectable, Logger } from '@nestjs/common';
+import {
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { AxiosError, AxiosRequestConfig } from 'axios';
 import { firstValueFrom } from 'rxjs';
-import { AxiosError } from 'axios';
-import { CreateTenantDto } from '@liftoff/shared-types';
+import {
+  CancelTenantDto,
+  CreateTenantDto,
+  LoginDto,
+  RefreshTokenDto,
+  RegisterDto,
+  UpdateSettingsDto,
+} from '@liftoff/shared-types';
 
 @Injectable()
 export class AppService {
   private readonly logger = new Logger(AppService.name);
 
-  constructor(private readonly httpService: HttpService) { }
+  constructor(private readonly httpService: HttpService) {}
 
   getHealth(): { status: string; timestamp: string } {
     return { status: 'ok', timestamp: new Date().toISOString() };
   }
 
   getHello(): string {
-    this.logger.log('GET /hello requested');
     return 'Hello from API Gateway!';
   }
 
   // ============ AUTH METHODS ============
 
-  async register(registerDto: any) {
-    this.logger.log(`Registration attempt: ${registerDto.email}`);
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.post('/auth/register', registerDto),
-      );
-      this.logger.log(`User registered successfully: ${registerDto.email}`);
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+  register(dto: RegisterDto) {
+    this.logger.log({ email: dto.email }, 'Registration attempt');
+    return this.proxy('post', '/auth/register', dto);
   }
 
-  async login(loginDto: any) {
-    this.logger.log(`Login attempt: ${loginDto.email}`);
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.post('/auth/login', loginDto),
-      );
-      this.logger.log(`User logged in: ${loginDto.email}`);
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+  login(dto: LoginDto) {
+    this.logger.log({ email: dto.email }, 'Login attempt');
+    return this.proxy('post', '/auth/login', dto);
   }
 
-  async refreshToken(refreshDto: any) {
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.post('/auth/refresh', refreshDto),
-      );
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+  refreshToken(dto: RefreshTokenDto) {
+    return this.proxy('post', '/auth/refresh', dto);
   }
 
-  async logout(auth: string) {
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.post('/auth/logout', {}, this.getAuthHeaders(auth)),
-      );
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+  logout(auth: string) {
+    return this.proxy('post', '/auth/logout', {}, auth);
   }
 
-  async getProfile(auth: string) {
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.get('/auth/me', this.getAuthHeaders(auth)),
-      );
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+  getProfile(auth: string) {
+    return this.proxy('get', '/auth/me', undefined, auth);
   }
 
   // ============ TENANT METHODS ============
 
-  async createTenant(createTenantDto: CreateTenantDto, auth?: string) {
+  async createTenant(dto: CreateTenantDto, auth?: string) {
     this.logger.log(
-      { name: createTenantDto.name, subdomain: createTenantDto.subdomain },
-      'Attempting to create tenant...',
+      { name: dto.name, subdomain: dto.subdomain },
+      'Creating tenant',
     );
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.post('/tenants', createTenantDto, this.getAuthHeaders(auth)),
-      );
-      this.logger.log(
-        { tenantId: data.id },
-        'Successfully initiated tenant creation.',
-      );
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+    const data = await this.proxy<{ id: string }>('post', '/tenants', dto, auth);
+    this.logger.log({ tenantId: data.id }, 'Tenant creation initiated');
+    return data;
   }
 
-  async getTenants(auth?: string) {
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.get('/tenants', this.getAuthHeaders(auth)),
-      );
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+  getTenants(auth?: string) {
+    return this.proxy('get', '/tenants', undefined, auth);
   }
 
-  async getEvents(auth?: string) {
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.get('/tenants/events', this.getAuthHeaders(auth)),
-      );
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+  getEvents(auth?: string) {
+    return this.proxy('get', '/tenants/events', undefined, auth);
   }
 
-  async getTenant(id: string, auth?: string) {
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.get(`/tenants/${id}`, this.getAuthHeaders(auth)),
-      );
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+  getTenant(id: string, auth?: string) {
+    return this.proxy('get', `/tenants/${id}`, undefined, auth);
   }
 
-  async getTenantEvents(id: string, auth?: string) {
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.get(`/tenants/${id}/events`, this.getAuthHeaders(auth)),
-      );
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+  getTenantEvents(id: string, auth?: string) {
+    return this.proxy('get', `/tenants/${id}/events`, undefined, auth);
   }
 
   async deleteTenant(id: string, auth?: string) {
-    this.logger.log({ tenantId: id }, 'Attempting to delete tenant...');
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.delete(`/tenants/${id}`, this.getAuthHeaders(auth)),
-      );
-      this.logger.log({ tenantId: id }, 'Successfully deleted tenant.');
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+    this.logger.log({ tenantId: id }, 'Deleting tenant');
+    return this.proxy('delete', `/tenants/${id}`, undefined, auth);
   }
 
-  async cancelTenant(id: string, cancelDto: any, auth?: string) {
-    this.logger.log({ tenantId: id }, 'Attempting to cancel tenant provisioning...');
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.post(`/tenants/${id}/cancel`, cancelDto, this.getAuthHeaders(auth)),
-      );
-      this.logger.log({ tenantId: id }, 'Successfully cancelled tenant provisioning.');
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+  async cancelTenant(id: string, dto: CancelTenantDto, auth?: string) {
+    this.logger.log({ tenantId: id }, 'Cancelling tenant provisioning');
+    return this.proxy('post', `/tenants/${id}/cancel`, dto, auth);
   }
 
   // ============ SETTINGS METHODS ============
 
-  async getSettings(auth?: string) {
-    this.logger.log('Fetching settings...');
+  getSettings(auth?: string) {
+    return this.proxy('get', '/settings', undefined, auth);
+  }
+
+  updateSettings(dto: UpdateSettingsDto, auth?: string) {
+    return this.proxy('put', '/settings', dto, auth);
+  }
+
+  // ============ INTERNAL ============
+
+  private async proxy<T = unknown>(
+    method: 'get' | 'post' | 'put' | 'delete',
+    path: string,
+    body?: unknown,
+    auth?: string,
+  ): Promise<T> {
+    const config = this.buildConfig(auth);
     try {
-      const { data } = await firstValueFrom(
-        this.httpService.get('/settings', this.getAuthHeaders(auth)),
-      );
-      return data;
+      const response =
+        method === 'get' || method === 'delete'
+          ? await firstValueFrom(this.httpService[method]<T>(path, config))
+          : await firstValueFrom(this.httpService[method]<T>(path, body, config));
+      return response.data;
     } catch (error) {
-      this.handleError(error);
+      this.handleError(error, method, path);
     }
   }
 
-  async updateSettings(updateSettingsDto: any, auth?: string) {
-    this.logger.log('Updating settings...');
-    try {
-      const { data } = await firstValueFrom(
-        this.httpService.put('/settings', updateSettingsDto, this.getAuthHeaders(auth)),
-      );
-      return data;
-    } catch (error) {
-      this.handleError(error);
-    }
+  private buildConfig(auth?: string): AxiosRequestConfig {
+    return auth ? { headers: { Authorization: auth } } : {};
   }
 
-  // ============ HELPERS ============
-
-  private getAuthHeaders(auth?: string) {
-    if (!auth) return {};
-    return {
-      headers: {
-        Authorization: auth,
-      },
-    };
-  }
-
-  private handleError(error: any) {
+  /**
+   * Maps downstream errors back to the client.
+   * 4xx from downstream → forwarded as-is (client error).
+   * 5xx, network failures, timeouts → 503 (don't leak infra details).
+   */
+  private handleError(error: unknown, method: string, path: string): never {
     if (error instanceof AxiosError) {
+      const status = error.response?.status;
+      const downstreamBody = error.response?.data;
+
+      if (status && status >= 400 && status < 500) {
+        this.logger.warn(
+          { status, path, method, err: downstreamBody },
+          'Downstream client error',
+        );
+        throw new HttpException(downstreamBody ?? error.message, status);
+      }
+
       this.logger.error(
-        {
-          err: error.response?.data,
-          status: error.response?.status,
-        },
-        'Error received from downstream service.',
+        { status, path, method, err: downstreamBody ?? error.message },
+        'Downstream service failure',
       );
-      throw new HttpException(
-        error.response?.data || 'Service unavailable',
-        error.response?.status || 503,
-      );
+      throw new ServiceUnavailableException('Upstream service unavailable');
     }
-    this.logger.error({ err: error }, 'Unknown error.');
-    throw error;
+    this.logger.error({ err: error, path, method }, 'Unexpected gateway error');
+    throw new HttpException(
+      'Internal gateway error',
+      HttpStatus.INTERNAL_SERVER_ERROR,
+    );
   }
 }
