@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "B2B Tenant Provisioning System (Microservices)",
-  "author": "Your Name Here",
+  "author": "Joseph Olayanju",
   "license": "MIT",
   "workspaces": [
     "backend/*",
