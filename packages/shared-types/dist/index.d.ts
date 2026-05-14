@@ -3,6 +3,30 @@ export declare class CreateTenantDto {
     subdomain: string;
     planId: string;
 }
+export declare class CancelTenantDto {
+    reason?: string;
+}
+export declare class RegisterDto {
+    email: string;
+    password: string;
+    name?: string;
+    tenantName: string;
+    subdomain: string;
+}
+export declare class LoginDto {
+    email: string;
+    password: string;
+}
+export declare class RefreshTokenDto {
+    refreshToken: string;
+}
+export declare class UpdateSettingsDto {
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    emailNotifications?: boolean;
+    failedJobAlerts?: boolean;
+}
 export interface TenantRequestedPayload {
     tenantId: string;
     subdomain: string;
