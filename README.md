@@ -13,6 +13,8 @@ A production-grade microservices platform that automates the full lifecycle of t
 - [Getting Started](#getting-started)
 - [Deployment](#deployment)
 - [Engineering Decisions](#engineering-decisions)
+- [Testing](#testing)
+- [Roadmap and Known Gaps](#roadmap-and-known-gaps)
 
 ---
 
@@ -238,6 +240,14 @@ erDiagram
 
 ---
 
+## OpenAPI
+
+Both `api-gateway` and `tenant-service` expose interactive Swagger UI at
+`/api/docs` (e.g. `http://localhost:4000/api/docs`). The spec is generated
+from `class-validator` decorators on the shared DTOs in
+`packages/shared-types`, so request schemas stay in lockstep with runtime
+validation.
+
 ## API Reference
 
 ### Auth
@@ -343,3 +353,80 @@ Direct exchange routing is sufficient at this scale. RabbitMQ's at-least-once de
 ### Database-per-tenant via schema isolation
 
 Each tenant gets an isolated PostgreSQL schema rather than shared tables. This prevents data leakage between tenants, simplifies backup/restore per tenant, and allows per-tenant migrations without affecting others.
+
+### Strict configuration validation at startup
+
+Every service runs a Joi schema (`config/env.validation.ts`) over `process.env`
+before the Nest container boots. Required values like `DATABASE_URL`,
+`RABBITMQ_URL`, `JWT_SECRET`, and `JWT_REFRESH_SECRET` must be present and well
+formed. JWT secrets must be at least 32 chars. Missing or malformed config
+crashes boot with a single actionable error instead of producing 5xxs in
+production at the worst possible moment.
+
+`auth.service` correspondingly uses `configService.getOrThrow()` rather than
+`get(...) || 'default'` fallbacks for any cryptographic secret — there are no
+silent fallbacks to a known-weak value anywhere in the code path.
+
+### Shared DTOs in `packages/shared-types`
+
+All HTTP-facing DTOs live in a single workspace package and are imported by
+both the gateway and the tenant service. One source of truth for the request
+contract, one set of `class-validator` rules, one set of `@nestjs/swagger`
+annotations, no drift.
+
+---
+
+## Testing
+
+Unit tests cover the saga's brain — `auth.service` and `tenants.service` —
+with the database, JWT signer, and RabbitMQ connection all mocked. Tests
+focus on:
+
+- State transitions (saga step advancement, `PROVISIONING → ACTIVE`)
+- Error semantics (`ConflictException`, `NotFoundException`,
+  `BadRequestException`, `UnauthorizedException`)
+- Security invariants (refresh tokens stored hashed, no existence-leak on
+  unknown emails, no plaintext secrets in DB writes)
+- Ordering invariants (e.g. `tenant.deleted` is published *before* the row
+  is removed, so consumers can still read tenant context)
+- Prisma error translation (`P2002` → `ConflictException`)
+
+```bash
+cd backend/tenant-service && npm test
+# Test Suites: 2 passed, 2 total
+# Tests:       23 passed, 23 total
+```
+
+---
+
+## Roadmap and Known Gaps
+
+These are the items that would come next if I were continuing on this codebase.
+Calling them out explicitly because senior engineering is as much about knowing
+where the cracks are as it is about the code that ships.
+
+- **Transactional outbox for event publication.** Today the DB write and the
+  RabbitMQ publish are not atomic — a process crash between them leaves the
+  saga stuck until the 30-min timeout sweep. Design captured in
+  [`docs/adr/0001-outbox-pattern.md`](docs/adr/0001-outbox-pattern.md).
+- **Idempotency keys on saga handlers.** RabbitMQ guarantees at-least-once
+  delivery; consumers should dedupe on `(tenantId, eventType)` rather than
+  trusting that a duplicate redelivery will be a no-op.
+- **OpenTelemetry tracing.** Add an OTel collector and propagate trace
+  context across the RabbitMQ message headers. The current Pino logs are
+  great per-service but stitching a single tenant's pipeline together
+  across six services is manual.
+- **Contract tests** (Pact or schema-snapshot) between producers and
+  consumers of every RabbitMQ event, so a payload field rename can't ship
+  without updating downstream consumers.
+- **API gateway → tenant-service auth propagation.** Currently the gateway
+  forwards the user's bearer token verbatim. Long-term, mint a short-lived
+  service-to-service JWT signed by the gateway so downstream services can
+  trust origin without re-validating the user token on every hop.
+- **Per-tenant rate limiting.** The throttler is currently per-IP; per-tenant
+  quotas (especially on the `POST /tenants` endpoint) would prevent one
+  noisy customer from monopolizing pipeline capacity.
+- **Schema migrations as a deploy artifact.** Today migrations are applied
+  on dev with `prisma migrate dev`. Production needs a separate
+  `prisma migrate deploy` job that runs once per release before the new
+  service version takes traffic.
