@@ -317,6 +317,17 @@ Deployed on Render using Docker. Each service has its own web service instance b
 
 A `render.yaml` at the repo root defines all service configurations with `dockerContext: .` to ensure the Dockerfiles can resolve workspace dependencies correctly.
 
+### Why Render and not AWS
+
+For the current portfolio scope, Render is a one-file infra spec on a free
+tier; AWS would cost $50–80/mo for the seven-service footprint and add a day
+of CDK/Terraform without changing any application code. Containers are
+already multi-stage and non-root, so the migration target is "swap the
+deploy target" rather than "rewrite the platform." The full AWS architecture
+(ECS Fargate, RDS Multi-AZ, Amazon MQ, Secrets Manager, X-Ray) and concrete
+migration steps are written up in
+[`docs/adr/0002-deploy-target-render-vs-aws.md`](docs/adr/0002-deploy-target-render-vs-aws.md).
+
 ### Environment Variables per Service
 
 **All services:**
