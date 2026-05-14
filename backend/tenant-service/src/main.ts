@@ -3,9 +3,10 @@ import {
   FastifyAdapter,
   NestFastifyApplication,
 } from '@nestjs/platform-fastify';
-import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Logger } from 'nestjs-pino';
+import { AppModule } from './app.module';
 
 async function bootstrap() {
   const adapter = new FastifyAdapter();
@@ -16,17 +17,13 @@ async function bootstrap() {
 
   app.useLogger(app.get(Logger));
 
-  // Global validation pipe with strict settings
   app.useGlobalPipes(new ValidationPipe({
-    whitelist: true,           // Strip non-whitelisted properties
-    forbidNonWhitelisted: true, // Throw error for unknown properties
-    transform: true,           // Auto-transform payloads to DTO instances
-    transformOptions: {
-      enableImplicitConversion: true,
-    },
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+    transformOptions: { enableImplicitConversion: true },
   }));
 
-  // CORS Configuration
   app.enableCors({
     origin: process.env.FRONTEND_URL || 'http://localhost:5173',
     credentials: true,
@@ -34,13 +31,33 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
+  // OpenAPI / Swagger — internal-facing for engineering use.
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('TenantOps — Tenant Service')
+    .setDescription(
+      'Core orchestration service. Owns tenant state and the provisioning ' +
+        'state machine. Subscribes to all pipeline events.',
+    )
+    .setVersion('1.0')
+    .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, 'bearer')
+    .addTag('Auth')
+    .addTag('Tenants')
+    .addTag('Settings')
+    .build();
+  const document = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup('api/docs', app, document, {
+    swaggerOptions: { persistAuthorization: true },
+  });
+
   const port = process.env.PORT || 10000;
   await app.listen(port, '0.0.0.0');
 
   const logger = app.get(Logger);
   logger.log(`Tenant Service is running on port ${port}`);
+  logger.log(`OpenAPI docs available at /api/docs`);
 }
 bootstrap().catch((err) => {
+  // eslint-disable-next-line no-console
   console.error('Fatal startup error:', err);
   process.exit(1);
 });
