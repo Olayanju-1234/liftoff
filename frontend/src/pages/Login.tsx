@@ -1,114 +1,99 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../lib/auth';
-import { LogIn, Mail, Lock, Loader2, AlertCircle } from 'lucide-react';
+import type { FormEvent } from 'react';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { AlertTriangle, ArrowRight } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../lib/auth-context';
+import { apiMessage } from '../lib/errors';
+import { inputClass } from '../lib/ui';
+import AuthShell, { StageLadder } from '../components/AuthShell';
+import Button from '../components/ui/Button';
+import { Field } from '../components/ui/Field';
 
 export default function Login() {
     const navigate = useNavigate();
-    const { login } = useAuth();
+    const location = useLocation();
+    const { login, isAuthenticated } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
-    const handleSubmit = async (e: React.FormEvent) => {
+    const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ?? '/';
+
+    if (isAuthenticated && !loading) return <Navigate to={from} replace />;
+
+    const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
         setError('');
         setLoading(true);
-
         try {
             await login(email, password);
-            toast.success('Welcome back!');
-            navigate('/');
-        } catch (err: any) {
-            const message = err.response?.data?.message || 'Invalid credentials';
-            setError(message);
-            toast.error(message);
-        } finally {
+            toast.success('Signed in');
+            navigate(from, { replace: true });
+        } catch (err) {
+            setError(apiMessage(err, 'Those credentials did not match.'));
             setLoading(false);
         }
     };
 
     return (
-        <div className="min-h-screen bg-background flex items-center justify-center p-4">
-            <div className="w-full max-w-md">
-                {/* Logo/Title */}
-                <div className="text-center mb-8">
-                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-purple-600 mb-4">
-                        <LogIn size={32} className="text-white" />
-                    </div>
-                    <h1 className="text-3xl font-bold">Welcome Back</h1>
-                    <p className="text-muted-foreground mt-2">Sign in to your TenantOps account</p>
+        <AuthShell
+            sheet="A1"
+            title="Sign in"
+            lede="Back to the board. Your tenants, their sequences and anything parked in the dead-letter exchange."
+            aside={
+                <div className="flex flex-1 flex-col justify-center px-12 py-10 xl:px-16">
+                    <p className="label mb-2">Fig. A — the sequence you'll be watching</p>
+                    <p className="mb-8 max-w-sm text-[15px] text-ink-2">
+                        Five workers, one exchange. Each lights up while it holds the tenant's message.
+                    </p>
+                    <StageLadder />
                 </div>
-
-                {/* Form */}
-                <div className="bg-card border border-border rounded-2xl p-8 shadow-lg">
-                    <form onSubmit={handleSubmit} className="space-y-6">
-                        {error && (
-                            <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
-                                <AlertCircle size={16} />
-                                {error}
-                            </div>
-                        )}
-
-                        <div>
-                            <label className="block text-sm font-medium mb-2">Email</label>
-                            <div className="relative">
-                                <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                                <input
-                                    type="email"
-                                    value={email}
-                                    onChange={(e) => setEmail(e.target.value)}
-                                    className="w-full bg-background border border-border rounded-lg pl-10 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                                    placeholder="you@example.com"
-                                    required
-                                />
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="block text-sm font-medium mb-2">Password</label>
-                            <div className="relative">
-                                <Lock size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                                <input
-                                    type="password"
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    className="w-full bg-background border border-border rounded-lg pl-10 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                                    placeholder="••••••••"
-                                    required
-                                />
-                            </div>
-                        </div>
-
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-primary to-purple-600 text-white py-3 rounded-lg font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
-                        >
-                            {loading ? (
-                                <>
-                                    <Loader2 size={18} className="animate-spin" />
-                                    Signing in...
-                                </>
-                            ) : (
-                                <>
-                                    <LogIn size={18} />
-                                    Sign In
-                                </>
-                            )}
-                        </button>
-                    </form>
-
-                    <div className="mt-6 text-center text-sm text-muted-foreground">
-                        Don't have an account?{' '}
-                        <Link to="/register" className="text-primary hover:underline font-medium">
-                            Create one
-                        </Link>
+            }
+        >
+            <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+                {error && (
+                    <div role="alert" className="flex items-start gap-2.5 rounded border border-abort/35 bg-abort/[0.06] px-3 py-2.5 text-[14px] text-abort">
+                        <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                        {error}
                     </div>
-                </div>
-            </div>
-        </div>
+                )}
+                <Field label="Email" htmlFor="email">
+                    <input
+                        id="email"
+                        type="email"
+                        autoComplete="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className={inputClass}
+                        placeholder="you@company.com"
+                        required
+                    />
+                </Field>
+                <Field label="Password" htmlFor="password">
+                    <input
+                        id="password"
+                        type="password"
+                        autoComplete="current-password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className={inputClass}
+                        placeholder="••••••••"
+                        required
+                    />
+                </Field>
+                <Button type="submit" variant="primary" busy={loading} disabled={!email || !password} className="h-11 w-full text-[15px]">
+                    {loading ? 'Signing in' : 'Sign in'}
+                    {!loading && <ArrowRight size={16} />}
+                </Button>
+            </form>
+            <p className="mt-5 border-t border-rule pt-4 text-[14px] text-ink-3">
+                No workspace yet?{' '}
+                <Link to="/register" className="link font-medium">
+                    Create one
+                </Link>
+            </p>
+        </AuthShell>
     );
 }

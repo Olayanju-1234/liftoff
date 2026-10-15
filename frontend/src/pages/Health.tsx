@@ -1,185 +1,219 @@
-import { useState, useEffect } from 'react';
-import { checkHealth } from '../lib/api';
-import { Server, RefreshCw, Wifi, WifiOff, Clock, Activity } from 'lucide-react';
-import { format } from 'date-fns';
-import toast from 'react-hot-toast';
+import { useState } from 'react';
+import { RotateCcw } from 'lucide-react';
+import { checkHealth, getEvents, getTenants } from '../lib/api';
+import { useNow, useResource } from '../lib/hooks';
+import { EXCHANGE, STAGES, isStalled } from '../lib/pipeline';
+import { fmtAgo, fmtClock } from '../lib/time';
+import type { Tone } from '../lib/ui';
+import { TONE_TEXT } from '../lib/ui';
+import { cn } from '../lib/cn';
+import type { EventLog, Tenant } from '../lib/types';
+import PageHeader from '../components/ui/PageHeader';
+import Panel from '../components/ui/Panel';
+import Button from '../components/ui/Button';
+import { Tag } from '../components/ui/Tag';
 
-interface ServiceHealth {
+type Call = 'GO' | 'HOLD' | 'NO-GO' | 'NO SIGNAL';
+
+const CALL_TONE: Record<Call, Tone> = { GO: 'go', HOLD: 'hold', 'NO-GO': 'abort', 'NO SIGNAL': 'scrub' };
+
+interface Row {
     name: string;
-    status: 'Operational' | 'Degraded' | 'Down';
-    latency: number;
-    lastChecked: Date;
-    endpoint: string;
+    role: string;
+    evidence: string;
+    last: string;
+    call: Call;
+}
+
+interface Sample {
+    at: number;
+    ms: number;
+    ok: boolean;
 }
 
 export default function Health() {
-    const [services, setServices] = useState<ServiceHealth[]>([
-        { name: 'API Gateway', status: 'Operational', latency: 0, lastChecked: new Date(), endpoint: '/health' },
-        { name: 'Tenant Service', status: 'Operational', latency: 0, lastChecked: new Date(), endpoint: 'Internal' },
-        { name: 'Database Provisioner', status: 'Operational', latency: 0, lastChecked: new Date(), endpoint: 'Internal' },
-        { name: 'DNS Service', status: 'Operational', latency: 0, lastChecked: new Date(), endpoint: 'Internal' },
-        { name: 'Notification Service', status: 'Operational', latency: 0, lastChecked: new Date(), endpoint: 'Internal' },
-        { name: 'Billing Service', status: 'Operational', latency: 0, lastChecked: new Date(), endpoint: 'Internal' },
-    ]);
-    const [loading, setLoading] = useState(false);
-    const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+    const now = useNow();
+    const [history, setHistory] = useState<Sample[]>([]);
 
-    useEffect(() => {
-        checkAllHealth();
-    }, []);
+    const gateway = useResource(
+        async () => {
+            const res = await checkHealth();
+            setHistory((h) => [...h, { at: Date.now(), ms: res.latency, ok: res.status === 'Operational' }].slice(-30));
+            return res;
+        },
+        { interval: 10_000 },
+    );
+    const tenants = useResource(
+        async () => {
+            const start = performance.now();
+            const data = await getTenants();
+            return { data, ms: Math.round(performance.now() - start) };
+        },
+        { interval: 20_000 },
+    );
+    const events = useResource(getEvents, { interval: 20_000 });
 
-    const checkAllHealth = async () => {
-        setLoading(true);
-        try {
-            // Check API Gateway (the only one we can directly check from frontend)
-            const apiHealth = await checkHealth();
-
-            setServices(prev => prev.map(service => {
-                if (service.name === 'API Gateway') {
-                    return {
-                        ...service,
-                        status: apiHealth.status,
-                        latency: apiHealth.latency,
-                        lastChecked: new Date(),
-                    };
-                }
-                // For other services, if API is up, they're likely operational
-                // In a real app, API gateway would aggregate health from all services
-                if (apiHealth.status === 'Operational') {
-                    return {
-                        ...service,
-                        status: 'Operational',
-                        latency: Math.floor(Math.random() * 100) + 50, // Simulated latency
-                        lastChecked: new Date(),
-                    };
-                }
-                return {
-                    ...service,
-                    status: 'Down',
-                    lastChecked: new Date(),
-                };
-            }));
-
-            setLastRefresh(new Date());
-            toast.success('Health checks refreshed');
-        } catch (error) {
-            console.error('Health check failed', error);
-            setServices(prev => prev.map(s => ({ ...s, status: 'Down' as const, lastChecked: new Date() })));
-            toast.error('Failed to check service health');
-        } finally {
-            setLoading(false);
-        }
+    const refreshAll = () => {
+        gateway.refresh();
+        tenants.refresh();
+        events.refresh();
     };
 
-    const getStatusIcon = (status: string) => {
-        switch (status) {
-            case 'Operational': return <Wifi size={20} className="text-green-500" />;
-            case 'Degraded': return <Activity size={20} className="text-yellow-500" />;
-            case 'Down': return <WifiOff size={20} className="text-red-500" />;
-            default: return <Wifi size={20} className="text-gray-500" />;
-        }
-    };
+    const gw = gateway.data;
+    const gwUp = gw?.status === 'Operational';
+    const tenantList: Tenant[] = tenants.data?.data ?? [];
+    const tenantsOk = !!tenants.data && tenants.error === null;
+    const evList: EventLog[] = events.data ?? [];
+    const lastOf = (type: string) => evList.find((e) => e.eventType === type);
+    const newest = evList[0];
 
-    const getStatusBadge = (status: string) => {
-        const colors: Record<string, string> = {
-            'Operational': 'bg-green-500/10 text-green-500 border-green-500/20',
-            'Degraded': 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20',
-            'Down': 'bg-red-500/10 text-red-500 border-red-500/20',
-        };
-        return colors[status] || 'bg-gray-500/10 text-gray-500 border-gray-500/20';
-    };
+    const rows: Row[] = [
+        {
+            name: 'api-gateway',
+            role: 'Entry point, rate limits, auth forwarding',
+            evidence: 'GET /health',
+            last: gw ? `${gw.latency} ms` : '—',
+            call: !gw ? 'NO SIGNAL' : gwUp ? 'GO' : 'NO-GO',
+        },
+        {
+            name: 'tenant-service',
+            role: 'Tenants, auth, saga state, sweeper',
+            evidence: 'GET /tenants through the gateway',
+            last: tenants.data ? `${tenants.data.ms} ms` : '—',
+            call: tenants.loading ? 'NO SIGNAL' : tenantsOk ? 'GO' : 'NO-GO',
+        },
+        {
+            name: 'postgres',
+            role: 'Tenant data and per-tenant schemas',
+            evidence: 'tenant reads succeed',
+            last: tenantsOk ? 'reading' : '—',
+            call: tenants.loading ? 'NO SIGNAL' : tenantsOk ? 'GO' : 'NO-GO',
+        },
+        {
+            name: 'rabbitmq',
+            role: `${EXCHANGE} and its dead-letter exchange`,
+            evidence: 'newest event that crossed the exchange',
+            last: newest ? fmtAgo(Date.parse(newest.timestamp), now) : 'none in latest 200',
+            call: newest ? 'GO' : 'NO SIGNAL',
+        },
+        ...STAGES.map((s): Row => {
+            const heard = lastOf(s.emits);
+            const stuck = tenantList.filter((t) => t[s.key] === 'IN_PROGRESS' && isStalled(t, now)).length;
+            return {
+                name: s.service,
+                role: s.detail,
+                evidence: `last ${s.emits}${stuck ? ` · ${stuck} stalled here` : ''}`,
+                last: heard ? fmtAgo(Date.parse(heard.timestamp), now) : 'none in latest 200',
+                call: stuck ? 'HOLD' : heard ? 'GO' : 'NO SIGNAL',
+            };
+        }),
+    ];
 
-    const getLatencyColor = (latency: number) => {
-        if (latency < 100) return 'text-green-500';
-        if (latency < 300) return 'text-yellow-500';
-        return 'text-red-500';
-    };
-
-    const operationalCount = services.filter(s => s.status === 'Operational').length;
-    const allOperational = operationalCount === services.length;
+    const tally = rows.reduce<Record<Call, number>>(
+        (acc, r) => ({ ...acc, [r.call]: acc[r.call] + 1 }),
+        { GO: 0, HOLD: 0, 'NO-GO': 0, 'NO SIGNAL': 0 },
+    );
+    const verdict: { tone: Tone; text: string } = !gw
+        ? { tone: 'scrub', text: 'Polling the gateway…' }
+        : !gwUp
+          ? { tone: 'abort', text: 'No-go. The gateway is not answering.' }
+          : tally.HOLD
+            ? { tone: 'hold', text: `Hold. ${tally.HOLD} stage${tally.HOLD === 1 ? ' has' : 's have'} stalled tenants.` }
+            : { tone: 'go', text: 'Go. The gateway answers and nothing is stuck.' };
 
     return (
-        <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight">Service Health</h2>
-                    <p className="text-muted-foreground mt-2">Monitor the status and performance of all platform services.</p>
+        <>
+            <PageHeader
+                sheet="06"
+                eyebrow="Services"
+                title="Go / no-go poll"
+                lede="Only the gateway exposes a health check to the browser. Every other service is judged by the evidence it leaves: the last event it produced, and whether any tenant is stuck at its stage."
+                actions={
+                    <Button onClick={refreshAll} busy={gateway.refreshing}>
+                        {!gateway.refreshing && <RotateCcw size={14} />} Poll again
+                    </Button>
+                }
+            />
+
+            <section className="mb-6 grid gap-px overflow-hidden rounded-md border border-ink/70 bg-rule md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+                <div className="bg-card px-5 py-5">
+                    <p className="label mb-2">Verdict</p>
+                    <p className={cn('font-cond text-[30px] font-semibold uppercase leading-[1.05]', TONE_TEXT[verdict.tone])}>{verdict.text}</p>
+                    <p className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[12px] text-ink-3">
+                        {(Object.keys(tally) as Call[]).map((c) => (
+                            <span key={c}>
+                                <span className={TONE_TEXT[CALL_TONE[c]]}>{c}</span> {tally[c]}
+                            </span>
+                        ))}
+                    </p>
                 </div>
-                <button
-                    onClick={checkAllHealth}
-                    disabled={loading}
-                    className="bg-primary text-primary-foreground px-4 py-2 rounded-md flex items-center gap-2 hover:bg-primary/90 transition-colors disabled:opacity-50"
-                >
-                    <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-                    Refresh
-                </button>
-            </div>
-
-            {/* Summary Card */}
-            <div className={`p-6 rounded-xl border ${allOperational ? 'bg-green-500/5 border-green-500/20' : 'bg-yellow-500/5 border-yellow-500/20'}`}>
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                        {allOperational ? (
-                            <Wifi size={32} className="text-green-500" />
-                        ) : (
-                            <Activity size={32} className="text-yellow-500" />
-                        )}
-                        <div>
-                            <h3 className="text-xl font-bold">
-                                {allOperational ? 'All Systems Operational' : `${operationalCount}/${services.length} Services Operational`}
-                            </h3>
-                            <p className="text-sm text-muted-foreground">
-                                Last checked: {format(lastRefresh, 'MMM d, yyyy HH:mm:ss')}
-                            </p>
-                        </div>
+                <div className="bg-card px-5 py-5">
+                    <div className="mb-2 flex items-baseline justify-between">
+                        <p className="label">Gateway latency</p>
+                        <p className="font-mono text-[11px] text-ink-3">every 10 s while this page is open</p>
                     </div>
+                    <Sparkline samples={history} />
                 </div>
-            </div>
+            </section>
 
-            {/* Service Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {services.map((service) => (
-                    <div key={service.name} className="bg-card border border-border rounded-xl p-6">
-                        <div className="flex items-start justify-between mb-4">
-                            <div className="flex items-center gap-3">
-                                <div className="p-2 bg-muted rounded-lg">
-                                    <Server size={20} className="text-muted-foreground" />
-                                </div>
-                                <div>
-                                    <h4 className="font-semibold">{service.name}</h4>
-                                    <p className="text-xs text-muted-foreground">{service.endpoint}</p>
-                                </div>
-                            </div>
-                            {getStatusIcon(service.status)}
-                        </div>
+            <Panel flush>
+                <div className="hidden grid-cols-[170px_minmax(0,1.3fr)_minmax(0,1.2fr)_140px_110px] gap-4 border-b border-ink/70 bg-paper-deep/50 px-5 py-2.5 lg:grid">
+                    {['Service', 'Role', 'Evidence', 'Last', 'Call'].map((h) => (
+                        <span key={h} className="label">
+                            {h}
+                        </span>
+                    ))}
+                </div>
+                <ul className="divide-y divide-rule">
+                    {rows.map((r) => (
+                        <li
+                            key={r.name}
+                            className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-4 py-3 sm:px-5 lg:grid-cols-[170px_minmax(0,1.3fr)_minmax(0,1.2fr)_140px_110px] lg:items-center"
+                        >
+                            <span className="font-mono text-[13.5px] font-medium text-ink">{r.name}</span>
+                            <span className="justify-self-end lg:order-last lg:justify-self-start">
+                                <Tag tone={CALL_TONE[r.call]}>{r.call}</Tag>
+                            </span>
+                            <span className="col-span-2 text-[14px] text-ink-2 lg:col-span-1">{r.role}</span>
+                            <span className="col-span-2 font-mono text-[12px] text-ink-3 lg:col-span-1">{r.evidence}</span>
+                            <span className="num col-span-2 font-mono text-[12px] text-ink lg:col-span-1">{r.last}</span>
+                        </li>
+                    ))}
+                </ul>
+            </Panel>
+        </>
+    );
+}
 
-                        <div className="space-y-3">
-                            <div className="flex items-center justify-between text-sm">
-                                <span className="text-muted-foreground">Status</span>
-                                <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${getStatusBadge(service.status)}`}>
-                                    {service.status}
-                                </span>
-                            </div>
-
-                            <div className="flex items-center justify-between text-sm">
-                                <span className="text-muted-foreground">Latency</span>
-                                <span className={`font-mono ${getLatencyColor(service.latency)}`}>
-                                    {service.latency}ms
-                                </span>
-                            </div>
-
-                            <div className="flex items-center justify-between text-sm">
-                                <span className="text-muted-foreground flex items-center gap-1">
-                                    <Clock size={12} />
-                                    Last Check
-                                </span>
-                                <span className="text-xs">
-                                    {format(service.lastChecked, 'HH:mm:ss')}
-                                </span>
-                            </div>
-                        </div>
-                    </div>
+function Sparkline({ samples }: { samples: Sample[] }) {
+    const w = 360;
+    const h = 64;
+    if (samples.length === 0) {
+        return <div className="flex h-16 items-center font-mono text-[12px] text-ink-3">waiting for the first sample…</div>;
+    }
+    const max = Math.max(100, ...samples.map((s) => s.ms));
+    const step = samples.length > 1 ? w / 29 : 0;
+    const pts = samples.map((s, i) => ({ x: i * step, y: h - 6 - (s.ms / max) * (h - 14), s }));
+    const last = samples[samples.length - 1];
+    return (
+        <div className="flex items-end gap-4">
+            <svg viewBox={`0 0 ${w} ${h}`} className="h-16 w-full max-w-[360px]" aria-label="Gateway latency history">
+                <line x1="0" y1={h - 6} x2={w} y2={h - 6} className="stroke-rule" strokeWidth="1" />
+                <polyline
+                    points={pts.map((p) => `${p.x},${p.y}`).join(' ')}
+                    className="fill-none stroke-ink"
+                    strokeWidth="1.5"
+                />
+                {pts.map((p, i) => (
+                    <circle key={i} cx={p.x} cy={p.y} r="2.4" className={p.s.ok ? 'fill-ink' : 'fill-abort'} />
                 ))}
+            </svg>
+            <div className="shrink-0 text-right">
+                <p className="num font-mono text-[26px] font-medium leading-none text-ink">
+                    {last.ms}
+                    <span className="text-[13px] text-ink-3"> ms</span>
+                </p>
+                <p className="mt-1 font-mono text-[11px] text-ink-3">{fmtClock(last.at)}</p>
             </div>
         </div>
     );

@@ -1,137 +1,106 @@
-import { Book, Users, Mail, Ticket, ExternalLink } from 'lucide-react';
-import toast from 'react-hot-toast';
-import { useAuth } from '../lib/auth';
+import { ArrowUpRight, Mail } from 'lucide-react';
+import { useAuth } from '../lib/auth-context';
+import { DLX, STALL_AFTER_MS } from '../lib/pipeline';
+import { buttonClass } from '../lib/ui';
+import PageHeader from '../components/ui/PageHeader';
+import Panel from '../components/ui/Panel';
 
-const GITHUB_REPO = 'https://github.com/Olayanju-1234/liftoff';
+const REPO = 'https://github.com/Olayanju-1234/liftoff';
 const SUPPORT_EMAIL = 'josepholayanju2003@gmail.com';
+
+const LINKS = [
+    {
+        n: 'A',
+        title: 'Read the README',
+        body: 'Architecture, the event contract, local setup and the engineering decisions behind the saga.',
+        href: `${REPO}#readme`,
+        cta: 'Open docs',
+    },
+    {
+        n: 'B',
+        title: 'Open an issue',
+        body: 'Bugs, rough edges or feature ideas. Include the tenant ID from its page if one is involved.',
+        href: `${REPO}/issues`,
+        cta: 'GitHub issues',
+    },
+    {
+        n: 'C',
+        title: 'API reference',
+        body: 'Swagger UI on the gateway documents every route, generated from the shared DTOs.',
+        href: `${(import.meta.env.VITE_API_URL as string | undefined) ?? ''}/api/docs`,
+        cta: 'Swagger UI',
+    },
+];
+
+const FAQ = [
+    {
+        q: 'How do I provision a tenant?',
+        a: 'Press New tenant on the Overview or Tenants page. You land on the tenant page and can watch each stage go from pending to done, usually in about four seconds.',
+    },
+    {
+        q: 'What does Stalled mean?',
+        a: `A stage has been in progress for more than ${STALL_AFTER_MS / 1000} seconds with no change. Workers reject failed messages without requeue, so the message was most likely dead-lettered to ${DLX} and the stage will not finish on its own.`,
+    },
+    {
+        q: 'What happens to a stalled tenant?',
+        a: 'You can cancel it from its page, the board or Dead letters. If you do nothing, tenant-service sweeps every five minutes and cancels pipelines that have been stuck for 30.',
+    },
+    {
+        q: 'Can I retry a failed step?',
+        a: "Not from the dashboard. Replaying a dead-lettered message isn't exposed by the API, so the usual path is to cancel or delete the tenant and provision it again.",
+    },
+    {
+        q: 'Why does Services say NO SIGNAL for a worker?',
+        a: 'Workers have no browser-facing health check. Their status comes from the last event they produced, and NO SIGNAL means none appears in the latest 200 events.',
+    },
+];
 
 export default function Support() {
     const { user } = useAuth();
-
-    const handleOpenTicket = () => {
-        const subject = encodeURIComponent('Support Request — Liftoff Provisioning Platform');
-        const body = encodeURIComponent(
-            `Hello,\n\nI need help with:\n\n[Describe your issue here]\n\n---\nUser: ${user?.email ?? 'Unknown'}`
-        );
-        window.open(`mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`, '_blank');
-        toast.success('Opening email client...');
-    };
-
-    const supportCards = [
-        {
-            title: 'Documentation',
-            description: 'Read the README for setup guides, architecture overview, and API reference.',
-            icon: Book,
-            action: () => {
-                window.open(`${GITHUB_REPO}#readme`, '_blank');
-                toast.success('Opening documentation...');
-            },
-            actionLabel: 'View Docs',
-            color: 'bg-blue-500/10 text-blue-500',
-        },
-        {
-            title: 'GitHub Issues',
-            description: 'Report bugs or request features directly on the GitHub repository.',
-            icon: Users,
-            action: () => {
-                window.open(`${GITHUB_REPO}/issues`, '_blank');
-                toast.success('Opening GitHub Issues...');
-            },
-            actionLabel: 'Open Issue',
-            color: 'bg-purple-500/10 text-purple-500',
-        },
-        {
-            title: 'Contact',
-            description: 'Reach out directly for urgent issues or account-related questions.',
-            icon: Mail,
-            action: () => {
-                const subject = encodeURIComponent('Liftoff Support Inquiry');
-                window.open(`mailto:${SUPPORT_EMAIL}?subject=${subject}`, '_blank');
-                toast.success('Opening email client...');
-            },
-            actionLabel: 'Email Us',
-            color: 'bg-green-500/10 text-green-500',
-        },
-    ];
+    const subject = encodeURIComponent('Liftoff support request');
+    const body = encodeURIComponent(`Hello,\n\nI need help with:\n\n\n---\nUser: ${user?.email ?? 'unknown'}\nWorkspace tenant: ${user?.tenantId ?? 'unknown'}`);
 
     return (
-        <div className="space-y-8 max-w-4xl">
-            <div>
-                <h2 className="text-3xl font-bold tracking-tight">Support</h2>
-                <p className="text-muted-foreground mt-2">
-                    Get help with your account, explore documentation, or reach out directly.
-                </p>
-            </div>
+        <div className="max-w-5xl">
+            <PageHeader sheet="08" eyebrow="Help" title="Help" lede="Where to read more, where to report problems, and answers to the questions the dashboard raises." />
 
-            {/* Support Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {supportCards.map((card) => (
-                    <div key={card.title} className="bg-card border border-border rounded-xl p-6 flex flex-col">
-                        <div className={`w-12 h-12 rounded-lg ${card.color} flex items-center justify-center mb-4`}>
-                            <card.icon size={24} />
-                        </div>
-                        <h3 className="text-lg font-semibold mb-2">{card.title}</h3>
-                        <p className="text-sm text-muted-foreground mb-4 flex-1">
-                            {card.description}
-                        </p>
-                        <button
-                            onClick={card.action}
-                            className="flex items-center gap-2 text-sm font-medium text-primary hover:underline"
-                        >
-                            {card.actionLabel}
-                            <ExternalLink size={14} />
-                        </button>
-                    </div>
+            <div className="mb-8 grid gap-px overflow-hidden rounded-md border border-ink/70 bg-rule md:grid-cols-3">
+                {LINKS.map((l) => (
+                    <a key={l.n} href={l.href} target="_blank" rel="noreferrer" className="group flex flex-col bg-card px-5 py-5 transition-colors hover:bg-paper">
+                        <span className="mb-3 inline-flex h-7 w-7 items-center justify-center rounded-sm border border-ink font-mark text-[10px]">{l.n}</span>
+                        <span className="font-cond text-[21px] font-semibold leading-tight text-ink">{l.title}</span>
+                        <span className="mt-1.5 flex-1 text-[14px] text-ink-2">{l.body}</span>
+                        <span className="mt-4 inline-flex items-center gap-1 text-[13.5px] font-medium text-blueprint group-hover:underline">
+                            {l.cta} <ArrowUpRight size={14} />
+                        </span>
+                    </a>
                 ))}
             </div>
 
-            {/* Open Ticket Section */}
-            <div className="bg-card border border-border rounded-xl p-8 text-center">
-                <div className="inline-flex items-center justify-center w-16 h-16 bg-primary/10 rounded-full mb-4">
-                    <Ticket size={32} className="text-primary" />
-                </div>
-                <h3 className="text-xl font-bold mb-2">Need More Help?</h3>
-                <p className="text-muted-foreground max-w-md mx-auto mb-6">
-                    If you're experiencing issues that require immediate attention, open a support ticket
-                    and we'll get back to you as soon as possible.
-                </p>
-                <button
-                    onClick={handleOpenTicket}
-                    className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors font-medium"
-                >
-                    <Ticket size={18} />
-                    Open a Ticket
-                </button>
-            </div>
-
-            {/* FAQ Section */}
-            <div className="bg-card border border-border rounded-xl p-6">
-                <h3 className="text-lg font-semibold mb-4">Frequently Asked Questions</h3>
-                <div className="space-y-4">
-                    {[
-                        {
-                            q: 'How do I create a new tenant?',
-                            a: 'Navigate to Tenant Management and click "New Tenant". Fill in the required details and provisioning starts automatically via the RabbitMQ pipeline.',
-                        },
-                        {
-                            q: 'What happens when provisioning fails?',
-                            a: 'Failed provisioning jobs appear in the Failed Jobs section with full error details. You can inspect the error and retry from there.',
-                        },
-                        {
-                            q: 'How can I monitor my services?',
-                            a: 'The Service Health page shows real-time status and latency for all microservices. The Events page gives a detailed activity log.',
-                        },
-                        {
-                            q: 'Can I cancel a tenant that is still provisioning?',
-                            a: 'Yes. From the Pipeline view or Tenant Management, you can cancel an in-progress provisioning job for a tenant.',
-                        },
-                    ].map((item) => (
-                        <div key={item.q} className="p-4 bg-muted/30 rounded-lg">
-                            <h4 className="font-medium mb-2">{item.q}</h4>
-                            <p className="text-sm text-muted-foreground">{item.a}</p>
-                        </div>
+            <Panel fig="8.1" title="Questions" flush className="mb-8">
+                <ol className="divide-y divide-rule">
+                    {FAQ.map((f, i) => (
+                        <li key={f.q} className="grid gap-x-5 gap-y-1 px-4 py-4 sm:grid-cols-[36px_minmax(0,1fr)] sm:px-5">
+                            <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border-[1.5px] border-ink font-mono text-[12px] font-medium">
+                                {i + 1}
+                            </span>
+                            <div>
+                                <h3 className="text-[16px] font-semibold text-ink">{f.q}</h3>
+                                <p className="mt-1 max-w-3xl text-[14.5px] leading-relaxed text-ink-2">{f.a}</p>
+                            </div>
+                        </li>
                     ))}
+                </ol>
+            </Panel>
+
+            <div className="flex flex-col items-start gap-4 rounded-md border border-dashed border-rule-strong bg-card/70 px-5 py-5 sm:flex-row sm:items-center">
+                <div className="flex-1">
+                    <p className="font-cond text-[21px] font-semibold text-ink">Still stuck?</p>
+                    <p className="text-[14.5px] text-ink-2">Email the maintainer. Your user and workspace IDs are filled in for you.</p>
                 </div>
+                <a href={`mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`} className={buttonClass('primary', 'md')}>
+                    <Mail size={15} /> Write an email
+                </a>
             </div>
         </div>
     );

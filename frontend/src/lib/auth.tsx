@@ -1,170 +1,45 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import api from './api';
-
-interface User {
-    id: string;
-    email: string;
-    name: string | null;
-    role: string;
-    tenantId: string;
-}
-
-interface AuthContextType {
-    user: User | null;
-    accessToken: string | null;
-    isAuthenticated: boolean;
-    isLoading: boolean;
-    login: (email: string, password: string) => Promise<void>;
-    register: (data: RegisterData) => Promise<void>;
-    logout: () => Promise<void>;
-}
-
-interface RegisterData {
-    email: string;
-    password: string;
-    name?: string;
-    tenantName: string;
-    subdomain: string;
-}
-
-interface AuthResponse {
-    accessToken: string;
-    refreshToken: string;
-    user: User;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-const TOKEN_KEY = 'accessToken';
-const REFRESH_TOKEN_KEY = 'refreshToken';
-const USER_KEY = 'user';
+import { sessionStore } from './session';
+import type { Session } from './session';
+import { AuthContext } from './auth-context';
+import type { AuthContextType, RegisterData } from './auth-context';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-    const [user, setUser] = useState<User | null>(null);
-    const [accessToken, setAccessToken] = useState<string | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
+    const session = useSyncExternalStore(sessionStore.subscribe, sessionStore.get);
 
-    // Initialize auth state from localStorage
-    useEffect(() => {
-        const storedToken = localStorage.getItem(TOKEN_KEY);
-        const storedUser = localStorage.getItem(USER_KEY);
-
-        if (storedToken && storedUser) {
-            setAccessToken(storedToken);
-            setUser(JSON.parse(storedUser));
-            // Set default auth header
-            api.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
-        }
-        setIsLoading(false);
+    const login = useCallback(async (email: string, password: string) => {
+        const { data } = await api.post<Session>('/auth/login', { email, password });
+        sessionStore.set(data);
     }, []);
 
-    // Set up axios interceptor for token refresh
-    useEffect(() => {
-        const interceptor = api.interceptors.response.use(
-            (response) => response,
-            async (error) => {
-                const originalRequest = error.config;
-
-                if (error.response?.status === 401 && !originalRequest._retry) {
-                    originalRequest._retry = true;
-
-                    const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
-                    if (refreshToken) {
-                        try {
-                            const response = await api.post<AuthResponse>('/auth/refresh', { refreshToken });
-                            const { accessToken: newToken, refreshToken: newRefreshToken, user: newUser } = response.data;
-
-                            localStorage.setItem(TOKEN_KEY, newToken);
-                            localStorage.setItem(REFRESH_TOKEN_KEY, newRefreshToken);
-                            localStorage.setItem(USER_KEY, JSON.stringify(newUser));
-
-                            setAccessToken(newToken);
-                            setUser(newUser);
-                            api.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
-
-                            originalRequest.headers['Authorization'] = `Bearer ${newToken}`;
-                            return api(originalRequest);
-                        } catch (refreshError) {
-                            // Refresh failed, logout
-                            handleLogout();
-                        }
-                    }
-                }
-                return Promise.reject(error);
-            }
-        );
-
-        return () => {
-            api.interceptors.response.eject(interceptor);
-        };
+    const register = useCallback(async (payload: RegisterData) => {
+        const { data } = await api.post<Session>('/auth/register', payload);
+        sessionStore.set(data);
     }, []);
 
-    const handleLogout = () => {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(REFRESH_TOKEN_KEY);
-        localStorage.removeItem(USER_KEY);
-        setAccessToken(null);
-        setUser(null);
-        delete api.defaults.headers.common['Authorization'];
-    };
-
-    const login = async (email: string, password: string) => {
-        const response = await api.post<AuthResponse>('/auth/login', { email, password });
-        const { accessToken: token, refreshToken, user: userData } = response.data;
-
-        localStorage.setItem(TOKEN_KEY, token);
-        localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
-        localStorage.setItem(USER_KEY, JSON.stringify(userData));
-
-        setAccessToken(token);
-        setUser(userData);
-        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    };
-
-    const register = async (data: RegisterData) => {
-        const response = await api.post<AuthResponse>('/auth/register', data);
-        const { accessToken: token, refreshToken, user: userData } = response.data;
-
-        localStorage.setItem(TOKEN_KEY, token);
-        localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
-        localStorage.setItem(USER_KEY, JSON.stringify(userData));
-
-        setAccessToken(token);
-        setUser(userData);
-        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    };
-
-    const logout = async () => {
+    const logout = useCallback(async () => {
         try {
             await api.post('/auth/logout');
-        } catch (error) {
-            // Ignore logout errors
+        } catch {
+            // The local session is cleared either way.
         }
-        handleLogout();
-    };
+        sessionStore.set(null);
+    }, []);
 
-    return (
-        <AuthContext.Provider
-            value={{
-                user,
-                accessToken,
-                isAuthenticated: !!accessToken,
-                isLoading,
-                login,
-                register,
-                logout,
-            }}
-        >
-            {children}
-        </AuthContext.Provider>
+    const value = useMemo<AuthContextType>(
+        () => ({
+            user: session?.user ?? null,
+            accessToken: session?.accessToken ?? null,
+            isAuthenticated: !!session,
+            isLoading: false,
+            login,
+            register,
+            logout,
+        }),
+        [session, login, register, logout],
     );
-}
 
-export function useAuth() {
-    const context = useContext(AuthContext);
-    if (context === undefined) {
-        throw new Error('useAuth must be used within an AuthProvider');
-    }
-    return context;
+    return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
