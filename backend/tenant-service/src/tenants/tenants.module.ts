@@ -30,7 +30,8 @@ import { ProvisioningTimeoutService } from './provisioning-timeout.service';
           },
         },
       ],
-      uri: process.env.RABBITMQ_URL || 'amqp://devuser:devpassword@localhost:5672',
+      uri:
+        process.env.RABBITMQ_URL || 'amqp://devuser:devpassword@localhost:5672',
       connectionInitOptions: { wait: false, reject: false },
       prefetchCount: 10,
       enableControllerDiscovery: true,
@@ -39,4 +40,4 @@ import { ProvisioningTimeoutService } from './provisioning-timeout.service';
   controllers: [TenantsController],
   providers: [TenantsService, PrismaService, ProvisioningTimeoutService],
 })
-export class TenantsModule { }
+export class TenantsModule {}

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as sgMail from '@sendgrid/mail';
+import { errorMessage } from '../common/error-message';
 
 export interface EmailOptions {
   to: string;
@@ -17,7 +18,8 @@ export class EmailService {
 
   constructor(private configService: ConfigService) {
     const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
-    this.fromEmail = this.configService.get<string>('EMAIL_FROM') || 'noreply@tenantops.com';
+    this.fromEmail =
+      this.configService.get<string>('EMAIL_FROM') || 'noreply@tenantops.com';
 
     if (apiKey) {
       sgMail.setApiKey(apiKey);
@@ -25,13 +27,17 @@ export class EmailService {
       this.logger.log('SendGrid email service configured');
     } else {
       this.isConfigured = false;
-      this.logger.warn('SendGrid API key not configured - emails will be logged only');
+      this.logger.warn(
+        'SendGrid API key not configured - emails will be logged only',
+      );
     }
   }
 
   async sendEmail(options: EmailOptions): Promise<boolean> {
     if (!this.isConfigured) {
-      this.logger.log(`[DEV MODE] Would send email to ${options.to}: ${options.subject}`);
+      this.logger.log(
+        `[DEV MODE] Would send email to ${options.to}: ${options.subject}`,
+      );
       this.logger.log(`Content: ${options.text || options.html}`);
       return true;
     }
@@ -47,13 +53,20 @@ export class EmailService {
       await sgMail.send(message);
       this.logger.log(`Email sent successfully to ${options.to}`);
       return true;
-    } catch (error: any) {
-      this.logger.error(`Failed to send email to ${options.to}:`, error.message);
+    } catch (error) {
+      this.logger.error(
+        `Failed to send email to ${options.to}:`,
+        errorMessage(error),
+      );
       return false;
     }
   }
 
-  async sendVerificationEmail(email: string, token: string, name?: string): Promise<boolean> {
+  async sendVerificationEmail(
+    email: string,
+    token: string,
+    name?: string,
+  ): Promise<boolean> {
     const verifyUrl = `${this.configService.get('FRONTEND_URL') || 'http://localhost:5173'}/verify-email?token=${token}`;
 
     return this.sendEmail({

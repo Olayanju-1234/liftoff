@@ -23,14 +23,17 @@ import { envValidationSchema } from './config/env.validation';
     }),
     LoggerModule.forRoot({
       pinoHttp: {
-        transport: process.env.NODE_ENV !== 'production' ? {
-          target: 'pino-pretty',
-          options: {
-            singleLine: true,
-            colorize: true,
-            levelFirst: false,
-          },
-        } : undefined,
+        transport:
+          process.env.NODE_ENV !== 'production'
+            ? {
+                target: 'pino-pretty',
+                options: {
+                  singleLine: true,
+                  colorize: true,
+                  levelFirst: false,
+                },
+              }
+            : undefined,
         level: process.env.LOG_LEVEL || 'info',
       },
     }),
@@ -56,4 +59,4 @@ import { envValidationSchema } from './config/env.validation';
     },
   ],
 })
-export class AppModule { }
+export class AppModule {}

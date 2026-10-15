@@ -3,7 +3,7 @@ import { SentryService } from './sentry.service';
 
 @Global()
 @Module({
-    providers: [SentryService],
-    exports: [SentryService],
+  providers: [SentryService],
+  exports: [SentryService],
 })
-export class SentryModule { }
+export class SentryModule {}

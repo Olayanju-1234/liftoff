@@ -6,7 +6,7 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { AxiosError, AxiosRequestConfig } from 'axios';
+import { AxiosRequestConfig, isAxiosError } from 'axios';
 import { firstValueFrom } from 'rxjs';
 import {
   CancelTenantDto,
@@ -16,6 +16,8 @@ import {
   RegisterDto,
   UpdateSettingsDto,
 } from '@liftoff/shared-types';
+
+type DownstreamErrorBody = string | Record<string, unknown>;
 
 @Injectable()
 export class AppService {
@@ -62,7 +64,12 @@ export class AppService {
       { name: dto.name, subdomain: dto.subdomain },
       'Creating tenant',
     );
-    const data = await this.proxy<{ id: string }>('post', '/tenants', dto, auth);
+    const data = await this.proxy<{ id: string }>(
+      'post',
+      '/tenants',
+      dto,
+      auth,
+    );
     this.logger.log({ tenantId: data.id }, 'Tenant creation initiated');
     return data;
   }
@@ -116,7 +123,9 @@ export class AppService {
       const response =
         method === 'get' || method === 'delete'
           ? await firstValueFrom(this.httpService[method]<T>(path, config))
-          : await firstValueFrom(this.httpService[method]<T>(path, body, config));
+          : await firstValueFrom(
+              this.httpService[method]<T>(path, body, config),
+            );
       return response.data;
     } catch (error) {
       this.handleError(error, method, path);
@@ -133,7 +142,7 @@ export class AppService {
    * 5xx, network failures, timeouts → 503 (don't leak infra details).
    */
   private handleError(error: unknown, method: string, path: string): never {
-    if (error instanceof AxiosError) {
+    if (isAxiosError<DownstreamErrorBody>(error)) {
       const status = error.response?.status;
       const downstreamBody = error.response?.data;
 

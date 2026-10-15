@@ -5,24 +5,24 @@ import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
-    constructor(private reflector: Reflector) {
-        super();
+  constructor(private reflector: Reflector) {
+    super();
+  }
+
+  canActivate(context: ExecutionContext) {
+    // Skip JWT authentication for non-HTTP contexts (RabbitMQ handlers, etc.)
+    const contextType = context.getType();
+    if (contextType !== 'http') {
+      return true;
     }
 
-    canActivate(context: ExecutionContext) {
-        // Skip JWT authentication for non-HTTP contexts (RabbitMQ handlers, etc.)
-        const contextType = context.getType();
-        if (contextType !== 'http') {
-            return true;
-        }
-
-        const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
-            context.getHandler(),
-            context.getClass(),
-        ]);
-        if (isPublic) {
-            return true;
-        }
-        return super.canActivate(context);
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPublic) {
+      return true;
     }
+    return super.canActivate(context);
+  }
 }

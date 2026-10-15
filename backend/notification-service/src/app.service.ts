@@ -6,13 +6,13 @@ import {
 } from '@golevelup/nestjs-rabbitmq';
 import * as sharedTypes from '@liftoff/shared-types';
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 @Injectable()
 export class AppService {
   private readonly logger = new Logger(AppService.name);
 
-  constructor(private readonly amqpConnection: AmqpConnection) { }
+  constructor(private readonly amqpConnection: AmqpConnection) {}
 
   @RabbitSubscribe({
     exchange: 'provisioning.direct',
@@ -27,7 +27,9 @@ export class AppService {
   public async handleTenantBillingActive(
     payload: sharedTypes.TenantBillingActivePayload,
   ) {
-    this.logger.log(`Sending welcome email for tenant ${payload.tenantId} (${payload.subdomain})`);
+    this.logger.log(
+      `Sending welcome email for tenant ${payload.tenantId} (${payload.subdomain})`,
+    );
 
     try {
       await sleep(500);
@@ -43,7 +45,9 @@ export class AppService {
         },
       );
     } catch (error) {
-      this.logger.error(`Failed to send welcome email for tenant ${payload.tenantId}: ${error.message}`);
+      this.logger.error(
+        `Failed to send welcome email for tenant ${payload.tenantId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return new Nack(false);
     }
   }

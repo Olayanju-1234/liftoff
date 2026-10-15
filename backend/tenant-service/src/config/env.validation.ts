@@ -15,8 +15,12 @@ export const envValidationSchema = Joi.object({
     .default('info'),
 
   // Persistence + messaging — both required, no fallbacks.
-  DATABASE_URL: Joi.string().uri({ scheme: ['postgresql', 'postgres'] }).required(),
-  RABBITMQ_URL: Joi.string().uri({ scheme: ['amqp', 'amqps'] }).required(),
+  DATABASE_URL: Joi.string()
+    .uri({ scheme: ['postgresql', 'postgres'] })
+    .required(),
+  RABBITMQ_URL: Joi.string()
+    .uri({ scheme: ['amqp', 'amqps'] })
+    .required(),
 
   // JWT secrets — required and must be non-trivial.
   JWT_SECRET: Joi.string().min(32).required(),

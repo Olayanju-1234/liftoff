@@ -4,15 +4,15 @@ import { UpdateSettingsDto } from './dto/update-settings.dto';
 
 @Controller('settings')
 export class SettingsController {
-    constructor(private readonly settingsService: SettingsService) { }
+  constructor(private readonly settingsService: SettingsService) {}
 
-    @Get()
-    getSettings() {
-        return this.settingsService.getSettings();
-    }
+  @Get()
+  getSettings() {
+    return this.settingsService.getSettings();
+  }
 
-    @Put()
-    updateSettings(@Body() updateSettingsDto: UpdateSettingsDto) {
-        return this.settingsService.updateSettings(updateSettingsDto);
-    }
+  @Put()
+  updateSettings(@Body() updateSettingsDto: UpdateSettingsDto) {
+    return this.settingsService.updateSettings(updateSettingsDto);
+  }
 }
