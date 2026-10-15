@@ -35,7 +35,7 @@ export class SentryExceptionFilter implements ExceptionFilter {
     const request = ctx.getRequest<FastifyRequest>();
 
     // Guard against undefined request/response
-    if (!request || !response) {
+    if (request == null || response == null) {
       this.logger.error('Exception occurred but no HTTP context available');
       throw exception;
     }

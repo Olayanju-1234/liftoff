@@ -62,7 +62,6 @@ async function bootstrap() {
   logger.log(`OpenAPI docs available at /api/docs`);
 }
 bootstrap().catch((err) => {
-  // eslint-disable-next-line no-console
   console.error('Fatal startup error:', err);
   process.exit(1);
 });

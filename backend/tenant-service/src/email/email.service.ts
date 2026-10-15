@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as sgMail from '@sendgrid/mail';
+import { errorMessage } from '../common/error-message';
 
 export interface EmailOptions {
   to: string;
@@ -52,10 +53,10 @@ export class EmailService {
       await sgMail.send(message);
       this.logger.log(`Email sent successfully to ${options.to}`);
       return true;
-    } catch (error: any) {
+    } catch (error) {
       this.logger.error(
         `Failed to send email to ${options.to}:`,
-        error.message,
+        errorMessage(error),
       );
       return false;
     }

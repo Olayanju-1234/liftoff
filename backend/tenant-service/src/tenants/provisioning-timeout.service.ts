@@ -1,8 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma.service';
-import { TenantStatus, StepStatus } from '@prisma/client';
+import { TenantStatus } from '@prisma/client';
 import { TenantsService } from './tenants.service';
+import { errorMessage } from '../common/error-message';
 
 @Injectable()
 export class ProvisioningTimeoutService {
@@ -60,12 +61,14 @@ export class ProvisioningTimeoutService {
           );
         } catch (error) {
           this.logger.error(
-            `Failed to auto-cancel tenant ${tenant.id}: ${error.message}`,
+            `Failed to auto-cancel tenant ${tenant.id}: ${errorMessage(error)}`,
           );
         }
       }
     } catch (error) {
-      this.logger.error(`Error checking for stale pipelines: ${error.message}`);
+      this.logger.error(
+        `Error checking for stale pipelines: ${errorMessage(error)}`,
+      );
     }
   }
 }

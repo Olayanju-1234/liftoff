@@ -18,12 +18,12 @@ export class GithubStrategy extends PassportStrategy(Strategy, 'github') {
     });
   }
 
-  async validate(
+  validate(
     accessToken: string,
     refreshToken: string,
     profile: Profile,
     done: (err: any, user: any) => void,
-  ): Promise<any> {
+  ): void {
     const { id, username, displayName, emails, photos } = profile;
 
     const user = {

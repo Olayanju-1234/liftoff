@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
-import { StepStatus, TenantStatus } from '@prisma/client';
+import { Prisma, StepStatus, TenantStatus } from '@prisma/client';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 
 import { TenantsService } from './tenants.service';
@@ -14,10 +14,10 @@ import { PrismaService } from '../prisma.service';
 type MockPrisma = {
   plan: { findFirst: jest.Mock; create: jest.Mock };
   tenant: {
-    create: jest.Mock;
+    create: jest.Mock<Promise<unknown>, [Prisma.TenantCreateArgs]>;
     findUnique: jest.Mock;
     findMany: jest.Mock;
-    update: jest.Mock;
+    update: jest.Mock<Promise<unknown>, [Prisma.TenantUpdateArgs]>;
     delete: jest.Mock;
   };
   eventLog: { create: jest.Mock; findMany: jest.Mock };
@@ -26,10 +26,10 @@ type MockPrisma = {
 const buildPrisma = (): MockPrisma => ({
   plan: { findFirst: jest.fn(), create: jest.fn() },
   tenant: {
-    create: jest.fn(),
+    create: jest.fn<Promise<unknown>, [Prisma.TenantCreateArgs]>(),
     findUnique: jest.fn(),
     findMany: jest.fn(),
-    update: jest.fn(),
+    update: jest.fn<Promise<unknown>, [Prisma.TenantUpdateArgs]>(),
     delete: jest.fn(),
   },
   eventLog: { create: jest.fn().mockResolvedValue({}), findMany: jest.fn() },
@@ -69,11 +69,9 @@ describe('TenantsService', () => {
       const result = await service.create(baseDto);
 
       expect(prisma.plan.create).not.toHaveBeenCalled();
-      expect(prisma.tenant.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          dbStatus: StepStatus.IN_PROGRESS,
-        }),
-      });
+      expect(prisma.tenant.create).toHaveBeenCalledTimes(1);
+      const [[createArgs]] = prisma.tenant.create.mock.calls;
+      expect(createArgs.data.dbStatus).toBe(StepStatus.IN_PROGRESS);
       expect(amqp.publish).toHaveBeenCalledWith(
         'provisioning.direct',
         'tenant.requested',
@@ -108,7 +106,7 @@ describe('TenantsService', () => {
           code: 'P2002',
           clientVersion: 'test',
           meta: { target: ['subdomain'] },
-        } as any,
+        },
       );
       prisma.tenant.create.mockRejectedValueOnce(p2002);
 
@@ -146,7 +144,7 @@ describe('TenantsService', () => {
         subdomain: 's',
       });
 
-      const updateCall = prisma.tenant.update.mock.calls[0][0];
+      const [[updateCall]] = prisma.tenant.update.mock.calls;
       expect(updateCall.data.status).toBe(TenantStatus.ACTIVE);
       expect(updateCall.data.notificationStatus).toBe(StepStatus.SUCCESS);
     });
@@ -173,7 +171,7 @@ describe('TenantsService', () => {
 
       await service.cancel('t', 'user changed mind');
 
-      const update = prisma.tenant.update.mock.calls[0][0].data;
+      const [[{ data: update }]] = prisma.tenant.update.mock.calls;
       expect(update.status).toBe(TenantStatus.CANCELLED);
       // Already-SUCCESS steps stay SUCCESS, others go CANCELLED.
       expect(update.dbStatus).toBe(StepStatus.SUCCESS);

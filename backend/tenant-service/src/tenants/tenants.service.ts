@@ -6,10 +6,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
+import { errorMessage } from '../common/error-message';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
-import { StepStatus, TenantStatus } from '@prisma/client';
+import { Prisma, StepStatus, TenantStatus } from '@prisma/client';
 import type {
   ProvisioningCompletePayload,
   TenantRequestedPayload,
@@ -93,7 +94,7 @@ export class TenantsService {
     tenantId: string,
     eventType: string,
     status: string,
-    payload: any,
+    payload: object,
   ) {
     try {
       await this.prisma.eventLog.create({
@@ -101,11 +102,11 @@ export class TenantsService {
           tenantId,
           eventType,
           status,
-          payload,
+          payload: payload as Prisma.InputJsonObject,
         },
       });
     } catch (e) {
-      this.logger.error(`Failed to log event: ${e.message}`);
+      this.logger.error(`Failed to log event: ${errorMessage(e)}`);
     }
   }
 
@@ -135,7 +136,7 @@ export class TenantsService {
       );
     } catch (error) {
       this.logger.error(
-        `handleDbReady failed for tenant ${payload.tenantId}: ${error.message}`,
+        `handleDbReady failed for tenant ${payload.tenantId}: ${errorMessage(error)}`,
       );
       throw error;
     }
@@ -237,13 +238,13 @@ export class TenantsService {
       this.logger.log(`Tenant ${payload.tenantId} is now ACTIVE`);
     } catch (error) {
       this.logger.error(
-        `Failed to activate tenant ${payload.tenantId}: ${error.message}`,
+        `Failed to activate tenant ${payload.tenantId}: ${errorMessage(error)}`,
       );
       await this.logEvent(
         payload.tenantId,
         'tenant.provisioning.complete',
         'Error',
-        { error: error.message },
+        { error: errorMessage(error) },
       );
     }
   }

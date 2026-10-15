@@ -8,6 +8,7 @@ import {
   Get,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import type { User } from '@prisma/client';
 import { AuthService, TokenResponse } from './auth.service';
 import { RegisterDto, LoginDto, RefreshTokenDto } from './dto/auth.dto';
 import { Public } from './decorators/public.decorator';
@@ -59,7 +60,7 @@ export class AuthController {
   @ApiBearerAuth('bearer')
   @Get('me')
   @ApiOperation({ summary: 'Get authenticated user profile' })
-  async getProfile(@CurrentUser() user: any) {
+  getProfile(@CurrentUser() user: User) {
     return {
       id: user.id,
       email: user.email,

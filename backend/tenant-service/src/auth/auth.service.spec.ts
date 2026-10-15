@@ -2,20 +2,29 @@ import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
+import type { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma.service';
 
 type MockPrisma = {
-  user: { findUnique: jest.Mock; create: jest.Mock; update: jest.Mock };
+  user: {
+    findUnique: jest.Mock;
+    create: jest.Mock;
+    update: jest.Mock<Promise<unknown>, [Prisma.UserUpdateArgs]>;
+  };
   tenant: { findUnique: jest.Mock; create: jest.Mock };
   plan: { findFirst: jest.Mock; create: jest.Mock };
   $transaction: jest.Mock;
 };
 
 const buildPrisma = (): MockPrisma => ({
-  user: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+  user: {
+    findUnique: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn<Promise<unknown>, [Prisma.UserUpdateArgs]>(),
+  },
   tenant: { findUnique: jest.fn(), create: jest.fn() },
   plan: { findFirst: jest.fn(), create: jest.fn() },
   $transaction: jest.fn(),
@@ -67,23 +76,24 @@ describe('AuthService', () => {
       prisma.user.findUnique.mockResolvedValueOnce(null);
       prisma.tenant.findUnique.mockResolvedValueOnce(null);
       prisma.plan.findFirst.mockResolvedValueOnce({ id: 'plan-1' });
-      prisma.$transaction.mockImplementationOnce(async (fn: any) =>
-        fn({
-          tenant: {
-            create: jest
-              .fn()
-              .mockResolvedValueOnce({ id: 'tenant-1', subdomain: 'acme' }),
-          },
-          user: {
-            create: jest.fn().mockResolvedValueOnce({
-              id: 'user-1',
-              email: validRegisterDto.email,
-              name: validRegisterDto.name,
-              role: 'ADMIN',
-              tenantId: 'tenant-1',
-            }),
-          },
-        }),
+      prisma.$transaction.mockImplementationOnce(
+        (fn: (tx: unknown) => Promise<unknown>) =>
+          fn({
+            tenant: {
+              create: jest
+                .fn()
+                .mockResolvedValueOnce({ id: 'tenant-1', subdomain: 'acme' }),
+            },
+            user: {
+              create: jest.fn().mockResolvedValueOnce({
+                id: 'user-1',
+                email: validRegisterDto.email,
+                name: validRegisterDto.name,
+                role: 'ADMIN',
+                tenantId: 'tenant-1',
+              }),
+            },
+          }),
       );
       prisma.user.update.mockResolvedValueOnce({});
 
@@ -98,17 +108,12 @@ describe('AuthService', () => {
       expect(result.accessToken).toBe('signed.jwt.token');
       expect(result.refreshToken).toBe('signed.jwt.token');
       expect(jwt.signAsync).toHaveBeenCalledTimes(2);
-      expect(prisma.user.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 'user-1' },
-          data: expect.objectContaining({
-            refreshToken: expect.any(String),
-          }),
-        }),
-      );
+      expect(prisma.user.update).toHaveBeenCalledTimes(1);
+      const [[updateArgs]] = prisma.user.update.mock.calls;
+      expect(updateArgs.where).toEqual({ id: 'user-1' });
       // Refresh token must be stored hashed, never in plaintext.
-      const storedRefreshToken =
-        prisma.user.update.mock.calls[0][0].data.refreshToken;
+      const storedRefreshToken = updateArgs.data.refreshToken;
+      expect(typeof storedRefreshToken).toBe('string');
       expect(storedRefreshToken).not.toEqual('signed.jwt.token');
     });
 
