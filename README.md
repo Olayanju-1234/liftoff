@@ -411,11 +411,22 @@ focus on:
   is removed, so consumers can still read tenant context)
 - Prisma error translation (`P2002` → `ConflictException`)
 
+The API gateway's specs cover the proxy layer: method, path and body per
+route, verbatim forwarding of the caller's bearer token, and error mapping
+(downstream 4xx passed through, 5xx and network failures surfaced as 503).
+Its e2e suite boots the real module on Fastify with tenant-service stubbed.
+The notification worker's spec pins its RabbitMQ contract: the queue it
+binds, the event it publishes, and dead-lettering on failure.
+
 ```bash
-cd backend/tenant-service && npm test
-# Test Suites: 2 passed, 2 total
-# Tests:       23 passed, 23 total
+npm run lint --workspace=tenant-service --workspace=api-gateway --workspace=notification-service
+npm test --workspace=tenant-service --workspace=api-gateway --workspace=notification-service
+npm run test:e2e --workspace=api-gateway
+# tenant-service 25 · api-gateway 11 (+4 e2e) · notification-service 3
 ```
+
+tenant-service generates its Prisma client before `build`, `lint` and `test`,
+so none of these need a database or a `.env` file.
 
 ---
 
