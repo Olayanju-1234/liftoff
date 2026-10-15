@@ -5,8 +5,7 @@ import {
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
-import { Prisma, StepStatus, TenantStatus } from '@prisma/client';
-import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { Prisma, StepStatus, TenantStatus } from '.prisma/tenant-client';
 
 import { TenantsService } from './tenants.service';
 import { PrismaService } from '../prisma.service';
@@ -100,7 +99,7 @@ describe('TenantsService', () => {
 
     it('translates Prisma P2002 unique violation into ConflictException', async () => {
       prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
-      const p2002 = new PrismaClientKnownRequestError(
+      const p2002 = new Prisma.PrismaClientKnownRequestError(
         'Unique constraint failed',
         {
           code: 'P2002',

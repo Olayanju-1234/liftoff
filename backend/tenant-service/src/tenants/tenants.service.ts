@@ -9,8 +9,7 @@ import { PrismaService } from '../prisma.service';
 import { errorMessage } from '../common/error-message';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
-import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
-import { Prisma, StepStatus, TenantStatus } from '@prisma/client';
+import { Prisma, StepStatus, TenantStatus } from '.prisma/tenant-client';
 import type {
   ProvisioningCompletePayload,
   TenantRequestedPayload,
@@ -78,7 +77,7 @@ export class TenantsService {
       return tenant;
     } catch (error) {
       if (
-        error instanceof PrismaClientKnownRequestError &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
         const target = (error.meta?.target as string[])?.[0];

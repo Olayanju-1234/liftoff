@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma.service';
-import { TenantStatus } from '@prisma/client';
+import { TenantStatus } from '.prisma/tenant-client';
 import { TenantsService } from './tenants.service';
 import { errorMessage } from '../common/error-message';
 

@@ -6,7 +6,7 @@ import {
 import type { TenantDnsReadyPayload } from '@liftoff/shared-types';
 import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '.prisma/credentials-client';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 
 import { AppService } from './app.service';

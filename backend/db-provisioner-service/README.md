@@ -6,7 +6,7 @@ Purpose
 
 Type: Headless Worker
 
-Database: Connects to the main PostgreSQL database to run CREATE SCHEMA commands.
+Database: Connects to the main PostgreSQL database to run CREATE SCHEMA commands. It owns no tables, so its container never runs prisma db push.
 
 Workflow
 

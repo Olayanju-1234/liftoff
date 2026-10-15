@@ -1,5 +1,8 @@
+// Per-service output: the default (hoisted node_modules/.prisma/client) is shared by
+// every workspace, so the last service to run `prisma generate` overwrote the others.
 generator client {
   provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/tenant-client"
 }
 
 datasource db {
@@ -105,17 +108,6 @@ model Settings {
   
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
-}
-
-// --- Credentials Service Schema ---
-
-model Credential {
-  id        String   @id @default(cuid())
-  tenantId  String   @unique // Foreign key to the tenant
-  apiKey    String   @unique
-  
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
 // --- Enums ---

@@ -6,7 +6,7 @@ Purpose
 
 Type: Headless Worker
 
-Database: Owns the Credential table in the PostgreSQL database.
+Database: Owns the Credential table in the credentials schema of the PostgreSQL database it shares with tenant-service.
 
 Workflow
 
