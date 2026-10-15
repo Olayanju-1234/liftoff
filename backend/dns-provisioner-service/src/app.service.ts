@@ -6,13 +6,13 @@ import {
 } from '@golevelup/nestjs-rabbitmq';
 import * as sharedTypes from '@liftoff/shared-types';
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 @Injectable()
 export class AppService {
   private readonly logger = new Logger(AppService.name);
 
-  constructor(private readonly amqpConnection: AmqpConnection) { }
+  constructor(private readonly amqpConnection: AmqpConnection) {}
 
   @RabbitSubscribe({
     exchange: 'provisioning.direct',
@@ -42,7 +42,9 @@ export class AppService {
         },
       );
     } catch (error) {
-      this.logger.error(`Failed to create DNS record for ${payload.subdomain}: ${error.message}`);
+      this.logger.error(
+        `Failed to create DNS record for ${payload.subdomain}: ${error.message}`,
+      );
       return new Nack(false);
     }
   }

@@ -16,7 +16,7 @@ export class AppService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly amqpConnection: AmqpConnection,
-  ) { }
+  ) {}
 
   @RabbitSubscribe({
     exchange: 'provisioning.direct',

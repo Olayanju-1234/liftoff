@@ -1,11 +1,11 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger } from '@nestjs/common';
 import {
   RabbitSubscribe,
   AmqpConnection,
   Nack,
-} from "@golevelup/nestjs-rabbitmq";
-import Stripe from "stripe";
-import * as sharedTypes from "@liftoff/shared-types";
+} from '@golevelup/nestjs-rabbitmq';
+import Stripe from 'stripe';
+import * as sharedTypes from '@liftoff/shared-types';
 
 @Injectable()
 export class AppService {
@@ -15,37 +15,37 @@ export class AppService {
 
   constructor(private readonly amqpConnection: AmqpConnection) {
     if (!process.env.STRIPE_SECRET_KEY) {
-      throw new Error("STRIPE_SECRET_KEY environment variable is required");
+      throw new Error('STRIPE_SECRET_KEY environment variable is required');
     }
 
     this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-      apiVersion: "2025-02-24.acacia",
+      apiVersion: '2025-02-24.acacia',
     });
 
     const map: Record<string, string> = {
-      starter: process.env.STRIPE_PRICE_STARTER ?? "",
-      pro: process.env.STRIPE_PRICE_PRO ?? "",
-      enterprise: process.env.STRIPE_PRICE_ENTERPRISE ?? "",
+      starter: process.env.STRIPE_PRICE_STARTER ?? '',
+      pro: process.env.STRIPE_PRICE_PRO ?? '',
+      enterprise: process.env.STRIPE_PRICE_ENTERPRISE ?? '',
     };
     const missing = Object.entries(map)
       .filter(([, v]) => !v)
       .map(([k]) => `STRIPE_PRICE_${k.toUpperCase()}`);
     if (missing.length > 0) {
       throw new Error(
-        `Missing Stripe Price ID env vars: ${missing.join(", ")}`,
+        `Missing Stripe Price ID env vars: ${missing.join(', ')}`,
       );
     }
     this.planPriceMap = map;
   }
 
   @RabbitSubscribe({
-    exchange: "provisioning.direct",
-    routingKey: "tenant.credentials.ready",
-    queue: "billing-queue",
+    exchange: 'provisioning.direct',
+    routingKey: 'tenant.credentials.ready',
+    queue: 'billing-queue',
     queueOptions: {
       durable: true,
-      deadLetterExchange: "dlx.provisioning",
-      deadLetterRoutingKey: "billing.failed",
+      deadLetterExchange: 'dlx.provisioning',
+      deadLetterRoutingKey: 'billing.failed',
     },
   })
   public async handleTenantCredentialsReady(
@@ -87,9 +87,9 @@ export class AppService {
           planId: payload.planId,
         },
         payment_settings: {
-          save_default_payment_method: "on_subscription",
+          save_default_payment_method: 'on_subscription',
         },
-        expand: ["latest_invoice.payment_intent"],
+        expand: ['latest_invoice.payment_intent'],
       });
 
       this.logger.log(
@@ -97,8 +97,8 @@ export class AppService {
       );
 
       await this.amqpConnection.publish(
-        "provisioning.direct",
-        "tenant.billing.active",
+        'provisioning.direct',
+        'tenant.billing.active',
         {
           tenantId: payload.tenantId,
           subdomain: payload.subdomain,

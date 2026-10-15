@@ -5,7 +5,10 @@ import {
   Nack,
 } from '@golevelup/nestjs-rabbitmq';
 import { PrismaService } from './prisma.service';
-import type { TenantRequestedPayload, TenantDbReadyPayload } from '@liftoff/shared-types';
+import type {
+  TenantRequestedPayload,
+  TenantDbReadyPayload,
+} from '@liftoff/shared-types';
 
 @Injectable()
 export class AppService {
@@ -14,7 +17,7 @@ export class AppService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly amqpConnection: AmqpConnection,
-  ) { }
+  ) {}
 
   @RabbitSubscribe({
     exchange: 'provisioning.direct',
@@ -39,10 +42,7 @@ export class AppService {
         `CREATE SCHEMA IF NOT EXISTS "${schemaName}";`,
       );
 
-      this.logger.log(
-        { schemaName },
-        `SUCCESS: Created schema ${schemaName}`,
-      );
+      this.logger.log({ schemaName }, `SUCCESS: Created schema ${schemaName}`);
 
       await this.amqpConnection.publish(
         'provisioning.direct',
