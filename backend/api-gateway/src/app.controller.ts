@@ -5,7 +5,6 @@ import {
   Get,
   Headers,
   Param,
-  ParseUUIDPipe,
   Post,
   Put,
 } from '@nestjs/common';
@@ -25,6 +24,7 @@ import {
   UpdateSettingsDto,
 } from '@liftoff/shared-types';
 import { AppService } from './app.service';
+import { ParseCuidPipe } from './common/parse-cuid.pipe';
 
 @Controller()
 export class AppController {
@@ -132,7 +132,7 @@ export class AppController {
   @ApiResponse({ status: 404, description: 'Tenant not found' })
   @Get('tenants/:id')
   getTenant(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id', ParseCuidPipe) id: string,
     @Headers('authorization') auth: string,
   ) {
     return this.appService.getTenant(id, auth);
@@ -143,7 +143,7 @@ export class AppController {
   @ApiOperation({ summary: 'Event log for a single tenant' })
   @Get('tenants/:id/events')
   getTenantEvents(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id', ParseCuidPipe) id: string,
     @Headers('authorization') auth: string,
   ) {
     return this.appService.getTenantEvents(id, auth);
@@ -156,7 +156,7 @@ export class AppController {
   })
   @Delete('tenants/:id')
   deleteTenant(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id', ParseCuidPipe) id: string,
     @Headers('authorization') auth: string,
   ) {
     return this.appService.deleteTenant(id, auth);
@@ -172,7 +172,7 @@ export class AppController {
   @ApiResponse({ status: 404, description: 'Tenant not found' })
   @Post('tenants/:id/cancel')
   cancelTenant(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id', ParseCuidPipe) id: string,
     @Body() dto: CancelTenantDto,
     @Headers('authorization') auth: string,
   ) {
