@@ -8,4 +8,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  // No models: this client only runs raw CREATE SCHEMA. The unused schema keeps a stray
+  // `prisma db push` here from diffing public and dropping tenant-service's tables.
+  schemas  = ["db_provisioner"]
 }
