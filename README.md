@@ -8,7 +8,7 @@ A production-grade microservices platform that automates the full lifecycle of t
 
 **At a glance:** 7 NestJS services · RabbitMQ choreography saga with a dead-letter exchange · schema-per-tenant PostgreSQL · Stripe customers and subscriptions with 14-day trials · stuck-pipeline sweeper · ADRs for the outbox pattern and Render vs AWS
 
-<!-- Screenshot: add a capture of the provisioning pipeline view (docs/assets/dashboard.png) here. -->
+![Provisioning control: the RabbitMQ saga drawn as a live wiring diagram, with a tenant in flight at DNS and one stalled at billing](docs/assets/dashboard.png)
 
 ## Table of Contents
 
