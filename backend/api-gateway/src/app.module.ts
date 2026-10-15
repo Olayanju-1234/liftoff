@@ -60,7 +60,7 @@ const getEnvPath = (): string => {
     }),
     HttpModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
+      useFactory: (configService: ConfigService) => ({
         timeout: 60000,
         baseURL:
           configService.get<string>('TENANT_SERVICE_URL') ||
