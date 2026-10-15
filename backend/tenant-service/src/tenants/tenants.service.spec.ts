@@ -9,7 +9,11 @@ import { Prisma, StepStatus, TenantStatus } from '.prisma/tenant-client';
 
 import { TenantsService } from './tenants.service';
 import { PrismaService } from '../prisma.service';
-import { DEAD_LETTER_QUEUE, type DeadLetterMessage } from './dead-letters';
+import {
+  DEAD_LETTER_QUEUE,
+  type DeadLetterMessage,
+  type ProvisioningStep,
+} from './dead-letters';
 
 type MockPrisma = {
   plan: { findFirst: jest.Mock; create: jest.Mock };
@@ -155,8 +159,9 @@ describe('TenantsService', () => {
   });
 
   describe('saga handlers', () => {
-    it('handleDbReady advances state from db→dns', async () => {
+    it('handleDbReady completes db and starts dns only while dns is PENDING', async () => {
       prisma.tenant.update.mockResolvedValueOnce({});
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
 
       await service.handleDbReady({
         tenantId: 't',
@@ -166,10 +171,11 @@ describe('TenantsService', () => {
 
       expect(prisma.tenant.update).toHaveBeenCalledWith({
         where: { id: 't' },
-        data: {
-          dbStatus: StepStatus.SUCCESS,
-          dnsStatus: StepStatus.IN_PROGRESS,
-        },
+        data: { dbStatus: StepStatus.SUCCESS },
+      });
+      expect(prisma.tenant.updateMany).toHaveBeenCalledWith({
+        where: { id: 't', dnsStatus: StepStatus.PENDING },
+        data: { dnsStatus: StepStatus.IN_PROGRESS },
       });
     });
 
@@ -184,6 +190,133 @@ describe('TenantsService', () => {
       const [[updateCall]] = prisma.tenant.update.mock.calls;
       expect(updateCall.data.status).toBe(TenantStatus.ACTIVE);
       expect(updateCall.data.notificationStatus).toBe(StepStatus.SUCCESS);
+    });
+  });
+
+  describe('out-of-order events', () => {
+    type TenantRow = Record<ProvisioningStep | 'id' | 'status', string>;
+    let row: TenantRow;
+
+    const saga = { tenantId: 't', subdomain: 's', planId: 'starter' };
+    const deliver = {
+      dbReady: () => service.handleDbReady(saga),
+      dnsReady: () => service.handleDnsReady(saga),
+      credentialsReady: () => service.handleCredentialsReady(saga),
+      billingActive: () =>
+        service.handleBillingActive({
+          ...saga,
+          stripeCustomerId: 'cus_sim',
+          stripeSubscriptionId: 'sub_sim',
+          subscriptionStatus: 'trialing',
+          trialEnd: null,
+        }),
+      complete: () =>
+        service.handleProvisioningComplete({ tenantId: 't', subdomain: 's' }),
+      billingFailed: () =>
+        service.handleDeadLetter(saga, {
+          fields: { routingKey: 'billing.failed' },
+          properties: {},
+        }),
+    };
+
+    const everyStepSucceeded = {
+      status: TenantStatus.ACTIVE,
+      dbStatus: StepStatus.SUCCESS,
+      dnsStatus: StepStatus.SUCCESS,
+      credentialsStatus: StepStatus.SUCCESS,
+      billingStatus: StepStatus.SUCCESS,
+      notificationStatus: StepStatus.SUCCESS,
+    };
+
+    // A where value is either the expected value or an { in: [...] } filter.
+    const matches = (where: object) =>
+      Object.entries(where).every(([field, condition]) =>
+        ((condition as { in?: unknown[] }).in ?? [condition]).includes(
+          row[field as keyof TenantRow],
+        ),
+      );
+
+    beforeEach(() => {
+      row = {
+        id: 't',
+        status: TenantStatus.PROVISIONING,
+        dbStatus: StepStatus.IN_PROGRESS,
+        dnsStatus: StepStatus.PENDING,
+        credentialsStatus: StepStatus.PENDING,
+        billingStatus: StepStatus.PENDING,
+        notificationStatus: StepStatus.PENDING,
+      };
+      prisma.tenant.update.mockImplementation(({ data }) => {
+        Object.assign(row, data);
+        return Promise.resolve(row);
+      });
+      prisma.tenant.updateMany.mockImplementation(({ where = {}, data }) => {
+        if (!matches(where)) {
+          return Promise.resolve({ count: 0 });
+        }
+        Object.assign(row, data);
+        return Promise.resolve({ count: 1 });
+      });
+    });
+
+    it('keeps billing SUCCESS when billing.active is handled before credentials.ready', async () => {
+      await deliver.dbReady();
+      await deliver.dnsReady();
+      // Simulated billing consumed credentials.ready and finished first.
+      await deliver.billingActive();
+      await deliver.complete();
+      await deliver.credentialsReady();
+
+      expect(row).toMatchObject(everyStepSucceeded);
+    });
+
+    it('keeps dns SUCCESS when dns.ready is handled before db.ready', async () => {
+      await deliver.dnsReady();
+      await deliver.dbReady();
+      await deliver.credentialsReady();
+      await deliver.billingActive();
+      await deliver.complete();
+
+      expect(row).toMatchObject(everyStepSucceeded);
+    });
+
+    it('ends with every step SUCCESS when the whole saga is handled in reverse', async () => {
+      await deliver.complete();
+      await deliver.billingActive();
+      await deliver.credentialsReady();
+      await deliver.dnsReady();
+      await deliver.dbReady();
+
+      expect(row).toMatchObject(everyStepSucceeded);
+    });
+
+    it('does not restart a step that dead-lettered before its start was recorded', async () => {
+      await deliver.dbReady();
+      await deliver.dnsReady();
+      await deliver.billingFailed();
+      await deliver.credentialsReady();
+
+      expect(row).toMatchObject({
+        status: TenantStatus.FAILED,
+        credentialsStatus: StepStatus.SUCCESS,
+        billingStatus: StepStatus.FAILED,
+        notificationStatus: StepStatus.PENDING,
+      });
+    });
+
+    it('lets a replayed step that failed succeed and finish the saga', async () => {
+      await deliver.dbReady();
+      await deliver.dnsReady();
+      await deliver.credentialsReady();
+      await deliver.billingFailed();
+      // Replaying credentials.ready reaches tenant-service as well as billing.
+      await deliver.credentialsReady();
+      expect(row.billingStatus).toBe(StepStatus.FAILED);
+
+      await deliver.billingActive();
+      await deliver.complete();
+
+      expect(row).toMatchObject(everyStepSucceeded);
     });
   });
 
