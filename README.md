@@ -344,8 +344,11 @@ migration steps are written up in
 **Billing Service:**
 - `STRIPE_SECRET_KEY`, `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_ENTERPRISE`
 
+**Tenant Service (optional email):**
+- `SENDGRID_API_KEY`, `EMAIL_FROM` (emails are only logged when the API key is unset)
+
 **Notification Service:**
-- `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL`
+- No extra variables; its welcome-email step is a mock
 
 ---
 

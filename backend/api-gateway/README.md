@@ -12,17 +12,15 @@ Primary Job: To authenticate incoming requests and proxy them to the correct int
 
 Authentication
 
-This service is protected by an AuthGuard.
+Protected routes expect a JWT access token as a Bearer token in the Authorization header.
 
-It expects a Bearer token in the Authorization header.
-
-The valid token is stored in this service's .env file (API_KEY).
+The gateway forwards that header to the tenant-service, which verifies the token (signed with JWT_SECRET). The gateway itself holds no auth secrets.
 
 Workflow
 
 Receives POST /tenants from the end-user.
 
-Authenticates the request.
+Forwards the Authorization header for the tenant-service to verify.
 
 Makes a synchronous POST request to the tenant-service (on port 3001).
 
