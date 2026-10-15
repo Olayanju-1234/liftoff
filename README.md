@@ -2,6 +2,12 @@
 
 A production-grade microservices platform that automates the full lifecycle of tenant provisioning through an event-driven pipeline. Built to demonstrate distributed systems design, Stripe billing integration, and choreography-based saga patterns.
 
+**[Live dashboard](https://liftoff-frontend-psi.vercel.app)** · frontend on Vercel, seven services on Render's free tier (the first request after idle can take up to a minute)
+
+**At a glance:** 7 NestJS services · RabbitMQ choreography saga with a dead-letter exchange · schema-per-tenant PostgreSQL · Stripe customers and subscriptions with 14-day trials · stuck-pipeline sweeper · ADRs for the outbox pattern and Render vs AWS
+
+<!-- Screenshot: add a capture of the provisioning pipeline view (docs/assets/dashboard.png) here. -->
+
 ## Table of Contents
 
 - [System Architecture](#system-architecture)
