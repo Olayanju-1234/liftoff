@@ -1,33 +1,43 @@
 /** @type {import('tailwindcss').Config} */
+const channel = (name) => `rgb(var(--${name}) / <alpha-value>)`;
+
 export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
+  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
       colors: {
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
-        card: "hsl(var(--card))",
-        "card-foreground": "hsl(var(--card-foreground))",
-        popover: "hsl(var(--popover))",
-        "popover-foreground": "hsl(var(--popover-foreground))",
-        primary: "hsl(var(--primary))",
-        "primary-foreground": "hsl(var(--primary-foreground))",
-        secondary: "hsl(var(--secondary))",
-        "secondary-foreground": "hsl(var(--secondary-foreground))",
-        muted: "hsl(var(--muted))",
-        "muted-foreground": "hsl(var(--muted-foreground))",
-        accent: "hsl(var(--accent))",
-        "accent-foreground": "hsl(var(--accent-foreground))",
-        destructive: "hsl(var(--destructive))",
-        "destructive-foreground": "hsl(var(--destructive-foreground))",
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
+        paper: { DEFAULT: channel('paper'), deep: channel('paper-deep') },
+        card: channel('card'),
+        rule: { DEFAULT: channel('rule'), strong: channel('rule-strong') },
+        ink: {
+          DEFAULT: channel('ink'),
+          2: channel('ink-2'),
+          3: channel('ink-3'),
+          4: channel('ink-4'),
+        },
+        blueprint: channel('blueprint'),
+        ignite: channel('ignite'),
+        go: channel('go'),
+        abort: channel('abort'),
+        hold: channel('hold'),
+        scrub: channel('scrub'),
+      },
+      fontFamily: {
+        sans: ['Barlow', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        cond: ['"Barlow Condensed"', 'Barlow', 'ui-sans-serif', 'sans-serif'],
+        mono: ['"IBM Plex Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        mark: ['Michroma', '"Barlow Condensed"', 'sans-serif'],
+      },
+      borderRadius: {
+        DEFAULT: '3px',
+        sm: '2px',
+        md: '4px',
+      },
+      boxShadow: {
+        sheet: '0 1px 0 rgb(var(--ink) / 0.04), 0 10px 24px -18px rgb(var(--ink) / 0.35)',
+        lift: '0 1px 0 rgb(var(--ink) / 0.05), 0 24px 48px -24px rgb(var(--ink) / 0.45)',
       },
     },
   },
   plugins: [],
-}
+};

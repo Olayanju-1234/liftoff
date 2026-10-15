@@ -1,55 +1,51 @@
+import { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './lib/auth';
 import ProtectedRoute from './components/ProtectedRoute';
-import Layout from './components/Layout';
 import Toaster from './components/Toaster';
-import Login from './pages/Login';
-import Register from './pages/Register';
-import Dashboard from './pages/Dashboard';
-import TenantManagement from './pages/TenantManagement';
-import EventLogs from './pages/EventLogs';
-import Pipeline from './pages/Pipeline';
-import Health from './pages/Health';
-import FailedJobs from './pages/FailedJobs';
-import Settings from './pages/Settings';
-import Support from './pages/Support';
-import NotFound from './pages/NotFound';
+import Landing from './pages/Landing';
+
+const Login = lazy(() => import('./pages/Login'));
+const Register = lazy(() => import('./pages/Register'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const TenantManagement = lazy(() => import('./pages/TenantManagement'));
+const TenantDetail = lazy(() => import('./pages/TenantDetail'));
+const EventLogs = lazy(() => import('./pages/EventLogs'));
+const Pipeline = lazy(() => import('./pages/Pipeline'));
+const Health = lazy(() => import('./pages/Health'));
+const FailedJobs = lazy(() => import('./pages/FailedJobs'));
+const Settings = lazy(() => import('./pages/Settings'));
+const Support = lazy(() => import('./pages/Support'));
+const NotFound = lazy(() => import('./pages/NotFound'));
 
 function App() {
-  return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Toaster />
-        <Routes>
-          {/* Public routes */}
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
+    return (
+        <AuthProvider>
+            <BrowserRouter>
+                <Toaster />
+                <Suspense fallback={<div className="drafting min-h-screen" />}>
+                    <Routes>
+                        <Route path="/login" element={<Login />} />
+                        <Route path="/register" element={<Register />} />
+                        <Route path="/about" element={<Landing />} />
 
-          {/* Protected routes */}
-          <Route
-            path="/*"
-            element={
-              <ProtectedRoute>
-                <Layout>
-                  <Routes>
-                    <Route path="/" element={<Dashboard />} />
-                    <Route path="/tenants" element={<TenantManagement />} />
-                    <Route path="/events" element={<EventLogs />} />
-                    <Route path="/pipeline" element={<Pipeline />} />
-                    <Route path="/health" element={<Health />} />
-                    <Route path="/failed-jobs" element={<FailedJobs />} />
-                    <Route path="/settings" element={<Settings />} />
-                    <Route path="/support" element={<Support />} />
-                    <Route path="*" element={<NotFound />} />
-                  </Routes>
-                </Layout>
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
-  );
+                        <Route path="/" element={<ProtectedRoute />}>
+                            <Route index element={<Dashboard />} />
+                            <Route path="tenants" element={<TenantManagement />} />
+                            <Route path="tenants/:id" element={<TenantDetail />} />
+                            <Route path="events" element={<EventLogs />} />
+                            <Route path="pipeline" element={<Pipeline />} />
+                            <Route path="health" element={<Health />} />
+                            <Route path="failed-jobs" element={<FailedJobs />} />
+                            <Route path="settings" element={<Settings />} />
+                            <Route path="support" element={<Support />} />
+                            <Route path="*" element={<NotFound />} />
+                        </Route>
+                    </Routes>
+                </Suspense>
+            </BrowserRouter>
+        </AuthProvider>
+    );
 }
 
 export default App;

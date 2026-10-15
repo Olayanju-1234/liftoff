@@ -1,344 +1,263 @@
-import { useEffect, useState, useMemo } from 'react';
-import { getTenants, deleteTenant as apiDeleteTenant, getTenantEvents } from '../lib/api';
-import type { Tenant, EventLog } from '../lib/types';
-import { Plus, Search, Filter, Calendar, MoreHorizontal, Eye, Trash2, X } from 'lucide-react';
-import { format } from 'date-fns';
+import { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Ban, ChevronRight, Plus, Search, Trash2, X } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { getTenants } from '../lib/api';
+import { useNow, useResource } from '../lib/hooks';
+import { useTenantActions } from '../lib/useTenantActions';
+import { STAGES, condition, planLabel } from '../lib/pipeline';
+import type { Condition } from '../lib/pipeline';
+import { fmtAgo, fmtStamp } from '../lib/time';
+import { inputClass } from '../lib/ui';
+import type { Tenant } from '../lib/types';
+import PageHeader from '../components/ui/PageHeader';
+import Panel from '../components/ui/Panel';
+import Button from '../components/ui/Button';
+import Empty from '../components/ui/Empty';
+import { Segmented } from '../components/ui/Field';
+import { ConditionTag } from '../components/ui/Tag';
+import SequenceTrack from '../components/pipeline/SequenceTrack';
 import CreateTenantModal from '../components/CreateTenantModal';
-import TenantDetailModal from '../components/TenantDetailModal';
-import ConfirmDialog from '../components/ConfirmDialog';
+import LoadError from '../components/LoadError';
+import { cn } from '../lib/cn';
+
+type Filter = 'all' | 'active' | 'inflight' | 'stalled' | 'failed' | 'cancelled';
+
+const FILTER_MATCH: Record<Filter, Condition[]> = {
+    all: [],
+    active: ['active'],
+    inflight: ['running', 'waiting'],
+    stalled: ['stalled'],
+    failed: ['failed'],
+    cancelled: ['cancelled', 'suspended'],
+};
+
+const TRACK_X = (i: number) => 10 + i * 24;
 
 export default function TenantManagement() {
-    const [tenants, setTenants] = useState<Tenant[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+    const navigate = useNavigate();
+    const now = useNow();
+    const [createOpen, setCreateOpen] = useState(false);
+    const [query, setQuery] = useState('');
+    const [filter, setFilter] = useState<Filter>('all');
+    const [plan, setPlan] = useState('all');
+    const tenants = useResource(getTenants, { interval: 10_000 });
+    const actions = useTenantActions({ onCancelled: tenants.refresh, onDeleted: tenants.refresh });
 
-    // Filters
-    const [searchQuery, setSearchQuery] = useState('');
-    const [statusFilter, setStatusFilter] = useState<string>('all');
-    const [planFilter, setPlanFilter] = useState<string>('all');
-    const [showStatusDropdown, setShowStatusDropdown] = useState(false);
-    const [showPlanDropdown, setShowPlanDropdown] = useState(false);
+    const list = useMemo(() => tenants.data ?? [], [tenants.data]);
+    const plans = useMemo(() => Array.from(new Set(list.map((t) => t.planId))).sort(), [list]);
+    const withCond = list.map((t) => ({ t, c: condition(t, now) }));
 
-    // Detail modal
-    const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
-    const [tenantEvents, setTenantEvents] = useState<EventLog[]>([]);
-    const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+    const counts = Object.fromEntries(
+        (Object.keys(FILTER_MATCH) as Filter[]).map((f) => [
+            f,
+            f === 'all' ? list.length : withCond.filter((x) => FILTER_MATCH[f].includes(x.c)).length,
+        ]),
+    ) as Record<Filter, number>;
 
-    // Delete confirmation
-    const [tenantToDelete, setTenantToDelete] = useState<Tenant | null>(null);
-    const [isDeleting, setIsDeleting] = useState(false);
-
-    // Actions dropdown
-    const [openActionsId, setOpenActionsId] = useState<string | null>(null);
-
-    useEffect(() => {
-        fetchTenants();
-    }, []);
-
-    const fetchTenants = async () => {
-        try {
-            const data = await getTenants();
-            setTenants(data);
-        } catch (error) {
-            console.error('Failed to fetch tenants', error);
-            toast.error('Failed to load tenants');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleViewTenant = async (tenant: Tenant) => {
-        setSelectedTenant(tenant);
-        try {
-            const events = await getTenantEvents(tenant.id);
-            setTenantEvents(events);
-        } catch {
-            setTenantEvents([]);
-        }
-        setIsDetailModalOpen(true);
-        setOpenActionsId(null);
-    };
-
-    const handleDeleteClick = (tenant: Tenant) => {
-        setTenantToDelete(tenant);
-        setOpenActionsId(null);
-    };
-
-    const handleConfirmDelete = async () => {
-        if (!tenantToDelete) return;
-
-        setIsDeleting(true);
-        try {
-            await apiDeleteTenant(tenantToDelete.id);
-            toast.success(`Tenant "${tenantToDelete.name}" deleted successfully`);
-            setTenants(prev => prev.filter(t => t.id !== tenantToDelete.id));
-            setTenantToDelete(null);
-        } catch (error) {
-            console.error('Failed to delete tenant', error);
-            toast.error('Failed to delete tenant');
-        } finally {
-            setIsDeleting(false);
-        }
-    };
-
-    // Get unique plans for filter
-    const uniquePlans = useMemo(() => {
-        const plans = new Set(tenants.map(t => t.planId));
-        return Array.from(plans);
-    }, [tenants]);
-
-    // Filtered tenants
-    const filteredTenants = useMemo(() => {
-        return tenants.filter(tenant => {
-            const matchesSearch = searchQuery === '' ||
-                tenant.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                tenant.subdomain.toLowerCase().includes(searchQuery.toLowerCase());
-
-            const matchesStatus = statusFilter === 'all' || tenant.status === statusFilter;
-            const matchesPlan = planFilter === 'all' || tenant.planId === planFilter;
-
-            return matchesSearch && matchesStatus && matchesPlan;
-        });
-    }, [tenants, searchQuery, statusFilter, planFilter]);
-
-    const getStatusBadge = (status: string) => {
-        const colors: Record<string, string> = {
-            ACTIVE: 'bg-green-500/10 text-green-500',
-            PROVISIONING: 'bg-yellow-500/10 text-yellow-500',
-            FAILED: 'bg-red-500/10 text-red-500',
-            SUSPENDED: 'bg-gray-500/10 text-gray-500',
-        };
-        const dotColors: Record<string, string> = {
-            ACTIVE: 'bg-green-500',
-            PROVISIONING: 'bg-yellow-500',
-            FAILED: 'bg-red-500',
-            SUSPENDED: 'bg-gray-500',
-        };
-
-        return (
-            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${colors[status] || colors.SUSPENDED}`}>
-                <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${dotColors[status] || dotColors.SUSPENDED}`} />
-                {status.toLowerCase()}
-            </span>
-        );
-    };
+    const q = query.trim().toLowerCase();
+    const rows = withCond.filter(({ t, c }) => {
+        if (filter !== 'all' && !FILTER_MATCH[filter].includes(c)) return false;
+        if (plan !== 'all' && t.planId !== plan) return false;
+        if (q && !t.name.toLowerCase().includes(q) && !t.subdomain.toLowerCase().includes(q) && !t.id.includes(q)) return false;
+        return true;
+    });
 
     return (
-        <div className="space-y-6">
+        <>
+            {actions.dialog}
             <CreateTenantModal
-                isOpen={isCreateModalOpen}
-                onClose={() => setIsCreateModalOpen(false)}
-                onSuccess={() => {
-                    fetchTenants();
-                    toast.success('Tenant created successfully!');
+                isOpen={createOpen}
+                onClose={() => setCreateOpen(false)}
+                onCreated={(t) => {
+                    setCreateOpen(false);
+                    toast.success(`${t.name} is provisioning`);
+                    navigate(`/tenants/${t.id}`);
                 }}
             />
 
-            <TenantDetailModal
-                isOpen={isDetailModalOpen}
-                tenant={selectedTenant}
-                events={tenantEvents}
-                onClose={() => {
-                    setIsDetailModalOpen(false);
-                    setSelectedTenant(null);
-                }}
+            <PageHeader
+                sheet="02"
+                eyebrow="Tenants"
+                title="Tenants"
+                lede="Every tenant on the platform and how far through the sequence it got."
+                actions={
+                    <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                        <Plus size={15} /> New tenant
+                    </Button>
+                }
             />
 
-            <ConfirmDialog
-                isOpen={!!tenantToDelete}
-                title="Delete Tenant"
-                message={`Are you sure you want to delete "${tenantToDelete?.name}"? This action cannot be undone and will remove all associated data.`}
-                confirmLabel="Delete"
-                variant="danger"
-                loading={isDeleting}
-                onConfirm={handleConfirmDelete}
-                onCancel={() => setTenantToDelete(null)}
-            />
+            {tenants.error !== null && !tenants.data && (
+                <LoadError error={tenants.error} what="tenants" onRetry={tenants.refresh} busy={tenants.refreshing} />
+            )}
 
-            <div className="flex items-center justify-between">
-                <h2 className="text-3xl font-bold tracking-tight">Tenant Management</h2>
-                <button
-                    onClick={() => setIsCreateModalOpen(true)}
-                    className="bg-primary text-primary-foreground px-4 py-2 rounded-md flex items-center gap-2 hover:bg-primary/90 transition-colors"
-                >
-                    <Plus size={18} />
-                    New Tenant
-                </button>
-            </div>
-
-            {/* Filters */}
-            <div className="flex gap-4 bg-card p-4 rounded-lg border border-border">
-                <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+                <div className="relative min-w-[220px] flex-1 sm:max-w-sm">
+                    <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-3" />
                     <input
-                        type="text"
-                        placeholder="Search by name or subdomain..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-background border border-border rounded-md pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                        type="search"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Name, subdomain or ID"
+                        aria-label="Search tenants"
+                        className={cn(inputClass, 'pl-9 pr-9')}
                     />
-                    {searchQuery && (
+                    {query && (
                         <button
-                            onClick={() => setSearchQuery('')}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            type="button"
+                            onClick={() => setQuery('')}
+                            aria-label="Clear search"
+                            className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-sm text-ink-3 hover:text-ink"
                         >
-                            <X size={16} />
+                            <X size={14} />
                         </button>
                     )}
                 </div>
-
-                {/* Status Filter */}
-                <div className="relative">
-                    <button
-                        onClick={() => {
-                            setShowStatusDropdown(!showStatusDropdown);
-                            setShowPlanDropdown(false);
-                        }}
-                        className={`flex items-center gap-2 px-4 py-2 border rounded-md text-sm font-medium transition-colors ${statusFilter !== 'all' ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background hover:bg-muted'
-                            }`}
-                    >
-                        <Filter size={16} />
-                        Status {statusFilter !== 'all' && `(${statusFilter})`}
-                    </button>
-                    {showStatusDropdown && (
-                        <div className="absolute top-full mt-1 left-0 w-48 bg-card border border-border rounded-lg shadow-lg z-10 py-1">
-                            {['all', 'ACTIVE', 'PROVISIONING', 'FAILED', 'SUSPENDED'].map(status => (
-                                <button
-                                    key={status}
-                                    onClick={() => {
-                                        setStatusFilter(status);
-                                        setShowStatusDropdown(false);
-                                    }}
-                                    className={`w-full text-left px-4 py-2 text-sm hover:bg-muted ${statusFilter === status ? 'text-primary' : ''}`}
-                                >
-                                    {status === 'all' ? 'All Statuses' : status}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                </div>
-
-                {/* Plan Filter */}
-                <div className="relative">
-                    <button
-                        onClick={() => {
-                            setShowPlanDropdown(!showPlanDropdown);
-                            setShowStatusDropdown(false);
-                        }}
-                        className={`flex items-center gap-2 px-4 py-2 border rounded-md text-sm font-medium transition-colors ${planFilter !== 'all' ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background hover:bg-muted'
-                            }`}
-                    >
-                        <Filter size={16} />
-                        Plan {planFilter !== 'all' && `(${planFilter})`}
-                    </button>
-                    {showPlanDropdown && (
-                        <div className="absolute top-full mt-1 left-0 w-48 bg-card border border-border rounded-lg shadow-lg z-10 py-1">
-                            <button
-                                onClick={() => {
-                                    setPlanFilter('all');
-                                    setShowPlanDropdown(false);
-                                }}
-                                className={`w-full text-left px-4 py-2 text-sm hover:bg-muted ${planFilter === 'all' ? 'text-primary' : ''}`}
-                            >
-                                All Plans
-                            </button>
-                            {uniquePlans.map(plan => (
-                                <button
-                                    key={plan}
-                                    onClick={() => {
-                                        setPlanFilter(plan);
-                                        setShowPlanDropdown(false);
-                                    }}
-                                    className={`w-full text-left px-4 py-2 text-sm hover:bg-muted ${planFilter === plan ? 'text-primary' : ''}`}
-                                >
-                                    {plan}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                </div>
-
-                <button className="flex items-center gap-2 px-4 py-2 border border-border rounded-md bg-background hover:bg-muted text-sm font-medium">
-                    <Calendar size={16} />
-                    Date Range
-                </button>
-            </div>
-
-            {/* Table */}
-            <div className="bg-card border border-border rounded-lg overflow-hidden">
-                <table className="w-full text-sm text-left">
-                    <thead className="bg-muted/50 text-muted-foreground font-medium border-b border-border">
-                        <tr>
-                            <th className="px-6 py-4">Tenant Name</th>
-                            <th className="px-6 py-4">Subdomain</th>
-                            <th className="px-6 py-4">Status</th>
-                            <th className="px-6 py-4">Plan</th>
-                            <th className="px-6 py-4">Created Date</th>
-                            <th className="px-6 py-4 text-right">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                        {loading ? (
-                            <tr><td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">Loading tenants...</td></tr>
-                        ) : filteredTenants.length === 0 ? (
-                            <tr><td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
-                                {tenants.length === 0 ? 'No tenants found. Create your first tenant!' : 'No tenants match your filters.'}
-                            </td></tr>
-                        ) : (
-                            filteredTenants.map((tenant) => (
-                                <tr key={tenant.id} className="hover:bg-muted/50 transition-colors">
-                                    <td className="px-6 py-4 font-medium">{tenant.name}</td>
-                                    <td className="px-6 py-4 text-muted-foreground font-mono text-sm">{tenant.subdomain}</td>
-                                    <td className="px-6 py-4">{getStatusBadge(tenant.status)}</td>
-                                    <td className="px-6 py-4">{tenant.planId}</td>
-                                    <td className="px-6 py-4 text-muted-foreground">
-                                        {format(new Date(tenant.createdAt), 'yyyy-MM-dd')}
-                                    </td>
-                                    <td className="px-6 py-4 text-right relative">
-                                        <button
-                                            onClick={() => setOpenActionsId(openActionsId === tenant.id ? null : tenant.id)}
-                                            className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted"
-                                        >
-                                            <MoreHorizontal size={18} />
-                                        </button>
-                                        {openActionsId === tenant.id && (
-                                            <div className="absolute right-6 top-full mt-1 w-36 bg-card border border-border rounded-lg shadow-lg z-10 py-1">
-                                                <button
-                                                    onClick={() => handleViewTenant(tenant)}
-                                                    className="w-full text-left px-4 py-2 text-sm hover:bg-muted flex items-center gap-2"
-                                                >
-                                                    <Eye size={14} />
-                                                    View Details
-                                                </button>
-                                                <button
-                                                    onClick={() => handleDeleteClick(tenant)}
-                                                    className="w-full text-left px-4 py-2 text-sm hover:bg-muted flex items-center gap-2 text-red-500"
-                                                >
-                                                    <Trash2 size={14} />
-                                                    Delete
-                                                </button>
-                                            </div>
-                                        )}
-                                    </td>
-                                </tr>
-                            ))
-                        )}
-                    </tbody>
-                </table>
-            </div>
-
-            {/* Click outside to close dropdowns */}
-            {(showStatusDropdown || showPlanDropdown || openActionsId) && (
-                <div
-                    className="fixed inset-0 z-0"
-                    onClick={() => {
-                        setShowStatusDropdown(false);
-                        setShowPlanDropdown(false);
-                        setOpenActionsId(null);
-                    }}
+                <Segmented<Filter>
+                    label="Filter by state"
+                    value={filter}
+                    onChange={setFilter}
+                    options={[
+                        { value: 'all', label: 'All', count: counts.all },
+                        { value: 'active', label: 'Active', count: counts.active },
+                        { value: 'inflight', label: 'In flight', count: counts.inflight },
+                        { value: 'stalled', label: 'Stalled', count: counts.stalled },
+                        { value: 'failed', label: 'Failed', count: counts.failed },
+                        { value: 'cancelled', label: 'Cancelled', count: counts.cancelled },
+                    ]}
                 />
-            )}
-        </div>
+                <select
+                    value={plan}
+                    onChange={(e) => setPlan(e.target.value)}
+                    aria-label="Filter by plan"
+                    className={cn(inputClass, 'w-auto min-w-[140px] pr-8 font-mono text-[13px]')}
+                >
+                    <option value="all">All plans</option>
+                    {plans.map((p) => (
+                        <option key={p} value={p}>
+                            {p}
+                        </option>
+                    ))}
+                </select>
+            </div>
+
+            <Panel flush>
+                <div className="hidden grid-cols-[minmax(0,1.4fr)_150px_130px_minmax(0,0.8fr)_120px_92px] items-end gap-4 border-b border-ink/70 bg-paper-deep/50 px-5 pb-2 pt-2.5 md:grid">
+                    <span className="label">Tenant</span>
+                    <span className="relative h-[15px]" aria-hidden>
+                        {[...STAGES.map((s) => s.short), 'GO'].map((label, i) => (
+                            <span key={label} className="label absolute top-0 -translate-x-1/2 text-[9.5px]" style={{ left: TRACK_X(i) }}>
+                                {label}
+                            </span>
+                        ))}
+                    </span>
+                    <span className="label">State</span>
+                    <span className="label">Plan</span>
+                    <span className="label">Created</span>
+                    <span />
+                </div>
+
+                {tenants.loading ? (
+                    <div className="space-y-px">
+                        {[0, 1, 2, 3].map((i) => (
+                            <div key={i} className="h-[61px] animate-pulse border-b border-rule bg-paper/40" />
+                        ))}
+                    </div>
+                ) : rows.length === 0 ? (
+                    <Empty
+                        title={list.length === 0 ? 'No tenants yet' : 'Nothing matches'}
+                        action={
+                            list.length === 0 ? (
+                                <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                                    <Plus size={15} /> Provision the first one
+                                </Button>
+                            ) : (
+                                <Button
+                                    onClick={() => {
+                                        setQuery('');
+                                        setFilter('all');
+                                        setPlan('all');
+                                    }}
+                                >
+                                    Clear filters
+                                </Button>
+                            )
+                        }
+                    >
+                        {list.length === 0 ? 'A new tenant runs through five stages before it goes active.' : 'Try a different state or plan.'}
+                    </Empty>
+                ) : (
+                    <ul className="divide-y divide-rule">
+                        {rows.map(({ t, c }) => (
+                            <Row key={t.id} tenant={t} cond={c} now={now} onCancel={actions.requestCancel} onDelete={actions.requestDelete} />
+                        ))}
+                    </ul>
+                )}
+                {!tenants.loading && rows.length > 0 && (
+                    <p className="border-t border-rule px-5 py-2.5 font-mono text-[11px] text-ink-3">
+                        {rows.length} of {list.length} shown · refreshes every 10 s
+                    </p>
+                )}
+            </Panel>
+        </>
+    );
+}
+
+interface RowProps {
+    tenant: Tenant;
+    cond: Condition;
+    now: number;
+    onCancel: (t: Tenant) => void;
+    onDelete: (t: Tenant) => void;
+}
+
+function Row({ tenant, cond, now, onCancel, onDelete }: RowProps) {
+    const created = Date.parse(tenant.createdAt);
+    return (
+        <li className="group relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-paper/70 sm:px-5 md:grid-cols-[minmax(0,1.4fr)_150px_130px_minmax(0,0.8fr)_120px_92px]">
+            <Link to={`/tenants/${tenant.id}`} className="min-w-0 after:absolute after:inset-0">
+                <span className="block truncate text-[15px] font-semibold text-ink group-hover:underline">{tenant.name}</span>
+                <span className="block truncate font-mono text-[11.5px] text-ink-3">{tenant.subdomain}</span>
+            </Link>
+            <SequenceTrack tenant={tenant} now={now} className="hidden md:block" />
+            <span className="justify-self-end md:justify-self-start">
+                <ConditionTag condition={cond} />
+            </span>
+            <span className="hidden truncate font-mono text-[12.5px] text-ink-2 md:block">{planLabel(tenant)}</span>
+            <span className="hidden font-mono text-[12px] text-ink-3 md:block" title={fmtStamp(created)}>
+                {fmtAgo(created, now)}
+            </span>
+            <span className="relative z-10 col-span-2 flex items-center justify-between gap-1 md:col-span-1 md:justify-end">
+                <SequenceTrack tenant={tenant} now={now} className="md:hidden" />
+                <span className="flex items-center gap-1">
+                    {tenant.status === 'PROVISIONING' && (
+                        <IconButton label={`Cancel provisioning for ${tenant.name}`} onClick={() => onCancel(tenant)}>
+                            <Ban size={14} />
+                        </IconButton>
+                    )}
+                    <IconButton label={`Delete ${tenant.name}`} onClick={() => onDelete(tenant)} danger>
+                        <Trash2 size={14} />
+                    </IconButton>
+                    <ChevronRight size={15} className="hidden text-ink-4 group-hover:text-ink md:block" />
+                </span>
+            </span>
+        </li>
+    );
+}
+
+function IconButton({ label, onClick, danger, children }: { label: string; onClick: () => void; danger?: boolean; children: React.ReactNode }) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            title={label}
+            aria-label={label}
+            className={`inline-flex h-8 w-8 items-center justify-center rounded border border-transparent text-ink-3 transition-colors hover:border-rule-strong hover:bg-card ${
+                danger ? 'hover:text-abort' : 'hover:text-ink'
+            }`}
+        >
+            {children}
+        </button>
     );
 }

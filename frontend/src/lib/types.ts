@@ -11,6 +11,8 @@ export interface Tenant {
     credentialsStatus: StepStatus;
     billingStatus: StepStatus;
     notificationStatus: StepStatus;
+    cancelledAt?: string | null;
+    cancelReason?: string | null;
     createdAt: string;
     updatedAt: string;
 }
@@ -37,6 +39,7 @@ export interface EventLog {
     tenant?: {
         id: string;
         name: string;
+        subdomain?: string;
     };
 }
 
