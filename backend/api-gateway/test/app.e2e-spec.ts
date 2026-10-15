@@ -9,6 +9,7 @@ import { AxiosError, AxiosHeaders } from 'axios';
 import { of, throwError } from 'rxjs';
 
 import { AppModule } from '../src/app.module';
+import { setupSwagger } from '../src/swagger';
 
 const unauthorized = () => {
   const config = { headers: new AxiosHeaders() };
@@ -48,6 +49,7 @@ describe('API Gateway (e2e)', () => {
         transformOptions: { enableImplicitConversion: true },
       }),
     );
+    setupSwagger(app);
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
   });
@@ -66,6 +68,28 @@ describe('API Gateway (e2e)', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json<{ status: string }>().status).toBe('ok');
     expect(http.get).not.toHaveBeenCalled();
+  });
+
+  it('GET /api/docs serves the Swagger UI and its static assets', async () => {
+    const page = await app.inject({ method: 'GET', url: '/api/docs' });
+    expect(page.statusCode).toBe(200);
+    expect(page.headers['content-type']).toContain('text/html');
+
+    // The bundle is served by @fastify/static, which must be installed at runtime.
+    const bundle = await app.inject({
+      method: 'GET',
+      url: '/api/docs/swagger-ui-bundle.js',
+    });
+    expect(bundle.statusCode).toBe(200);
+  });
+
+  it('GET /api/docs-json serves the OpenAPI document', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/docs-json' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ info: { title: string } }>().info.title).toBe(
+      'TenantOps API Gateway',
+    );
   });
 
   it('GET /auth/me forwards the Authorization header to tenant-service', async () => {
