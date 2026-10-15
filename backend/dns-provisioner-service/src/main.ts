@@ -16,9 +16,10 @@ async function bootstrap() {
   app.useLogger(app.get(Logger));
 
   const fastifyInstance = app.getHttpAdapter().getInstance();
-  fastifyInstance.get('/health', async () => {
-    return { status: 'ok', service: 'dns-provisioner-service' };
-  });
+  fastifyInstance.get('/health', () => ({
+    status: 'ok',
+    service: 'dns-provisioner-service',
+  }));
 
   const port = process.env.PORT || 10000;
   await app.listen(port, '0.0.0.0');

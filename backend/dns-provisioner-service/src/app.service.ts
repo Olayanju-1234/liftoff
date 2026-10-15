@@ -43,7 +43,7 @@ export class AppService {
       );
     } catch (error) {
       this.logger.error(
-        `Failed to create DNS record for ${payload.subdomain}: ${error.message}`,
+        `Failed to create DNS record for ${payload.subdomain}: ${error instanceof Error ? error.message : String(error)}`,
       );
       return new Nack(false);
     }
