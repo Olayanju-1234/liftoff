@@ -71,7 +71,10 @@ export class AppService {
         return;
       } else {
         this.logger.error(
-          { err: error.message, payload },
+          {
+            err: error instanceof Error ? error.message : String(error),
+            payload,
+          },
           `FAILED to create credentials for ${payload.tenantId}.`,
         );
         return new Nack(false);
