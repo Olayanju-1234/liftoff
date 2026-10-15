@@ -169,14 +169,14 @@ interface ProvisioningCompletePayload { tenantId; subdomain }
 ```mermaid
 erDiagram
     Plan {
-        uuid id
+        string id
         string name
         int maxUsers
         int maxApiKeys
     }
 
     Tenant {
-        uuid id
+        cuid id
         string name
         string subdomain
         string planId
@@ -193,23 +193,23 @@ erDiagram
     }
 
     User {
-        uuid id
-        uuid tenantId
+        cuid id
+        cuid tenantId
         string email
         string role
     }
 
     ApiCredential {
-        uuid id
-        uuid tenantId
+        cuid id
+        cuid tenantId
         string keyHash
         bool isActive
         timestamp expiresAt
     }
 
     EventLog {
-        uuid id
-        uuid tenantId
+        cuid id
+        cuid tenantId
         string eventType
         string status
         json payload
