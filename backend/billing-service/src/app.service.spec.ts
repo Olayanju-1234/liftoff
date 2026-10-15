@@ -27,6 +27,7 @@ const mockStripe = {
 
 // Resolved lazily: app.service requires 'stripe' before mockStripe is initialised.
 jest.mock('stripe', () => jest.fn(() => mockStripe));
+const mockStripeConstructor = jest.requireMock<jest.Mock>('stripe');
 
 describe('AppService', () => {
   const env = process.env;
@@ -58,6 +59,8 @@ describe('AppService', () => {
     };
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    mockStripeConstructor.mockClear();
     amqp = { publish: jest.fn().mockResolvedValue(true) };
     mockStripe.customers.create
       .mockReset()
@@ -196,5 +199,54 @@ describe('AppService', () => {
 
     expect(result).toBeInstanceOf(Nack);
     expect((result as Nack).requeue).toBe(false);
+  });
+  describe('without a Stripe key', () => {
+    beforeEach(() => {
+      delete process.env.STRIPE_SECRET_KEY;
+      delete process.env.STRIPE_PRICE_STARTER;
+      delete process.env.STRIPE_PRICE_PRO;
+      delete process.env.STRIPE_PRICE_ENTERPRISE;
+      jest.useFakeTimers({ now: new Date('2026-10-15T00:00:00.000Z') });
+    });
+
+    afterEach(() => jest.useRealTimers());
+
+    it('starts, and publishes a simulated 14-day trial without calling Stripe', async () => {
+      const service = await createService();
+
+      await expect(
+        service.handleTenantCredentialsReady(payload),
+      ).resolves.toBeUndefined();
+
+      expect(mockStripeConstructor).not.toHaveBeenCalled();
+      expect(mockStripe.customers.create).not.toHaveBeenCalled();
+      const billingActive: TenantBillingActivePayload = {
+        tenantId: 'tenant-1',
+        subdomain: 'acme',
+        planId: 'pro',
+        stripeCustomerId: 'sim_cus_tenant-1',
+        stripeSubscriptionId: 'sim_sub_tenant-1',
+        subscriptionStatus: 'trialing',
+        trialEnd: '2026-10-29T00:00:00.000Z',
+      };
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.billing.active',
+        billingActive,
+      );
+    });
+
+    it('nacks without requeue for an unknown plan', async () => {
+      const service = await createService();
+
+      const result = await service.handleTenantCredentialsReady({
+        ...payload,
+        planId: 'platinum',
+      });
+
+      expect(result).toBeInstanceOf(Nack);
+      expect((result as Nack).requeue).toBe(false);
+      expect(amqp.publish).not.toHaveBeenCalled();
+    });
   });
 });

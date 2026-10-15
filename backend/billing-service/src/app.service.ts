@@ -7,15 +7,26 @@ import {
 import Stripe from 'stripe';
 import * as sharedTypes from '@liftoff/shared-types';
 
+const SIMULATED_PLANS = ['starter', 'pro', 'enterprise'];
+const TRIAL_DAYS = 14;
+
 @Injectable()
 export class AppService {
   private readonly logger = new Logger(AppService.name);
-  private readonly stripe: Stripe;
+  // Null when no Stripe key is set: billing is then simulated, like DNS provisioning
+  private readonly stripe: Stripe | null;
   private readonly planPriceMap: Record<string, string>;
 
   constructor(private readonly amqpConnection: AmqpConnection) {
     if (!process.env.STRIPE_SECRET_KEY) {
-      throw new Error('STRIPE_SECRET_KEY environment variable is required');
+      this.logger.warn(
+        'STRIPE_SECRET_KEY is not set, so subscriptions are simulated and Stripe is never called',
+      );
+      this.stripe = null;
+      this.planPriceMap = Object.fromEntries(
+        SIMULATED_PLANS.map((plan) => [plan, `sim_price_${plan}`]),
+      );
+      return;
     }
 
     this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
@@ -56,6 +67,11 @@ export class AppService {
     );
 
     try {
+      if (!this.stripe) {
+        await this.publishSimulatedSubscription(payload);
+        return;
+      }
+
       const customer = await this.stripe.customers.create({
         name: payload.tenantId,
         description: `Tenant: ${payload.subdomain}`,
@@ -80,7 +96,7 @@ export class AppService {
       const subscription = await this.stripe.subscriptions.create({
         customer: customer.id,
         items: [{ price: priceId }],
-        trial_period_days: 14,
+        trial_period_days: TRIAL_DAYS,
         metadata: {
           tenantId: payload.tenantId,
           subdomain: payload.subdomain,
@@ -119,5 +135,30 @@ export class AppService {
       );
       return new Nack(false);
     }
+  }
+
+  private async publishSimulatedSubscription(
+    payload: sharedTypes.TenantCredentialsReadyPayload,
+  ): Promise<void> {
+    if (!this.planPriceMap[payload.planId?.toLowerCase()]) {
+      throw new Error(`Unknown plan: ${payload.planId}`);
+    }
+    const trialEnd = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
+    await this.amqpConnection.publish(
+      'provisioning.direct',
+      'tenant.billing.active',
+      {
+        tenantId: payload.tenantId,
+        subdomain: payload.subdomain,
+        planId: payload.planId,
+        stripeCustomerId: `sim_cus_${payload.tenantId}`,
+        stripeSubscriptionId: `sim_sub_${payload.tenantId}`,
+        subscriptionStatus: 'trialing',
+        trialEnd: trialEnd.toISOString(),
+      },
+    );
+    this.logger.log(
+      `Simulated subscription started for tenant ${payload.tenantId}, plan=${payload.planId}`,
+    );
   }
 }
