@@ -90,7 +90,7 @@ Single entry point for all client requests. Applies rate limiting (100 req/min p
 
 ### Tenant Service
 
-Core orchestration service. Manages the provisioning state machine and subscribes to all pipeline events to keep per-step status accurate. Runs a scheduled job every 5 minutes to auto-cancel pipelines stuck for more than 30 minutes.
+Core orchestration service. Manages the provisioning state machine and subscribes to all pipeline events to keep per-step status accurate. It also consumes the dead-letter exchange: a rejected step marks that step and the tenant `FAILED`. Runs a scheduled job every 5 minutes to auto-cancel pipelines stuck for more than 30 minutes.
 
 Provisioning states: `PROVISIONING → ACTIVE | FAILED | CANCELLED`
 
@@ -144,7 +144,8 @@ sequenceDiagram
 
 - Exchange: `provisioning.direct` (direct, durable)
 - Dead letter exchange: `dlx.provisioning` (durable)
-- Each queue has a dead letter routing key for failed message inspection
+- Each worker queue dead-letters to `dlx.provisioning` with its own key (`db-provisioner.failed`, `billing.failed`, …)
+- tenant-service binds two durable queues to every key: `provisioning.dead-letters`, an unconsumed parking lot for inspection and replay, and its own consumer queue, which marks the step and tenant `FAILED`. See [docs/dead-letters.md](docs/dead-letters.md)
 - `prefetchCount: 10` on all consumers
 
 ### Shared Event Types
@@ -262,7 +263,7 @@ validation.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/auth/register` | Register new user |
+| POST | `/auth/register` | Register a user and provision their workspace tenant on the `starter` plan |
 | POST | `/auth/login` | Login and receive tokens |
 | POST | `/auth/refresh` | Refresh access token |
 | POST | `/auth/logout` | Invalidate refresh token |
@@ -443,7 +444,7 @@ message dead-letters) when a step fails. Beyond that:
 ```bash
 npm run lint && npm run build && npm test
 npm run test:e2e --workspace=api-gateway
-# tenant-service 34 · api-gateway 20 (+13 e2e) · billing 8 · credentials 6
+# tenant-service 49 · api-gateway 20 (+13 e2e) · billing 16 · credentials 6
 # db-provisioner 5 · dns-provisioner 3 · notification 3
 ```
 
