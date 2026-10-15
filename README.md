@@ -296,9 +296,8 @@ npm install
 # Start PostgreSQL and RabbitMQ
 docker-compose up -d postgres_db rabbitmq
 
-# Copy and fill env files for each service
-cp backend/tenant-service/.env.example backend/tenant-service/.env
-# ... repeat for other services
+# Copy and fill env files for each service (.env files are gitignored)
+for f in backend/*/.env.example frontend/.env.example; do cp -n "$f" "${f%.example}"; done
 
 # Run migrations
 cd backend/tenant-service && npx prisma migrate dev && cd ../..
