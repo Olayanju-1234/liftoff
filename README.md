@@ -1,5 +1,7 @@
 # TenantOps — Multi-Tenant SaaS Provisioning Platform
 
+[![CI](https://github.com/Olayanju-1234/liftoff/actions/workflows/ci.yml/badge.svg)](https://github.com/Olayanju-1234/liftoff/actions/workflows/ci.yml)
+
 A production-grade microservices platform that automates the full lifecycle of tenant provisioning through an event-driven pipeline. Built to demonstrate distributed systems design, Stripe billing integration, and choreography-based saga patterns.
 
 **[Live dashboard](https://liftoff-frontend-psi.vercel.app)** · frontend on Vercel, seven services on Render's free tier (the first request after idle can take up to a minute)
@@ -414,18 +416,30 @@ The API gateway's specs cover the proxy layer: method, path and body per
 route, verbatim forwarding of the caller's bearer token, and error mapping
 (downstream 4xx passed through, 5xx and network failures surfaced as 503).
 Its e2e suite boots the real module on Fastify with tenant-service stubbed.
-The notification worker's spec pins its RabbitMQ contract: the queue it
-binds, the event it publishes, and dead-lettering on failure.
+
+Each of the five workers has a spec that pins its RabbitMQ contract, with
+Prisma, Stripe and the AMQP connection mocked: the queue and routing key it
+binds, the event it publishes next, and a nack without requeue (so the
+message dead-letters) when a step fails. Beyond that:
+
+- db-provisioner reduces the subdomain to `[A-Za-z0-9_]` before it reaches
+  the raw `CREATE SCHEMA`
+- credentials republishes on a duplicate key (`P2002`) instead of failing,
+  so redeliveries are idempotent
+- billing refuses to boot without a price ID for every plan, and starts a
+  14-day trial on the plan's price
 
 ```bash
-npm run lint --workspace=tenant-service --workspace=api-gateway --workspace=notification-service
-npm test --workspace=tenant-service --workspace=api-gateway --workspace=notification-service
+npm run lint && npm run build && npm test
 npm run test:e2e --workspace=api-gateway
-# tenant-service 25 · api-gateway 11 (+4 e2e) · notification-service 3
+# tenant-service 34 · api-gateway 20 (+13 e2e) · billing 8 · credentials 6
+# db-provisioner 5 · dns-provisioner 3 · notification 3
 ```
 
-tenant-service generates its Prisma client before `build`, `lint` and `test`,
-so none of these need a database or a `.env` file.
+The three Prisma services (tenant, credentials, db-provisioner) generate their
+client before `build`, `lint` and `test`, so none of these need a database or a
+`.env` file. [CI](.github/workflows/ci.yml) runs lint, build and test for every
+service on each pull request and push to `main`.
 
 ---
 
