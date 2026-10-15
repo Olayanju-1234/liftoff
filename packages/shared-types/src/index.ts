@@ -138,6 +138,14 @@ export class UpdateSettingsDto {
 }
 
 // ============================================================================
+// Plans
+// ============================================================================
+
+// Billing prices exactly these IDs, so seeds and signups must use them.
+export const PLAN_IDS = ['starter', 'pro', 'enterprise'] as const;
+export type PlanId = (typeof PLAN_IDS)[number];
+
+// ============================================================================
 // Event Payloads (RabbitMQ)
 // ============================================================================
 
