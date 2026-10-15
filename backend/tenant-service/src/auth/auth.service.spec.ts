@@ -2,7 +2,7 @@ import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '.prisma/tenant-client';
 import * as bcrypt from 'bcrypt';
 
 import { AuthService } from './auth.service';

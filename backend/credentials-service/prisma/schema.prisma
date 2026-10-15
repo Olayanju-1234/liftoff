@@ -1,5 +1,8 @@
+// Per-service output: the default (hoisted node_modules/.prisma/client) is shared by
+// every workspace, so the last service to run `prisma generate` overwrote the others.
 generator client {
   provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/credentials-client"
 }
 
 datasource db {
