@@ -18,9 +18,11 @@ async function bootstrap() {
 
   // Health check endpoint for Render
   const fastifyInstance = app.getHttpAdapter().getInstance();
-  fastifyInstance.get('/health', async () => {
-    return { status: 'ok', service: 'notification-service', worker: true };
-  });
+  fastifyInstance.get('/health', () => ({
+    status: 'ok',
+    service: 'notification-service',
+    worker: true,
+  }));
 
   // Start HTTP server (required for Render web services)
   const port = process.env.PORT || 10000;

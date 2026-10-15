@@ -46,7 +46,7 @@ export class AppService {
       );
     } catch (error) {
       this.logger.error(
-        `Failed to send welcome email for tenant ${payload.tenantId}: ${error.message}`,
+        `Failed to send welcome email for tenant ${payload.tenantId}: ${error instanceof Error ? error.message : String(error)}`,
       );
       return new Nack(false);
     }
