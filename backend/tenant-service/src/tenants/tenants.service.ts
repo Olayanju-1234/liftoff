@@ -9,7 +9,12 @@ import { PrismaService } from '../prisma.service';
 import { errorMessage } from '../common/error-message';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
-import { Prisma, StepStatus, TenantStatus } from '.prisma/tenant-client';
+import {
+  Prisma,
+  StepStatus,
+  TenantStatus,
+  type Tenant,
+} from '.prisma/tenant-client';
 import type {
   ProvisioningCompletePayload,
   TenantRequestedPayload,
@@ -18,6 +23,16 @@ import type {
   TenantCredentialsReadyPayload,
   TenantBillingActivePayload,
 } from '@liftoff/shared-types';
+import {
+  DEAD_LETTER_EXCHANGE,
+  DEAD_LETTER_ROUTING_KEYS,
+  STEP_BY_DEAD_LETTER_KEY,
+  describeDeadLetter,
+  type DeadLetterMessage,
+  type ProvisioningStep,
+} from './dead-letters';
+
+const PUBLISH_TIMEOUT_MS = 5_000;
 
 @Injectable()
 export class TenantsService {
@@ -57,22 +72,7 @@ export class TenantsService {
         },
       });
 
-      await this.logEvent(tenant.id, 'tenant.created', 'Success', {
-        name: tenant.name,
-        plan: tenant.planId,
-      });
-
-      const eventPayload: TenantRequestedPayload = {
-        tenantId: tenant.id,
-        subdomain: tenant.subdomain,
-        planId: tenant.planId,
-      };
-
-      await this.amqpConnection.publish(
-        'provisioning.direct',
-        'tenant.requested',
-        eventPayload,
-      );
+      await this.startProvisioning(tenant);
 
       return tenant;
     } catch (error) {
@@ -87,6 +87,71 @@ export class TenantsService {
       }
       throw error;
     }
+  }
+
+  // Callers create the tenant with dbStatus IN_PROGRESS first.
+  async startProvisioning(
+    tenant: Pick<Tenant, 'id' | 'name' | 'subdomain' | 'planId'>,
+  ) {
+    await this.logEvent(tenant.id, 'tenant.created', 'Success', {
+      name: tenant.name,
+      plan: tenant.planId,
+    });
+
+    const eventPayload: TenantRequestedPayload = {
+      tenantId: tenant.id,
+      subdomain: tenant.subdomain,
+      planId: tenant.planId,
+    };
+
+    try {
+      // Without a timeout a down broker buffers the publish and hangs the request.
+      await this.amqpConnection.publish(
+        'provisioning.direct',
+        'tenant.requested',
+        eventPayload,
+        { timeout: PUBLISH_TIMEOUT_MS },
+      );
+    } catch (error) {
+      await this.failStep(
+        tenant.id,
+        'dbStatus',
+        `Could not publish tenant.requested: ${errorMessage(error)}`,
+      );
+      throw error;
+    }
+  }
+
+  async failStep(
+    tenantId: string,
+    step: ProvisioningStep,
+    error: string,
+    detail: object = {},
+  ): Promise<boolean> {
+    const data: Prisma.TenantUpdateManyMutationInput = {
+      status: TenantStatus.FAILED,
+    };
+    data[step] = StepStatus.FAILED;
+
+    // FAILED stays eligible so a replayed message that fails again is recorded.
+    const { count } = await this.prisma.tenant.updateMany({
+      where: {
+        id: tenantId,
+        status: { in: [TenantStatus.PROVISIONING, TenantStatus.FAILED] },
+      },
+      data,
+    });
+    if (count === 0) {
+      return false;
+    }
+
+    await this.logEvent(tenantId, 'tenant.provisioning.failed', 'Error', {
+      step,
+      error,
+      ...detail,
+    });
+    this.logger.warn(`Tenant ${tenantId} failed at ${step}: ${error}`);
+    return true;
   }
 
   private async logEvent(
@@ -244,6 +309,41 @@ export class TenantsService {
         'tenant.provisioning.complete',
         'Error',
         { error: errorMessage(error) },
+      );
+    }
+  }
+
+  @RabbitSubscribe({
+    exchange: DEAD_LETTER_EXCHANGE,
+    routingKey: DEAD_LETTER_ROUTING_KEYS,
+    queue: 'tenant-service-dead-letter-queue',
+    queueOptions: {
+      durable: true,
+    },
+  })
+  public async handleDeadLetter(
+    payload: Partial<TenantRequestedPayload> | undefined,
+    message: DeadLetterMessage,
+  ) {
+    const { routingKey } = message.fields;
+    const step = STEP_BY_DEAD_LETTER_KEY[routingKey];
+    const tenantId = payload?.tenantId;
+    if (!step || !tenantId) {
+      this.logger.warn(
+        `Ignoring dead letter on ${routingKey}: no step or tenantId ${JSON.stringify(payload)}`,
+      );
+      return;
+    }
+
+    const failed = await this.failStep(
+      tenantId,
+      step,
+      describeDeadLetter(message),
+      { deadLetterKey: routingKey },
+    );
+    if (!failed) {
+      this.logger.warn(
+        `Dead letter ${routingKey} for tenant ${tenantId} ignored: tenant is gone, active or cancelled`,
       );
     }
   }
