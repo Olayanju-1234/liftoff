@@ -1,9 +1,9 @@
 import {
-    BadRequestException,
-    ConflictException,
-    Injectable,
-    Logger,
-    NotFoundException,
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
@@ -11,315 +11,375 @@ import { AmqpConnection, RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import { StepStatus, TenantStatus } from '@prisma/client';
 import type {
-    ProvisioningCompletePayload,
-    TenantRequestedPayload,
-    TenantDbReadyPayload,
-    TenantDnsReadyPayload,
-    TenantCredentialsReadyPayload,
-    TenantBillingActivePayload,
+  ProvisioningCompletePayload,
+  TenantRequestedPayload,
+  TenantDbReadyPayload,
+  TenantDnsReadyPayload,
+  TenantCredentialsReadyPayload,
+  TenantBillingActivePayload,
 } from '@liftoff/shared-types';
 
 @Injectable()
 export class TenantsService {
-    private readonly logger = new Logger(TenantsService.name);
+  private readonly logger = new Logger(TenantsService.name);
 
-    constructor(
-        private prisma: PrismaService,
-        private readonly amqpConnection: AmqpConnection,
-    ) { }
+  constructor(
+    private prisma: PrismaService,
+    private readonly amqpConnection: AmqpConnection,
+  ) {}
 
-    async create(createTenantDto: CreateTenantDto) {
-        // Get or create plan - check by both id and name to avoid unique constraint issues
-        let plan = await this.prisma.plan.findFirst({
-            where: {
-                OR: [
-                    { id: createTenantDto.planId },
-                    { name: createTenantDto.planId }
-                ]
-            }
-        });
+  async create(createTenantDto: CreateTenantDto) {
+    // Get or create plan - check by both id and name to avoid unique constraint issues
+    let plan = await this.prisma.plan.findFirst({
+      where: {
+        OR: [{ id: createTenantDto.planId }, { name: createTenantDto.planId }],
+      },
+    });
 
-        if (!plan) {
-            plan = await this.prisma.plan.create({
-                data: {
-                    id: createTenantDto.planId,
-                    name: createTenantDto.planId,
-                    maxUsers: 5,
-                    maxApiKeys: 3,
-                },
-            });
-        }
-
-
-        try {
-            const tenant = await this.prisma.tenant.create({
-                data: {
-                    name: createTenantDto.name,
-                    subdomain: createTenantDto.subdomain,
-                    planId: plan.id,
-                    dbStatus: StepStatus.IN_PROGRESS, // Start first step
-                },
-            });
-
-            await this.logEvent(tenant.id, 'tenant.created', 'Success', { name: tenant.name, plan: tenant.planId });
-
-            const eventPayload: TenantRequestedPayload = {
-                tenantId: tenant.id,
-                subdomain: tenant.subdomain,
-                planId: tenant.planId,
-            };
-
-            await this.amqpConnection.publish(
-                'provisioning.direct',
-                'tenant.requested',
-                eventPayload,
-            );
-
-            return tenant;
-        } catch (error) {
-            if (
-                error instanceof PrismaClientKnownRequestError &&
-                error.code === 'P2002'
-            ) {
-                const target = (error.meta?.target as string[])?.[0];
-                throw new ConflictException(
-                    `A tenant with this ${target} already exists.`,
-                );
-            }
-            throw error;
-        }
-    }
-
-    private async logEvent(tenantId: string, eventType: string, status: string, payload: any) {
-        try {
-            await this.prisma.eventLog.create({
-                data: {
-                    tenantId,
-                    eventType,
-                    status,
-                    payload,
-                },
-            });
-        } catch (e) {
-            this.logger.error(`Failed to log event: ${e.message}`);
-        }
-    }
-
-    @RabbitSubscribe({
-        exchange: 'provisioning.direct',
-        routingKey: 'tenant.db.ready',
-        queue: 'tenant-service-db-ready-queue',
-        queueOptions: {
-            durable: true,
+    if (!plan) {
+      plan = await this.prisma.plan.create({
+        data: {
+          id: createTenantDto.planId,
+          name: createTenantDto.planId,
+          maxUsers: 5,
+          maxApiKeys: 3,
         },
-    })
-    public async handleDbReady(payload: TenantDbReadyPayload) {
-        this.logger.log(`DB ready for tenant ${payload.tenantId}`);
-        try {
-            await this.prisma.tenant.update({
-                where: { id: payload.tenantId },
-                data: {
-                    dbStatus: StepStatus.SUCCESS,
-                    dnsStatus: StepStatus.IN_PROGRESS
-                },
-            });
-            await this.logEvent(payload.tenantId, 'tenant.db.ready', 'Success', payload);
-        } catch (error) {
-            this.logger.error(`handleDbReady failed for tenant ${payload.tenantId}: ${error.message}`);
-            throw error;
-        }
+      });
     }
 
-
-    @RabbitSubscribe({
-        exchange: 'provisioning.direct',
-        routingKey: 'tenant.dns.ready',
-        queue: 'tenant-service-dns-ready-queue',
-    })
-    public async handleDnsReady(payload: TenantDnsReadyPayload) {
-        await this.prisma.tenant.update({
-            where: { id: payload.tenantId },
-            data: {
-                dnsStatus: StepStatus.SUCCESS,
-                credentialsStatus: StepStatus.IN_PROGRESS
-            },
-        });
-        await this.logEvent(payload.tenantId, 'tenant.dns.ready', 'Success', payload);
-    }
-
-    @RabbitSubscribe({
-        exchange: 'provisioning.direct',
-        routingKey: 'tenant.credentials.ready',
-        queue: 'tenant-service-credentials-ready-queue',
-    })
-    public async handleCredentialsReady(payload: TenantCredentialsReadyPayload) {
-        await this.prisma.tenant.update({
-            where: { id: payload.tenantId },
-            data: {
-                credentialsStatus: StepStatus.SUCCESS,
-                billingStatus: StepStatus.IN_PROGRESS
-            },
-        });
-        await this.logEvent(payload.tenantId, 'tenant.credentials.ready', 'Success', payload);
-    }
-
-    @RabbitSubscribe({
-        exchange: 'provisioning.direct',
-        routingKey: 'tenant.billing.active',
-        queue: 'tenant-service-billing-active-queue',
-    })
-    public async handleBillingActive(payload: TenantBillingActivePayload) {
-        await this.prisma.tenant.update({
-            where: { id: payload.tenantId },
-            data: {
-                billingStatus: StepStatus.SUCCESS,
-                notificationStatus: StepStatus.IN_PROGRESS
-            },
-        });
-        await this.logEvent(payload.tenantId, 'tenant.billing.active', 'Success', payload);
-    }
-
-    @RabbitSubscribe({
-        exchange: 'provisioning.direct',
-        routingKey: 'tenant.provisioning.complete',
-        queue: 'tenant-service-completion-queue',
-        queueOptions: {
-            durable: true,
+    try {
+      const tenant = await this.prisma.tenant.create({
+        data: {
+          name: createTenantDto.name,
+          subdomain: createTenantDto.subdomain,
+          planId: plan.id,
+          dbStatus: StepStatus.IN_PROGRESS, // Start first step
         },
-    })
-    public async handleProvisioningComplete(
-        payload: ProvisioningCompletePayload,
-    ) {
-        this.logger.log(`Activating tenant ${payload.tenantId}`);
+      });
 
-        try {
-            await this.prisma.tenant.update({
-                where: {
-                    id: payload.tenantId,
-                },
-                data: {
-                    status: TenantStatus.ACTIVE,
-                    notificationStatus: StepStatus.SUCCESS
-                },
-            });
+      await this.logEvent(tenant.id, 'tenant.created', 'Success', {
+        name: tenant.name,
+        plan: tenant.planId,
+      });
 
-            await this.logEvent(payload.tenantId, 'tenant.provisioning.complete', 'Success', payload);
-            this.logger.log(`Tenant ${payload.tenantId} is now ACTIVE`);
-        } catch (error) {
-            this.logger.error(`Failed to activate tenant ${payload.tenantId}: ${error.message}`);
-            await this.logEvent(payload.tenantId, 'tenant.provisioning.complete', 'Error', { error: error.message });
-        }
-    }
+      const eventPayload: TenantRequestedPayload = {
+        tenantId: tenant.id,
+        subdomain: tenant.subdomain,
+        planId: tenant.planId,
+      };
 
-    async findAll() {
-        return this.prisma.tenant.findMany({
-            include: { plan: true },
-            orderBy: { createdAt: 'desc' },
-        });
-    }
+      await this.amqpConnection.publish(
+        'provisioning.direct',
+        'tenant.requested',
+        eventPayload,
+      );
 
-    async findOne(id: string) {
-        const tenant = await this.prisma.tenant.findUnique({
-            where: { id },
-            include: {
-                plan: true,
-                events: { orderBy: { timestamp: 'desc' }, take: 100 },
-            },
-        });
-        if (!tenant) {
-            throw new NotFoundException(`Tenant ${id} not found`);
-        }
-        return tenant;
-    }
-
-    async findEvents(id: string) {
-        return this.prisma.eventLog.findMany({
-            where: { tenantId: id },
-            orderBy: { timestamp: 'desc' },
-            take: 200,
-        });
-    }
-
-    async findAllEvents() {
-        // Project tenant down to identifying fields only — avoid leaking
-        // future-added sensitive columns (e.g. stripe IDs) and keep payload small.
-        return this.prisma.eventLog.findMany({
-            orderBy: { timestamp: 'desc' },
-            take: 200,
-            include: {
-                tenant: {
-                    select: { id: true, name: true, subdomain: true },
-                },
-            },
-        });
-    }
-
-    async cancel(id: string, reason?: string) {
-        const tenant = await this.prisma.tenant.findUnique({ where: { id } });
-
-        if (!tenant) {
-            throw new NotFoundException(`Tenant ${id} not found`);
-        }
-
-        if (tenant.status !== TenantStatus.PROVISIONING) {
-            throw new BadRequestException(
-                `Cannot cancel tenant with status ${tenant.status}`,
-            );
-        }
-
-        const cancelReason = reason || 'Cancelled by user';
-
-        // Update tenant status and all pending/in-progress steps to CANCELLED
-        const updatedTenant = await this.prisma.tenant.update({
-            where: { id },
-            data: {
-                status: TenantStatus.CANCELLED,
-                cancelledAt: new Date(),
-                cancelReason,
-                dbStatus: tenant.dbStatus === StepStatus.PENDING || tenant.dbStatus === StepStatus.IN_PROGRESS ? StepStatus.CANCELLED : tenant.dbStatus,
-                dnsStatus: tenant.dnsStatus === StepStatus.PENDING || tenant.dnsStatus === StepStatus.IN_PROGRESS ? StepStatus.CANCELLED : tenant.dnsStatus,
-                credentialsStatus: tenant.credentialsStatus === StepStatus.PENDING || tenant.credentialsStatus === StepStatus.IN_PROGRESS ? StepStatus.CANCELLED : tenant.credentialsStatus,
-                billingStatus: tenant.billingStatus === StepStatus.PENDING || tenant.billingStatus === StepStatus.IN_PROGRESS ? StepStatus.CANCELLED : tenant.billingStatus,
-                notificationStatus: tenant.notificationStatus === StepStatus.PENDING || tenant.notificationStatus === StepStatus.IN_PROGRESS ? StepStatus.CANCELLED : tenant.notificationStatus,
-            },
-            include: { plan: true },
-        });
-
-        await this.logEvent(id, 'tenant.cancelled', 'Success', { reason: cancelReason });
-
-        // Publish cancellation event for other services to potentially clean up resources
-        await this.amqpConnection.publish(
-            'provisioning.direct',
-            'tenant.cancelled',
-            { tenantId: id, subdomain: tenant.subdomain, reason: cancelReason },
+      return tenant;
+    } catch (error) {
+      if (
+        error instanceof PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const target = (error.meta?.target as string[])?.[0];
+        throw new ConflictException(
+          `A tenant with this ${target} already exists.`,
         );
+      }
+      throw error;
+    }
+  }
 
-        this.logger.log(`Tenant ${id} cancelled: ${cancelReason}`);
-        return updatedTenant;
+  private async logEvent(
+    tenantId: string,
+    eventType: string,
+    status: string,
+    payload: any,
+  ) {
+    try {
+      await this.prisma.eventLog.create({
+        data: {
+          tenantId,
+          eventType,
+          status,
+          payload,
+        },
+      });
+    } catch (e) {
+      this.logger.error(`Failed to log event: ${e.message}`);
+    }
+  }
+
+  @RabbitSubscribe({
+    exchange: 'provisioning.direct',
+    routingKey: 'tenant.db.ready',
+    queue: 'tenant-service-db-ready-queue',
+    queueOptions: {
+      durable: true,
+    },
+  })
+  public async handleDbReady(payload: TenantDbReadyPayload) {
+    this.logger.log(`DB ready for tenant ${payload.tenantId}`);
+    try {
+      await this.prisma.tenant.update({
+        where: { id: payload.tenantId },
+        data: {
+          dbStatus: StepStatus.SUCCESS,
+          dnsStatus: StepStatus.IN_PROGRESS,
+        },
+      });
+      await this.logEvent(
+        payload.tenantId,
+        'tenant.db.ready',
+        'Success',
+        payload,
+      );
+    } catch (error) {
+      this.logger.error(
+        `handleDbReady failed for tenant ${payload.tenantId}: ${error.message}`,
+      );
+      throw error;
+    }
+  }
+
+  @RabbitSubscribe({
+    exchange: 'provisioning.direct',
+    routingKey: 'tenant.dns.ready',
+    queue: 'tenant-service-dns-ready-queue',
+  })
+  public async handleDnsReady(payload: TenantDnsReadyPayload) {
+    await this.prisma.tenant.update({
+      where: { id: payload.tenantId },
+      data: {
+        dnsStatus: StepStatus.SUCCESS,
+        credentialsStatus: StepStatus.IN_PROGRESS,
+      },
+    });
+    await this.logEvent(
+      payload.tenantId,
+      'tenant.dns.ready',
+      'Success',
+      payload,
+    );
+  }
+
+  @RabbitSubscribe({
+    exchange: 'provisioning.direct',
+    routingKey: 'tenant.credentials.ready',
+    queue: 'tenant-service-credentials-ready-queue',
+  })
+  public async handleCredentialsReady(payload: TenantCredentialsReadyPayload) {
+    await this.prisma.tenant.update({
+      where: { id: payload.tenantId },
+      data: {
+        credentialsStatus: StepStatus.SUCCESS,
+        billingStatus: StepStatus.IN_PROGRESS,
+      },
+    });
+    await this.logEvent(
+      payload.tenantId,
+      'tenant.credentials.ready',
+      'Success',
+      payload,
+    );
+  }
+
+  @RabbitSubscribe({
+    exchange: 'provisioning.direct',
+    routingKey: 'tenant.billing.active',
+    queue: 'tenant-service-billing-active-queue',
+  })
+  public async handleBillingActive(payload: TenantBillingActivePayload) {
+    await this.prisma.tenant.update({
+      where: { id: payload.tenantId },
+      data: {
+        billingStatus: StepStatus.SUCCESS,
+        notificationStatus: StepStatus.IN_PROGRESS,
+      },
+    });
+    await this.logEvent(
+      payload.tenantId,
+      'tenant.billing.active',
+      'Success',
+      payload,
+    );
+  }
+
+  @RabbitSubscribe({
+    exchange: 'provisioning.direct',
+    routingKey: 'tenant.provisioning.complete',
+    queue: 'tenant-service-completion-queue',
+    queueOptions: {
+      durable: true,
+    },
+  })
+  public async handleProvisioningComplete(
+    payload: ProvisioningCompletePayload,
+  ) {
+    this.logger.log(`Activating tenant ${payload.tenantId}`);
+
+    try {
+      await this.prisma.tenant.update({
+        where: {
+          id: payload.tenantId,
+        },
+        data: {
+          status: TenantStatus.ACTIVE,
+          notificationStatus: StepStatus.SUCCESS,
+        },
+      });
+
+      await this.logEvent(
+        payload.tenantId,
+        'tenant.provisioning.complete',
+        'Success',
+        payload,
+      );
+      this.logger.log(`Tenant ${payload.tenantId} is now ACTIVE`);
+    } catch (error) {
+      this.logger.error(
+        `Failed to activate tenant ${payload.tenantId}: ${error.message}`,
+      );
+      await this.logEvent(
+        payload.tenantId,
+        'tenant.provisioning.complete',
+        'Error',
+        { error: error.message },
+      );
+    }
+  }
+
+  async findAll() {
+    return this.prisma.tenant.findMany({
+      include: { plan: true },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findOne(id: string) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id },
+      include: {
+        plan: true,
+        events: { orderBy: { timestamp: 'desc' }, take: 100 },
+      },
+    });
+    if (!tenant) {
+      throw new NotFoundException(`Tenant ${id} not found`);
+    }
+    return tenant;
+  }
+
+  async findEvents(id: string) {
+    return this.prisma.eventLog.findMany({
+      where: { tenantId: id },
+      orderBy: { timestamp: 'desc' },
+      take: 200,
+    });
+  }
+
+  async findAllEvents() {
+    // Project tenant down to identifying fields only — avoid leaking
+    // future-added sensitive columns (e.g. stripe IDs) and keep payload small.
+    return this.prisma.eventLog.findMany({
+      orderBy: { timestamp: 'desc' },
+      take: 200,
+      include: {
+        tenant: {
+          select: { id: true, name: true, subdomain: true },
+        },
+      },
+    });
+  }
+
+  async cancel(id: string, reason?: string) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id } });
+
+    if (!tenant) {
+      throw new NotFoundException(`Tenant ${id} not found`);
     }
 
-    async delete(id: string) {
-        const tenant = await this.prisma.tenant.findUnique({ where: { id } });
-
-        if (!tenant) {
-            throw new NotFoundException(`Tenant ${id} not found`);
-        }
-
-        // Publish deletion event for other services to clean up resources (schemas, DNS, credentials, etc.)
-        await this.amqpConnection.publish(
-            'provisioning.direct',
-            'tenant.deleted',
-            { tenantId: id, subdomain: tenant.subdomain },
-        );
-
-        await this.logEvent(id, 'tenant.deleted', 'Success', { subdomain: tenant.subdomain });
-
-        // Events are cascade deleted due to Prisma schema onDelete: Cascade
-        const deletedTenant = await this.prisma.tenant.delete({
-            where: { id }
-        });
-
-        this.logger.log(`Tenant ${id} (${tenant.subdomain}) deleted`);
-        return deletedTenant;
+    if (tenant.status !== TenantStatus.PROVISIONING) {
+      throw new BadRequestException(
+        `Cannot cancel tenant with status ${tenant.status}`,
+      );
     }
+
+    const cancelReason = reason || 'Cancelled by user';
+
+    // Update tenant status and all pending/in-progress steps to CANCELLED
+    const updatedTenant = await this.prisma.tenant.update({
+      where: { id },
+      data: {
+        status: TenantStatus.CANCELLED,
+        cancelledAt: new Date(),
+        cancelReason,
+        dbStatus:
+          tenant.dbStatus === StepStatus.PENDING ||
+          tenant.dbStatus === StepStatus.IN_PROGRESS
+            ? StepStatus.CANCELLED
+            : tenant.dbStatus,
+        dnsStatus:
+          tenant.dnsStatus === StepStatus.PENDING ||
+          tenant.dnsStatus === StepStatus.IN_PROGRESS
+            ? StepStatus.CANCELLED
+            : tenant.dnsStatus,
+        credentialsStatus:
+          tenant.credentialsStatus === StepStatus.PENDING ||
+          tenant.credentialsStatus === StepStatus.IN_PROGRESS
+            ? StepStatus.CANCELLED
+            : tenant.credentialsStatus,
+        billingStatus:
+          tenant.billingStatus === StepStatus.PENDING ||
+          tenant.billingStatus === StepStatus.IN_PROGRESS
+            ? StepStatus.CANCELLED
+            : tenant.billingStatus,
+        notificationStatus:
+          tenant.notificationStatus === StepStatus.PENDING ||
+          tenant.notificationStatus === StepStatus.IN_PROGRESS
+            ? StepStatus.CANCELLED
+            : tenant.notificationStatus,
+      },
+      include: { plan: true },
+    });
+
+    await this.logEvent(id, 'tenant.cancelled', 'Success', {
+      reason: cancelReason,
+    });
+
+    // Publish cancellation event for other services to potentially clean up resources
+    await this.amqpConnection.publish(
+      'provisioning.direct',
+      'tenant.cancelled',
+      { tenantId: id, subdomain: tenant.subdomain, reason: cancelReason },
+    );
+
+    this.logger.log(`Tenant ${id} cancelled: ${cancelReason}`);
+    return updatedTenant;
+  }
+
+  async delete(id: string) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id } });
+
+    if (!tenant) {
+      throw new NotFoundException(`Tenant ${id} not found`);
+    }
+
+    // Publish deletion event for other services to clean up resources (schemas, DNS, credentials, etc.)
+    await this.amqpConnection.publish('provisioning.direct', 'tenant.deleted', {
+      tenantId: id,
+      subdomain: tenant.subdomain,
+    });
+
+    await this.logEvent(id, 'tenant.deleted', 'Success', {
+      subdomain: tenant.subdomain,
+    });
+
+    // Events are cascade deleted due to Prisma schema onDelete: Cascade
+    const deletedTenant = await this.prisma.tenant.delete({
+      where: { id },
+    });
+
+    this.logger.log(`Tenant ${id} (${tenant.subdomain}) deleted`);
+    return deletedTenant;
+  }
 }

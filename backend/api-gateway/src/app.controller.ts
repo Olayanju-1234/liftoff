@@ -98,7 +98,10 @@ export class AppController {
   @ApiOperation({
     summary: 'Create a tenant and start the provisioning pipeline',
   })
-  @ApiResponse({ status: 202, description: 'Tenant accepted; pipeline started' })
+  @ApiResponse({
+    status: 202,
+    description: 'Tenant accepted; pipeline started',
+  })
   @Post('tenants')
   createTenant(
     @Body() dto: CreateTenantDto,
@@ -162,7 +165,10 @@ export class AppController {
   @ApiTags('Tenants')
   @ApiBearerAuth('bearer')
   @ApiOperation({ summary: 'Cancel an in-progress provisioning pipeline' })
-  @ApiResponse({ status: 400, description: 'Tenant is not in PROVISIONING state' })
+  @ApiResponse({
+    status: 400,
+    description: 'Tenant is not in PROVISIONING state',
+  })
   @ApiResponse({ status: 404, description: 'Tenant not found' })
   @Post('tenants/:id/cancel')
   cancelTenant(

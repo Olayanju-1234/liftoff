@@ -36,20 +36,25 @@ const getEnvPath = (): string => {
       validationOptions: { abortEarly: false },
     }),
     // Rate limiting: 100 requests per minute per IP
-    ThrottlerModule.forRoot([{
-      ttl: 60000,  // 1 minute
-      limit: 100,   // 100 requests
-    }]),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000, // 1 minute
+        limit: 100, // 100 requests
+      },
+    ]),
     LoggerModule.forRoot({
       pinoHttp: {
-        transport: process.env.NODE_ENV !== 'production' ? {
-          target: 'pino-pretty',
-          options: {
-            singleLine: true,
-            colorize: true,
-            levelFirst: false,
-          },
-        } : undefined,
+        transport:
+          process.env.NODE_ENV !== 'production'
+            ? {
+                target: 'pino-pretty',
+                options: {
+                  singleLine: true,
+                  colorize: true,
+                  levelFirst: false,
+                },
+              }
+            : undefined,
         level: process.env.LOG_LEVEL || 'info',
       },
     }),
@@ -57,7 +62,9 @@ const getEnvPath = (): string => {
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
         timeout: 60000,
-        baseURL: configService.get<string>('TENANT_SERVICE_URL') || 'http://localhost:3001',
+        baseURL:
+          configService.get<string>('TENANT_SERVICE_URL') ||
+          'http://localhost:3001',
       }),
       inject: [ConfigService],
     }),
@@ -72,4 +79,4 @@ const getEnvPath = (): string => {
     },
   ],
 })
-export class AppModule { }
+export class AppModule {}

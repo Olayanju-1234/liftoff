@@ -6,7 +6,7 @@ import { Public } from './auth/decorators/public.decorator';
 export class AppController {
   private readonly logger = new Logger(AppController.name);
 
-  constructor(private readonly appService: AppService) { }
+  constructor(private readonly appService: AppService) {}
 
   @Public()
   @Get('health')
