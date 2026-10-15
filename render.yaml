@@ -119,7 +119,8 @@ services:
         sync: false
 
   # ============================================================
-  # Notification Service — sends welcome emails via SendGrid
+  # Notification Service — mock welcome-email step, then publishes
+  # provisioning.complete (real emails are sent by tenant-service)
   # ============================================================
   - type: web
     name: notification-service
@@ -132,8 +133,4 @@ services:
       - key: NODE_ENV
         value: production
       - key: RABBITMQ_URL
-        sync: false
-      - key: SENDGRID_API_KEY
-        sync: false
-      - key: SENDGRID_FROM_EMAIL
         sync: false
