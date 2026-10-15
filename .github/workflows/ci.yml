@@ -28,10 +28,10 @@ jobs:
           - billing-service
           - notification-service
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Matches the node:20-alpine base in the Dockerfiles.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
