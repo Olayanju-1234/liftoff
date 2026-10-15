@@ -11,14 +11,17 @@ import { LoggerModule } from 'nestjs-pino';
     }),
     LoggerModule.forRoot({
       pinoHttp: {
-        transport: process.env.NODE_ENV !== 'production' ? {
-          target: 'pino-pretty',
-          options: {
-            singleLine: true,
-            colorize: true,
-            levelFirst: false,
-          },
-        } : undefined,
+        transport:
+          process.env.NODE_ENV !== 'production'
+            ? {
+                target: 'pino-pretty',
+                options: {
+                  singleLine: true,
+                  colorize: true,
+                  levelFirst: false,
+                },
+              }
+            : undefined,
       },
     }),
     RabbitMQModule.forRoot({
@@ -38,11 +41,12 @@ import { LoggerModule } from 'nestjs-pino';
           },
         },
       ],
-      uri: process.env.RABBITMQ_URL || 'amqp://devuser:devpassword@localhost:5672',
+      uri:
+        process.env.RABBITMQ_URL || 'amqp://devuser:devpassword@localhost:5672',
       connectionInitOptions: { wait: false, reject: false },
     }),
   ],
   controllers: [],
   providers: [AppService],
 })
-export class AppModule { }
+export class AppModule {}

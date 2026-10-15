@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: ${{ matrix.workspace }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace:
+          - api-gateway
+          - tenant-service
+          - db-provisioner-service
+          - dns-provisioner-service
+          - credentials-service
+          - billing-service
+          - notification-service
+    steps:
+      - uses: actions/checkout@v7
+
+      # Matches the node:20-alpine base in the Dockerfiles.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint --workspace=${{ matrix.workspace }}
+
+      # The lint script runs eslint --fix, so fail if it had anything to fix.
+      - name: Check lint left the tree clean
+        run: git diff --exit-code
+
+      - name: Build
+        run: npm run build --workspace=${{ matrix.workspace }}
+
+      - name: Test
+        run: npm test --workspace=${{ matrix.workspace }}
+
+      - name: E2E
+        if: matrix.workspace == 'api-gateway'
+        run: npm run test:e2e --workspace=api-gateway
