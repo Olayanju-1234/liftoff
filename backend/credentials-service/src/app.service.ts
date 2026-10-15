@@ -5,7 +5,7 @@ import {
   Nack,
 } from '@golevelup/nestjs-rabbitmq';
 import { PrismaService } from './prisma.service';
-import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { Prisma } from '.prisma/credentials-client';
 import * as crypto from 'crypto';
 import type { TenantDnsReadyPayload } from '@liftoff/shared-types';
 
@@ -56,7 +56,7 @@ export class AppService {
       );
     } catch (error) {
       if (
-        error instanceof PrismaClientKnownRequestError &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
         this.logger.warn(
