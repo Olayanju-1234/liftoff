@@ -54,3 +54,81 @@ jobs:
       - name: E2E
         if: matrix.workspace == 'api-gateway'
         run: npm run test:e2e --workspace=api-gateway
+
+  # Boots each production image the way Render runs it. The e2e suite resolves
+  # packages from the hoisted workspace node_modules, so only this catches a
+  # runtime dependency declared in the wrong workspace or in devDependencies.
+  image:
+    name: ${{ matrix.service }} image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api-gateway, tenant-service]
+    # tenant-service needs both to boot; the gateway leg ignores them.
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: tenant_db
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci -d tenant_db"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      rabbitmq:
+        image: rabbitmq:3.12-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: ci
+          RABBITMQ_DEFAULT_PASS: ci
+        ports: ['5672:5672']
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: backend/${{ matrix.service }}/Dockerfile
+          tags: liftoff-${{ matrix.service }}:ci
+          load: true
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Boot image
+        run: |
+          docker run -d --name app --network host \
+            -e NODE_ENV=production \
+            -e PORT=10000 \
+            -e TENANT_SERVICE_URL=http://localhost:3001 \
+            -e DATABASE_URL='postgresql://ci:ci@localhost:5432/tenant_db?schema=public' \
+            -e RABBITMQ_URL=amqp://ci:ci@localhost:5672 \
+            -e JWT_SECRET=ci-access-secret-at-least-32-characters \
+            -e JWT_REFRESH_SECRET=ci-refresh-secret-at-least-32-characters \
+            liftoff-${{ matrix.service }}:ci
+
+      - name: Wait for /health and /api/docs
+        run: |
+          status() { curl -s -o /dev/null -w '%{http_code}' "http://localhost:10000$1"; }
+          for _ in $(seq 30); do
+            if [ "$(status /health)" = 200 ] && [ "$(status /api/docs)" = 200 ]; then
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' app)" != true ]; then
+              echo "::error::${{ matrix.service }} exited during startup"
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "::error::${{ matrix.service }} did not serve 200 on /health and /api/docs within 60s"
+          exit 1
+
+      - name: Container logs
+        if: failure()
+        run: docker logs app
