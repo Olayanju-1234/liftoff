@@ -111,10 +111,11 @@ export class AppService {
             : null,
         },
       );
-    } catch (error: any) {
+    } catch (error) {
+      const err = error instanceof Error ? error : undefined;
       this.logger.error(
-        `Failed to create Stripe subscription for tenant ${payload.tenantId}: ${error.message}`,
-        error.stack,
+        `Failed to create Stripe subscription for tenant ${payload.tenantId}: ${err?.message ?? String(error)}`,
+        err?.stack,
       );
       return new Nack(false);
     }
