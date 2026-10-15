@@ -2,8 +2,10 @@
 set -e
 
 echo "Starting tenant-service..."
-echo "Applying Prisma schema..."
 cd /usr/src/app/backend/tenant-service
+echo "Moving any legacy public.Credential table to the credentials schema..."
+npx prisma db execute --file prisma/handoff-credential-table.sql --schema prisma/schema.prisma
+echo "Applying Prisma schema..."
 npx prisma db push --skip-generate
 echo "Schema applied."
 

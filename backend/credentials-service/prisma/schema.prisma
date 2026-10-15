@@ -8,6 +8,9 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  // Shares tenant-service's database; pinning the schema keeps `db push` from diffing
+  // (and dropping) tenant-service's tables in public.
+  schemas  = ["credentials"]
 }
 
 model Credential {
@@ -17,4 +20,6 @@ model Credential {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@schema("credentials")
 }
