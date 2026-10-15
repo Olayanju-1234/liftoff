@@ -69,9 +69,9 @@ rabbitmqadmin -V <vhost> publish exchange=provisioning.direct routing_key=tenant
 
 The worker processes it again. If it succeeds, the saga continues from that
 step, and tenant-service marks the tenant `ACTIVE` when
-`tenant.provisioning.complete` arrives. Until then the tenant still reads
-`FAILED`. If the step fails again, the message dead-letters again and the tenant
-gets a new `tenant.provisioning.failed` event.
+`tenant.provisioning.complete` arrives. Until then the tenant and the failed
+step still read `FAILED`. If the step fails again, the message dead-letters
+again and the tenant gets a new `tenant.provisioning.failed` event.
 
 If every parked message has the same key, the management UI's "Move messages"
 (shovel plugin) can move them straight into that worker's queue instead.

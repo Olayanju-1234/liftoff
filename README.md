@@ -96,6 +96,8 @@ Provisioning states: `PROVISIONING → ACTIVE | FAILED | CANCELLED`
 
 Step statuses: `PENDING → IN_PROGRESS → SUCCESS | FAILED | CANCELLED`
 
+Steps never move backwards. Each worker consumes its event in parallel with tenant-service, so a step can finish before tenant-service records its start. tenant-service therefore marks a step `IN_PROGRESS` only while it is still `PENDING`.
+
 ### Billing Service
 
 Subscribes to `tenant.credentials.ready`. Validates Stripe Price IDs at startup (fails fast if any env var is missing). Creates a Stripe Customer and Subscription with a 14-day trial, then publishes `tenant.billing.active` with the real Stripe IDs.
