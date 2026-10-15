@@ -3,6 +3,7 @@ import {
   Nack,
   RABBIT_HANDLER,
 } from '@golevelup/nestjs-rabbitmq';
+import { PLAN_IDS } from '@liftoff/shared-types';
 import type {
   TenantBillingActivePayload,
   TenantCredentialsReadyPayload,
@@ -137,6 +138,19 @@ describe('AppService', () => {
     );
   });
 
+  it.each(PLAN_IDS)(
+    'subscribes the shared plan id %s to its Stripe price',
+    async (planId) => {
+      const service = await createService();
+
+      await service.handleTenantCredentialsReady({ ...payload, planId });
+
+      expect(mockStripe.subscriptions.create).toHaveBeenCalledWith(
+        expect.objectContaining({ items: [{ price: `price_${planId}` }] }),
+      );
+    },
+  );
+
   it('matches the plan id case-insensitively', async () => {
     const service = await createService();
 
@@ -235,6 +249,21 @@ describe('AppService', () => {
         billingActive,
       );
     });
+
+    it.each(PLAN_IDS)(
+      'simulates a subscription for the shared plan id %s',
+      async (planId) => {
+        const service = await createService();
+
+        await service.handleTenantCredentialsReady({ ...payload, planId });
+
+        expect(amqp.publish).toHaveBeenCalledWith(
+          'provisioning.direct',
+          'tenant.billing.active',
+          expect.objectContaining({ planId }),
+        );
+      },
+    );
 
     it('nacks without requeue for an unknown plan', async () => {
       const service = await createService();

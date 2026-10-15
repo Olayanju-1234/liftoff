@@ -7,7 +7,6 @@ import {
 import Stripe from 'stripe';
 import * as sharedTypes from '@liftoff/shared-types';
 
-const SIMULATED_PLANS = ['starter', 'pro', 'enterprise'];
 const TRIAL_DAYS = 14;
 
 @Injectable()
@@ -24,7 +23,7 @@ export class AppService {
       );
       this.stripe = null;
       this.planPriceMap = Object.fromEntries(
-        SIMULATED_PLANS.map((plan) => [plan, `sim_price_${plan}`]),
+        sharedTypes.PLAN_IDS.map((plan) => [plan, `sim_price_${plan}`]),
       );
       return;
     }
@@ -33,7 +32,7 @@ export class AppService {
       apiVersion: '2025-02-24.acacia',
     });
 
-    const map: Record<string, string> = {
+    const map: Record<sharedTypes.PlanId, string> = {
       starter: process.env.STRIPE_PRICE_STARTER ?? '',
       pro: process.env.STRIPE_PRICE_PRO ?? '',
       enterprise: process.env.STRIPE_PRICE_ENTERPRISE ?? '',

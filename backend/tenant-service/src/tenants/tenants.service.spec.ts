@@ -4,11 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
+import { AmqpConnection, RABBIT_HANDLER } from '@golevelup/nestjs-rabbitmq';
 import { Prisma, StepStatus, TenantStatus } from '.prisma/tenant-client';
 
 import { TenantsService } from './tenants.service';
 import { PrismaService } from '../prisma.service';
+import { DEAD_LETTER_QUEUE, type DeadLetterMessage } from './dead-letters';
 
 type MockPrisma = {
   plan: { findFirst: jest.Mock; create: jest.Mock };
@@ -17,6 +18,10 @@ type MockPrisma = {
     findUnique: jest.Mock;
     findMany: jest.Mock;
     update: jest.Mock<Promise<unknown>, [Prisma.TenantUpdateArgs]>;
+    updateMany: jest.Mock<
+      Promise<{ count: number }>,
+      [Prisma.TenantUpdateManyArgs]
+    >;
     delete: jest.Mock;
   };
   eventLog: { create: jest.Mock; findMany: jest.Mock };
@@ -29,6 +34,10 @@ const buildPrisma = (): MockPrisma => ({
     findUnique: jest.fn(),
     findMany: jest.fn(),
     update: jest.fn<Promise<unknown>, [Prisma.TenantUpdateArgs]>(),
+    updateMany: jest.fn<
+      Promise<{ count: number }>,
+      [Prisma.TenantUpdateManyArgs]
+    >(),
     delete: jest.fn(),
   },
   eventLog: { create: jest.fn().mockResolvedValue({}), findMany: jest.fn() },
@@ -79,8 +88,37 @@ describe('TenantsService', () => {
           subdomain: 'acme',
           planId: 'starter',
         },
+        { timeout: 5_000 },
       );
       expect(result.id).toBe('tenant-1');
+    });
+
+    it('fails the tenant at its first step when tenant.requested cannot be published', async () => {
+      prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
+      prisma.tenant.create.mockResolvedValueOnce({
+        id: 'tenant-1',
+        subdomain: 'acme',
+        planId: 'starter',
+      });
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+      amqp.publish.mockRejectedValueOnce(new Error('timeout'));
+
+      await expect(service.create(baseDto)).rejects.toThrow('timeout');
+
+      const [[{ data }]] = prisma.tenant.updateMany.mock.calls;
+      expect(data).toEqual({
+        status: TenantStatus.FAILED,
+        dbStatus: StepStatus.FAILED,
+      });
+      expect(prisma.eventLog.create).toHaveBeenLastCalledWith({
+        data: expect.objectContaining({
+          eventType: 'tenant.provisioning.failed',
+          payload: {
+            step: 'dbStatus',
+            error: 'Could not publish tenant.requested: timeout',
+          },
+        }) as unknown,
+      });
     });
 
     it('creates plan on the fly when missing', async () => {
@@ -146,6 +184,165 @@ describe('TenantsService', () => {
       const [[updateCall]] = prisma.tenant.update.mock.calls;
       expect(updateCall.data.status).toBe(TenantStatus.ACTIVE);
       expect(updateCall.data.notificationStatus).toBe(StepStatus.SUCCESS);
+    });
+  });
+
+  describe('failStep', () => {
+    it('fails the step and the tenant, then logs an Error event', async () => {
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await expect(
+        service.failStep('t', 'billingStatus', 'billing-queue rejected', {
+          deadLetterKey: 'billing.failed',
+        }),
+      ).resolves.toBe(true);
+
+      expect(prisma.tenant.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 't',
+          status: { in: [TenantStatus.PROVISIONING, TenantStatus.FAILED] },
+        },
+        data: {
+          status: TenantStatus.FAILED,
+          billingStatus: StepStatus.FAILED,
+        },
+      });
+      expect(prisma.eventLog.create).toHaveBeenCalledWith({
+        data: {
+          tenantId: 't',
+          eventType: 'tenant.provisioning.failed',
+          status: 'Error',
+          payload: {
+            step: 'billingStatus',
+            error: 'billing-queue rejected',
+            deadLetterKey: 'billing.failed',
+          },
+        },
+      });
+    });
+
+    it('leaves a tenant that is gone, active or cancelled alone', async () => {
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.failStep('t', 'dbStatus', 'x')).resolves.toBe(false);
+      expect(prisma.eventLog.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('dead letters', () => {
+    const deadLetter = (
+      routingKey: string,
+      headers?: DeadLetterMessage['properties']['headers'],
+    ): DeadLetterMessage => ({
+      fields: { routingKey },
+      properties: { headers },
+    });
+
+    const payload = { tenantId: 't', subdomain: 'acme', planId: 'pro' };
+
+    it('consumes every worker failure key from dlx.provisioning on its own queue', () => {
+      // SetMetadata stores method metadata on the function itself.
+      const handler: unknown = Object.getOwnPropertyDescriptor(
+        TenantsService.prototype,
+        'handleDeadLetter',
+      )?.value;
+      const config: unknown = Reflect.getMetadata(
+        RABBIT_HANDLER,
+        handler as object,
+      );
+
+      expect(config).toMatchObject({
+        type: 'subscribe',
+        exchange: 'dlx.provisioning',
+        queue: 'tenant-service-dead-letter-queue',
+        queueOptions: { durable: true },
+      });
+      expect((config as { routingKey: string[] }).routingKey).toEqual(
+        expect.arrayContaining([
+          'db-provisioner.failed',
+          'dns-provisioner.failed',
+          'credentials.failed',
+          'billing.failed',
+          'notification.failed',
+        ]),
+      );
+    });
+
+    it('keeps a durable, capped copy of every dead letter in provisioning.dead-letters', () => {
+      expect(DEAD_LETTER_QUEUE).toEqual({
+        name: 'provisioning.dead-letters',
+        exchange: 'dlx.provisioning',
+        routingKey: [
+          'db-provisioner.failed',
+          'dns-provisioner.failed',
+          'credentials.failed',
+          'billing.failed',
+          'notification.failed',
+        ],
+        options: { durable: true, maxLength: 10_000 },
+      });
+      // A separate queue, so consuming one copy never empties the other.
+      expect(DEAD_LETTER_QUEUE.name).not.toBe(
+        'tenant-service-dead-letter-queue',
+      );
+    });
+
+    it.each([
+      ['db-provisioner.failed', 'dbStatus'],
+      ['dns-provisioner.failed', 'dnsStatus'],
+      ['credentials.failed', 'credentialsStatus'],
+      ['billing.failed', 'billingStatus'],
+      ['notification.failed', 'notificationStatus'],
+    ])('marks the step for %s as FAILED', async (routingKey, step) => {
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await service.handleDeadLetter(payload, deadLetter(routingKey));
+
+      const [[{ data }]] = prisma.tenant.updateMany.mock.calls;
+      expect(data).toEqual({
+        status: TenantStatus.FAILED,
+        [step]: StepStatus.FAILED,
+      });
+    });
+
+    it('reports the rejecting queue and original routing key from x-death', async () => {
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await service.handleDeadLetter(
+        payload,
+        deadLetter('db-provisioner.failed', {
+          'x-death': [
+            {
+              queue: 'db-provisioner-queue',
+              reason: 'rejected',
+              'routing-keys': ['tenant.requested'],
+            },
+          ],
+        }),
+      );
+
+      expect(prisma.eventLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'tenant.provisioning.failed',
+          status: 'Error',
+          payload: {
+            step: 'dbStatus',
+            error: 'db-provisioner-queue rejected tenant.requested',
+            deadLetterKey: 'db-provisioner.failed',
+          },
+        }) as unknown,
+      });
+    });
+
+    it('ignores a dead letter without a tenantId or with an unknown key', async () => {
+      await service.handleDeadLetter(
+        { subdomain: 'acme' },
+        deadLetter('billing.failed'),
+      );
+      await service.handleDeadLetter(payload, deadLetter('mystery.failed'));
+      await service.handleDeadLetter(undefined, deadLetter('billing.failed'));
+
+      expect(prisma.tenant.updateMany).not.toHaveBeenCalled();
     });
   });
 

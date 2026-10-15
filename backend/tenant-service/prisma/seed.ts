@@ -1,58 +1,55 @@
+import { Logger } from '@nestjs/common';
 import { PrismaClient } from '.prisma/tenant-client';
+import { PLAN_IDS } from '@liftoff/shared-types';
+import { LEGACY_PLAN_IDS, PLAN_CATALOG } from '../src/tenants/plans';
 
 const prisma = new PrismaClient();
+const logger = new Logger('Seed');
+
+async function seedPlan(id: (typeof PLAN_IDS)[number]) {
+  const defaults = PLAN_CATALOG[id];
+  const legacyId = LEGACY_PLAN_IDS[id];
+  const [current, legacy] = await Promise.all([
+    prisma.plan.findUnique({ where: { id } }),
+    prisma.plan.findUnique({ where: { id: legacyId } }),
+  ]);
+
+  if (legacy && !current) {
+    // Tenant.planId follows the rename through ON UPDATE CASCADE.
+    return prisma.plan.update({
+      where: { id: legacyId },
+      data: { id, ...defaults },
+    });
+  }
+
+  if (legacy && current) {
+    await prisma.tenant.updateMany({
+      where: { planId: legacyId },
+      data: { planId: id },
+    });
+    await prisma.plan.delete({ where: { id: legacyId } });
+  }
+
+  return prisma.plan.upsert({
+    where: { id },
+    update: {},
+    create: { id, ...defaults },
+  });
+}
 
 async function main() {
-    console.log('🌱 Seeding database...');
-
-    // Create default plans
-    const basicPlan = await prisma.plan.upsert({
-        where: { id: 'plan_basic' },
-        update: {},
-        create: {
-            id: 'plan_basic',
-            name: 'Basic',
-            maxUsers: 5,
-            maxApiKeys: 2,
-        },
-    });
-
-    const proPlan = await prisma.plan.upsert({
-        where: { id: 'plan_pro' },
-        update: {},
-        create: {
-            id: 'plan_pro',
-            name: 'Professional',
-            maxUsers: 25,
-            maxApiKeys: 10,
-        },
-    });
-
-    const enterprisePlan = await prisma.plan.upsert({
-        where: { id: 'plan_enterprise' },
-        update: {},
-        create: {
-            id: 'plan_enterprise',
-            name: 'Enterprise',
-            maxUsers: 1000,
-            maxApiKeys: 100,
-        },
-    });
-
-    console.log('✅ Created plans:', {
-        basic: basicPlan,
-        pro: proPlan,
-        enterprise: enterprisePlan,
-    });
-
-    console.log('🎉 Seeding completed successfully!');
+  logger.log('Seeding plans');
+  for (const id of PLAN_IDS) {
+    const plan = await seedPlan(id);
+    logger.log(`Plan ${JSON.stringify(plan)}`);
+  }
 }
 
 main()
-    .catch((e) => {
-        console.error('❌ Error seeding database:', e);
-        process.exit(1);
-    })
-    .finally(async () => {
-        await prisma.$disconnect();
-    });
+  .catch((e: unknown) => {
+    logger.error(
+      `Seeding failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    process.exit(1);
+  })
+  .finally(() => prisma.$disconnect());

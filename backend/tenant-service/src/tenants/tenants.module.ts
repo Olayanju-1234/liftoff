@@ -6,6 +6,7 @@ import { TenantsController } from './tenants.controller';
 import { PrismaService } from '../prisma.service';
 import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
 import { ProvisioningTimeoutService } from './provisioning-timeout.service';
+import { DEAD_LETTER_EXCHANGE, DEAD_LETTER_QUEUE } from './dead-letters';
 
 @Module({
   imports: [
@@ -23,13 +24,14 @@ import { ProvisioningTimeoutService } from './provisioning-timeout.service';
           },
         },
         {
-          name: 'dlx.provisioning',
+          name: DEAD_LETTER_EXCHANGE,
           type: 'direct',
           options: {
             durable: true,
           },
         },
       ],
+      queues: [DEAD_LETTER_QUEUE],
       uri:
         process.env.RABBITMQ_URL || 'amqp://devuser:devpassword@localhost:5672',
       connectionInitOptions: { wait: false, reject: false },
@@ -39,5 +41,6 @@ import { ProvisioningTimeoutService } from './provisioning-timeout.service';
   ],
   controllers: [TenantsController],
   providers: [TenantsService, PrismaService, ProvisioningTimeoutService],
+  exports: [TenantsService],
 })
 export class TenantsModule {}
