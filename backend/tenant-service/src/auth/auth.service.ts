@@ -9,6 +9,10 @@ import { PrismaService } from '../prisma.service';
 import * as bcrypt from 'bcrypt';
 import { RegisterDto, LoginDto } from './dto/auth.dto';
 import { ConfigService } from '@nestjs/config';
+import { StepStatus } from '.prisma/tenant-client';
+import { TenantsService } from '../tenants/tenants.service';
+import { DEFAULT_PLAN_ID, PLAN_CATALOG } from '../tenants/plans';
+import { errorMessage } from '../common/error-message';
 
 export interface JwtPayload {
   sub: string;
@@ -37,6 +41,7 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private tenantsService: TenantsService,
   ) {}
 
   async register(dto: RegisterDto): Promise<TokenResponse> {
@@ -58,17 +63,12 @@ export class AuthService {
       throw new ConflictException('Subdomain already taken');
     }
 
-    // Get or create default plan
-    let plan = await this.prisma.plan.findFirst();
-    if (!plan) {
-      plan = await this.prisma.plan.create({
-        data: {
-          name: 'Basic',
-          maxUsers: 10,
-          maxApiKeys: 5,
-        },
-      });
-    }
+    // Billing must be able to price the workspace, so never pick an arbitrary plan.
+    const plan = await this.prisma.plan.upsert({
+      where: { id: DEFAULT_PLAN_ID },
+      update: {},
+      create: { id: DEFAULT_PLAN_ID, ...PLAN_CATALOG[DEFAULT_PLAN_ID] },
+    });
 
     // Hash password
     const hashedPassword = await bcrypt.hash(dto.password, 10);
@@ -80,6 +80,7 @@ export class AuthService {
           name: dto.tenantName,
           subdomain: dto.subdomain,
           planId: plan.id,
+          dbStatus: StepStatus.IN_PROGRESS,
         },
       });
 
@@ -95,6 +96,8 @@ export class AuthService {
 
       return { tenant, user };
     });
+
+    await this.provisionWorkspace(result.tenant);
 
     // Generate tokens
     const tokens = await this.generateTokens(result.user);
@@ -114,6 +117,19 @@ export class AuthService {
         tenantId: result.user.tenantId,
       },
     };
+  }
+
+  // The account exists by now; startProvisioning has already marked the tenant FAILED.
+  private async provisionWorkspace(
+    tenant: Parameters<TenantsService['startProvisioning']>[0],
+  ) {
+    try {
+      await this.tenantsService.startProvisioning(tenant);
+    } catch (error) {
+      this.logger.error(
+        `Could not start provisioning workspace ${tenant.id}: ${errorMessage(error)}`,
+      );
+    }
   }
 
   async login(dto: LoginDto): Promise<TokenResponse> {
