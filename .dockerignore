@@ -1,12 +1,11 @@
 # Dependencies
-node_modules
-*/node_modules
+**/node_modules
 
 # Build outputs
-dist
-*/dist
-build
-*/build
+**/dist
+**/build
+# Tracked and not rebuilt by the Dockerfiles, which ship it from the build context
+!packages/shared-types/dist
 
 # Git
 .git
