@@ -6,10 +6,10 @@ import {
   HttpCode,
   HttpStatus,
   Param,
-  ParseUUIDPipe,
   Post,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ParseCuidPipe } from '../common/parse-cuid.pipe';
 import { TenantsService } from './tenants.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { CancelTenantDto } from './dto/cancel-tenant.dto';
@@ -41,13 +41,13 @@ export class TenantsController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Get tenant with plan and last 100 events' })
-  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
+  findOne(@Param('id', ParseCuidPipe) id: string) {
     return this.tenantsService.findOne(id);
   }
 
   @Get(':id/events')
   @ApiOperation({ summary: 'Event log for a single tenant (most recent 200)' })
-  findEvents(@Param('id', new ParseUUIDPipe()) id: string) {
+  findEvents(@Param('id', ParseCuidPipe) id: string) {
     return this.tenantsService.findEvents(id);
   }
 
@@ -55,7 +55,7 @@ export class TenantsController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Cancel an in-progress provisioning pipeline' })
   cancel(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('id', ParseCuidPipe) id: string,
     @Body() cancelDto: CancelTenantDto,
   ) {
     return this.tenantsService.cancel(id, cancelDto.reason);
@@ -63,7 +63,7 @@ export class TenantsController {
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete tenant and emit tenant.deleted' })
-  delete(@Param('id', new ParseUUIDPipe()) id: string) {
+  delete(@Param('id', ParseCuidPipe) id: string) {
     return this.tenantsService.delete(id);
   }
 }
