@@ -299,10 +299,12 @@ docker-compose up -d postgres_db rabbitmq
 # Copy and fill env files for each service (.env files are gitignored)
 for f in backend/*/.env.example frontend/.env.example; do cp -n "$f" "${f%.example}"; done
 
-# Run migrations
-cd backend/tenant-service && npx prisma migrate dev && cd ../..
-cd backend/db-provisioner-service && npx prisma migrate dev && cd ../..
-cd backend/credentials-service && npx prisma migrate dev && cd ../..
+# Create tables and generate Prisma clients. All three share tenant_db:
+# tenant-service owns the public schema, credentials-service owns credentials
+cd backend/tenant-service && npx prisma db push && npx prisma db seed && cd ../..
+cd backend/credentials-service && npx prisma db push && cd ../..
+# db-provisioner-service owns no tables, so it only needs its client
+cd backend/db-provisioner-service && npx prisma generate && cd ../..
 
 # Start all services
 npm run dev
@@ -339,7 +341,10 @@ migration steps are written up in
 - `NODE_ENV`, `PORT`, `RABBITMQ_URL`
 
 **Tenant Service, DB Provisioner, Credentials Service:**
-- `DATABASE_URL` (PostgreSQL connection string)
+- `DATABASE_URL` (PostgreSQL connection string). All three use the same
+  database. tenant-service manages the `public` schema and credentials-service
+  the `credentials` schema (pinned in its `schema.prisma`). db-provisioner-service
+  manages no tables; it only creates a `tenant_<subdomain>` schema per tenant.
 
 **Billing Service:**
 - `STRIPE_SECRET_KEY`, `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_ENTERPRISE`
@@ -456,7 +461,8 @@ where the cracks are as it is about the code that ships.
 - **Per-tenant rate limiting.** The throttler is currently per-IP; per-tenant
   quotas (especially on the `POST /tenants` endpoint) would prevent one
   noisy customer from monopolizing pipeline capacity.
-- **Schema migrations as a deploy artifact.** Today migrations are applied
-  on dev with `prisma migrate dev`. Production needs a separate
+- **Schema migrations as a deploy artifact.** Today there are no committed
+  migrations: tenant-service and credentials-service run `prisma db push`
+  against their own schema on boot. Production needs a separate
   `prisma migrate deploy` job that runs once per release before the new
   service version takes traffic.
