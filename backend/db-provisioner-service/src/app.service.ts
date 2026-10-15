@@ -44,18 +44,22 @@ export class AppService {
 
       this.logger.log({ schemaName }, `SUCCESS: Created schema ${schemaName}`);
 
+      const dbReady: TenantDbReadyPayload = {
+        tenantId: payload.tenantId,
+        subdomain: payload.subdomain,
+        planId: payload.planId,
+      };
       await this.amqpConnection.publish(
         'provisioning.direct',
         'tenant.db.ready',
-        {
-          tenantId: payload.tenantId,
-          subdomain: payload.subdomain,
-          planId: payload.planId,
-        },
+        dbReady,
       );
     } catch (error) {
       this.logger.error(
-        { err: error.message, payload },
+        {
+          err: error instanceof Error ? error.message : String(error),
+          payload,
+        },
         'FAILED to create schema.',
       );
       return new Nack(false);
