@@ -4,7 +4,7 @@
 
 A production-grade microservices platform that automates the full lifecycle of tenant provisioning through an event-driven pipeline. Built to demonstrate distributed systems design, Stripe billing integration, and choreography-based saga patterns.
 
-**[Live dashboard](https://liftoff-frontend-psi.vercel.app)** · frontend on Vercel, seven services on Render's free tier (the first request after idle can take up to a minute)
+**[Live dashboard](https://liftoff.ojusentinel.com)** · [API docs](https://api.liftoff.ojusentinel.com/api/docs) · all seven services, RabbitMQ and PostgreSQL on one 1-vCPU ARM VPS behind nginx
 
 **At a glance:** 7 NestJS services · RabbitMQ choreography saga with a dead-letter exchange · schema-per-tenant PostgreSQL · Stripe customers and subscriptions with 14-day trials · stuck-pipeline sweeper · ADRs for the outbox pattern and Render vs AWS
 
@@ -322,14 +322,19 @@ cd backend/billing-service && npm run start:dev
 
 ## Deployment
 
-Deployed on Render using Docker. Each service has its own web service instance built from the monorepo root context.
+The live demo runs on a single 1-vCPU ARM VPS. Each service is a systemd unit
+capped at 256 MB, RabbitMQ and PostgreSQL listen on localhost only, and nginx
+terminates TLS, proxies the gateway and serves the built frontend. At idle the
+whole platform, broker included, uses about 400 MB.
 
-A `render.yaml` at the repo root defines all service configurations with `dockerContext: .` to ensure the Dockerfiles can resolve workspace dependencies correctly.
+The Dockerfiles and the `render.yaml` at the repo root still work for a Render
+deploy. `render.yaml` builds every service with `dockerContext: .` so the
+Dockerfiles can resolve workspace dependencies.
 
-### Why Render and not AWS
+### Why not AWS
 
-For the current portfolio scope, Render is a one-file infra spec on a free
-tier; AWS would cost $50–80/mo for the seven-service footprint and add a day
+For the current portfolio scope, one VPS (or Render, via `render.yaml`) is
+enough; AWS would cost $50–80/mo for the seven-service footprint and add a day
 of CDK/Terraform without changing any application code. Containers are
 already multi-stage and non-root, so the migration target is "swap the
 deploy target" rather than "rewrite the platform." The full AWS architecture
@@ -348,8 +353,9 @@ migration steps are written up in
   the `credentials` schema (pinned in its `schema.prisma`). db-provisioner-service
   manages no tables; it only creates a `tenant_<subdomain>` schema per tenant.
 
-**Billing Service:**
+**Billing Service (optional Stripe):**
 - `STRIPE_SECRET_KEY`, `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_ENTERPRISE`
+  (without a key, subscriptions are simulated so the saga still completes, like DNS provisioning)
 
 **Tenant Service (optional email):**
 - `SENDGRID_API_KEY`, `EMAIL_FROM` (emails are only logged when the API key is unset)
