@@ -53,7 +53,7 @@ describe('API Gateway (e2e)', () => {
   });
 
   afterEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
   });
 
   afterAll(async () => {
@@ -94,6 +94,63 @@ describe('API Gateway (e2e)', () => {
 
     expect(res.statusCode).toBe(400);
     expect(http.post).not.toHaveBeenCalled();
+  });
+
+  describe('tenant id routes', () => {
+    // Real id from tenant-service's @default(cuid()).
+    const tenantId = 'cmv9gs7040002vyzf6leznb2s';
+    const headers = { authorization: 'Bearer user.jwt.token' };
+    const forwarded = { headers: { Authorization: 'Bearer user.jwt.token' } };
+
+    it.each([
+      ['GET', `/tenants/${tenantId}`, 'get'],
+      ['GET', `/tenants/${tenantId}/events`, 'get'],
+      ['DELETE', `/tenants/${tenantId}`, 'delete'],
+    ] as const)('%s %s proxies a cuid', async (method, url, verb) => {
+      http[verb].mockReturnValueOnce(of({ data: { id: tenantId } }));
+
+      const res = await app.inject({ method, url, headers });
+
+      expect(res.statusCode).toBe(200);
+      expect(http[verb]).toHaveBeenCalledWith(url, forwarded);
+    });
+
+    it('POST /tenants/:id/cancel proxies a cuid with the body', async () => {
+      http.post.mockReturnValueOnce(of({ data: { id: tenantId } }));
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/tenants/${tenantId}/cancel`,
+        headers,
+        payload: { reason: 'Customer changed plan' },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(http.post).toHaveBeenCalledWith(
+        `/tenants/${tenantId}/cancel`,
+        { reason: 'Customer changed plan' },
+        forwarded,
+      );
+    });
+
+    it.each([
+      ['GET', '/tenants/3f2b8c1e-9a4d-4e7b-8c2f-1d5e6a7b8c9d'],
+      ['GET', '/tenants/..%2Fsettings'],
+      ['GET', '/tenants/..%2F..%2Fauth%2Fme/events'],
+      ['DELETE', `/tenants/${tenantId}%3Fforce%3Dtrue`],
+      ['POST', `/tenants/${tenantId.toUpperCase()}/cancel`],
+    ] as const)('%s %s is rejected before proxying', async (method, url) => {
+      const payload = method === 'POST' ? {} : undefined;
+      const res = await app.inject({ method, url, headers, payload });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json<{ message: string }>().message).toBe(
+        'Validation failed (cuid is expected)',
+      );
+      expect(http.get).not.toHaveBeenCalled();
+      expect(http.post).not.toHaveBeenCalled();
+      expect(http.delete).not.toHaveBeenCalled();
+    });
   });
 
   it('passes a downstream 401 back to the client', async () => {
