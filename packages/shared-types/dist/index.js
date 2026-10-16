@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PLAN_IDS = exports.UpdateSettingsDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
+exports.PLAN_IDS = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
 class CreateTenantDto {
@@ -133,7 +133,9 @@ __decorate([
     __metadata("design:type", String)
 ], UpdateSettingsDto.prototype, "lastName", void 0);
 __decorate([
-    (0, swagger_1.ApiPropertyOptional)(),
+    (0, swagger_1.ApiPropertyOptional)({
+        description: 'A new email stays pending until the link sent to it is confirmed.',
+    }),
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsEmail)(),
     __metadata("design:type", String)
@@ -150,5 +152,15 @@ __decorate([
     (0, class_validator_1.IsBoolean)(),
     __metadata("design:type", Boolean)
 ], UpdateSettingsDto.prototype, "failedJobAlerts", void 0);
+class ConfirmEmailChangeDto {
+}
+exports.ConfirmEmailChangeDto = ConfirmEmailChangeDto;
+__decorate([
+    (0, swagger_1.ApiProperty)({ description: 'Token from the confirmation link' }),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.MaxLength)(200),
+    __metadata("design:type", String)
+], ConfirmEmailChangeDto.prototype, "token", void 0);
 exports.PLAN_IDS = ['starter', 'pro', 'enterprise'];
 //# sourceMappingURL=index.js.map

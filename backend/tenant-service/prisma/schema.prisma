@@ -62,7 +62,9 @@ model User {
   emailVerified    Boolean   @default(false)
   verificationToken String?
   verificationExpiry DateTime?
-  
+  // Replaces email only once the verification token above is confirmed.
+  pendingEmail     String?
+
   // Password reset
   resetToken       String?
   resetTokenExpiry DateTime?

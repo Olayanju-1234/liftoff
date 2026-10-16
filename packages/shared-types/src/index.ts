@@ -121,7 +121,10 @@ export class UpdateSettingsDto {
   @MaxLength(100)
   lastName?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'A new email stays pending until the link sent to it is confirmed.',
+  })
   @IsOptional()
   @IsEmail()
   email?: string;
@@ -135,6 +138,14 @@ export class UpdateSettingsDto {
   @IsOptional()
   @IsBoolean()
   failedJobAlerts?: boolean;
+}
+
+export class ConfirmEmailChangeDto {
+  @ApiProperty({ description: 'Token from the confirmation link' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  token: string;
 }
 
 // ============================================================================
