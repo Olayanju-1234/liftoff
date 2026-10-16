@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { PrismaClient } from '.prisma/tenant-client';
 import { PLAN_IDS } from '@liftoff/shared-types';
 import { LEGACY_PLAN_IDS, PLAN_CATALOG } from '../src/tenants/plans';
+import { backfillTenantOwners } from '../src/tenants/backfill-owners';
 
 const prisma = new PrismaClient();
 const logger = new Logger('Seed');
@@ -43,6 +44,9 @@ async function main() {
     const plan = await seedPlan(id);
     logger.log(`Plan ${JSON.stringify(plan)}`);
   }
+
+  const owned = await backfillTenantOwners(prisma);
+  logger.log(`Backfilled owners on ${owned} tenant(s)`);
 }
 
 main()
