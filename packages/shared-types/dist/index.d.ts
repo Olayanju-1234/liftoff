@@ -27,6 +27,9 @@ export declare class UpdateSettingsDto {
     emailNotifications?: boolean;
     failedJobAlerts?: boolean;
 }
+export declare class ConfirmEmailChangeDto {
+    token: string;
+}
 export declare const PLAN_IDS: readonly ["starter", "pro", "enterprise"];
 export type PlanId = (typeof PLAN_IDS)[number];
 export interface TenantRequestedPayload {

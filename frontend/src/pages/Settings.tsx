@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LogOut } from 'lucide-react';
+import { LogOut, MailCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getSettings, saveSettings } from '../lib/api';
 import { useResource } from '../lib/hooks';
@@ -43,13 +43,18 @@ export default function Settings() {
 
     const handleSave = async (e: FormEvent) => {
         e.preventDefault();
-        if (!form) return;
+        if (!form || !current) return;
+        const emailChanged = form.email !== current.email;
         setSaving(true);
         try {
-            const next = await saveSettings({ firstName: form.firstName, lastName: form.lastName, email: form.email });
+            const next = await saveSettings({
+                firstName: form.firstName,
+                lastName: form.lastName,
+                ...(emailChanged && { email: form.email }),
+            });
             setSaved(next);
             setDraft(null);
-            toast.success('Profile saved');
+            toast.success(emailChanged ? `Check ${form.email} for a confirmation link` : 'Profile saved');
         } catch (err) {
             toast.error(apiMessage(err, 'Could not save the profile.'));
         } finally {
@@ -104,6 +109,16 @@ export default function Settings() {
                                 <input id="email" type="email" value={form.email ?? ''} onChange={(e) => edit({ email: e.target.value })} className={inputClass} />
                             </Field>
                         </div>
+                        {current?.pendingEmail && (
+                            <div role="status" className="mt-4 flex items-start gap-2.5 rounded border border-hold/35 bg-hold/[0.06] px-3 py-2.5 text-[14px] text-ink-2">
+                                <MailCheck size={16} className="mt-0.5 shrink-0 text-hold" />
+                                <p className="min-w-0">
+                                    Check <span className="break-all font-medium text-ink">{current.pendingEmail}</span> for a confirmation link. You
+                                    still sign in as <span className="break-all font-medium text-ink">{current.email}</span> until you open it. The link
+                                    expires in 24 hours.
+                                </p>
+                            </div>
+                        )}
                         <div className="mt-5 flex items-center justify-end gap-3 border-t border-rule pt-4">
                             {dirty && <span className="font-mono text-[11.5px] text-hold">unsaved changes</span>}
                             {dirty && (

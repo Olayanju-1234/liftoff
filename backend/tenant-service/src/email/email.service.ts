@@ -90,6 +90,33 @@ export class EmailService {
     });
   }
 
+  async sendEmailChangeConfirmation(
+    email: string,
+    token: string,
+  ): Promise<boolean> {
+    const confirmUrl = `${this.configService.get('FRONTEND_URL') || 'http://localhost:5173'}/confirm-email?token=${token}`;
+
+    return this.sendEmail({
+      to: email,
+      subject: 'Confirm your new Liftoff email',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h1 style="color: #6366f1;">Confirm your new email</h1>
+          <p>Someone asked to make this address the sign-in email for a Liftoff account. Nothing changes until you confirm:</p>
+          <a href="${confirmUrl}" style="display: inline-block; background: linear-gradient(to right, #6366f1, #8b5cf6); color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin: 16px 0;">
+            Confirm email
+          </a>
+          <p>Or copy and paste this link:</p>
+          <p style="color: #6b7280; word-break: break-all;">${confirmUrl}</p>
+          <p style="color: #9ca3af; font-size: 12px; margin-top: 32px;">
+            This link expires in 24 hours. If you didn't ask for this, ignore this email and the account keeps its current address.
+          </p>
+        </div>
+      `,
+      text: `Confirm your new Liftoff sign-in email by visiting: ${confirmUrl}\n\nThis link expires in 24 hours. If you didn't ask for this, ignore this email.`,
+    });
+  }
+
   async sendPasswordResetEmail(email: string, token: string): Promise<boolean> {
     const resetUrl = `${this.configService.get('FRONTEND_URL') || 'http://localhost:5173'}/reset-password?token=${token}`;
 

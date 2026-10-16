@@ -7,6 +7,7 @@ import Landing from './pages/Landing';
 
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
+const ConfirmEmail = lazy(() => import('./pages/ConfirmEmail'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const TenantManagement = lazy(() => import('./pages/TenantManagement'));
 const TenantDetail = lazy(() => import('./pages/TenantDetail'));
@@ -27,6 +28,7 @@ function App() {
                     <Routes>
                         <Route path="/login" element={<Login />} />
                         <Route path="/register" element={<Register />} />
+                        <Route path="/confirm-email" element={<ConfirmEmail />} />
                         <Route path="/about" element={<Landing />} />
 
                         <Route path="/" element={<ProtectedRoute />}>

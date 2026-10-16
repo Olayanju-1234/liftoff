@@ -4,6 +4,8 @@ import {
   Delete,
   Get,
   Headers,
+  HttpCode,
+  HttpStatus,
   Param,
   Post,
   Put,
@@ -17,6 +19,7 @@ import {
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import {
   CancelTenantDto,
+  ConfirmEmailChangeDto,
   CreateTenantDto,
   LoginDto,
   RefreshTokenDto,
@@ -193,12 +196,29 @@ export class AppController {
 
   @ApiTags('Settings')
   @ApiBearerAuth('bearer')
-  @ApiOperation({ summary: 'Update current user settings' })
+  @ApiOperation({
+    summary: 'Update current user settings',
+    description:
+      'A new email is emailed a confirmation link and stays in pendingEmail until confirmed.',
+  })
+  @ApiResponse({ status: 409, description: 'Email taken by another account' })
   @Put('settings')
   updateSettings(
     @Body() dto: UpdateSettingsDto,
     @Headers('authorization') auth: string,
   ) {
     return this.appService.updateSettings(dto, auth);
+  }
+
+  @ApiTags('Settings')
+  @ApiOperation({ summary: 'Confirm a pending email change' })
+  @ApiResponse({ status: 200, description: 'The new email is now the login' })
+  @ApiResponse({ status: 400, description: 'Invalid, used or expired link' })
+  @ApiResponse({ status: 409, description: 'Email taken by another account' })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('settings/email/confirm')
+  confirmEmailChange(@Body() dto: ConfirmEmailChangeDto) {
+    return this.appService.confirmEmailChange(dto);
   }
 }

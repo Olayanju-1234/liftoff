@@ -67,6 +67,8 @@ export interface UserSettings {
     firstName: string;
     lastName: string;
     email: string;
+    // Set while a new email waits for its confirmation link; `email` stays the sign-in address.
+    pendingEmail?: string | null;
     emailNotifications: boolean;
     failedJobAlerts: boolean;
 }

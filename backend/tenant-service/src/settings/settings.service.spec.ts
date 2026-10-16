@@ -1,15 +1,26 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { createHash } from 'crypto';
 import { Prisma } from '.prisma/tenant-client';
 
-import { SettingsService } from './settings.service';
+import { EMAIL_CHANGE_TTL_MS, SettingsService } from './settings.service';
 import { PrismaService } from '../prisma.service';
+import { EmailService } from '../email/email.service';
 
 interface UserRow {
   id: string;
   email: string;
   name: string | null;
   deletedAt: Date | null;
+  emailVerified: boolean;
+  pendingEmail: string | null;
+  verificationToken: string | null;
+  verificationExpiry: Date | null;
 }
 
 interface SettingsRow {
@@ -28,39 +39,75 @@ const strip = <T extends object>(values: T) =>
     Object.entries(values).filter(([, v]) => v !== undefined),
   ) as Partial<Defined<T>>;
 
-const p2002 = (target: string[]) =>
-  new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
-    code: 'P2002',
+const knownError = (code: string, meta?: Record<string, unknown>) =>
+  new Prisma.PrismaClientKnownRequestError(code, {
+    code,
     clientVersion: 'test',
-    meta: { target },
+    meta,
   });
+
+const user = (id: string, email: string, name: string | null): UserRow => ({
+  id,
+  email,
+  name,
+  deletedAt: null,
+  emailVerified: false,
+  pendingEmail: null,
+  verificationToken: null,
+  verificationExpiry: null,
+});
 
 // Answers the service's queries the way Postgres would for these rows.
 const buildPrisma = (users: UserRow[], settings: SettingsRow[]) => {
   const settingsOf = (userId: string) =>
     settings.find((s) => s.userId === userId) ?? null;
 
-  const prisma = {
+  const client = {
     user: {
       findUnique: jest.fn(({ where }: Prisma.UserFindUniqueArgs) => {
-        const user = users.find(
-          (u) => u.id === where.id && u.deletedAt === where.deletedAt,
-        );
+        const row =
+          where.email !== undefined
+            ? users.find((u) => u.email === where.email)
+            : users.find(
+                (u) => u.id === where.id && u.deletedAt === where.deletedAt,
+              );
         return Promise.resolve(
-          user && { ...user, settings: settingsOf(user.id) },
+          row ? { ...row, settings: settingsOf(row.id) } : null,
         );
       }),
+      findFirst: jest.fn(({ where }: Prisma.UserFindFirstArgs) => {
+        const row = users.find(
+          (u) =>
+            u.verificationToken === where?.verificationToken &&
+            u.deletedAt === where?.deletedAt,
+        );
+        return Promise.resolve(row ? { ...row } : null);
+      }),
       update: jest.fn(({ where, data }: Prisma.UserUpdateArgs) => {
-        const user = users.find((u) => u.id === where.id);
-        if (!user) {
-          return Promise.reject(new Error('P2025'));
+        const row = users.find(
+          (u) =>
+            u.id === where.id &&
+            (where.verificationToken === undefined ||
+              u.verificationToken === where.verificationToken),
+        );
+        if (!row) {
+          return Promise.reject(knownError('P2025'));
         }
         const email = data.email as string | undefined;
-        if (email && users.some((u) => u.id !== user.id && u.email === email)) {
-          return Promise.reject(p2002(['email']));
+        if (email && users.some((u) => u.id !== row.id && u.email === email)) {
+          return Promise.reject(knownError('P2002', { target: ['email'] }));
         }
-        user.email = email ?? user.email;
-        return Promise.resolve({ email: user.email });
+        Object.assign(row, strip(data));
+        return Promise.resolve({ ...row });
+      }),
+      updateMany: jest.fn(({ where, data }: Prisma.UserUpdateManyArgs) => {
+        const rows = users.filter(
+          (u) =>
+            u.id === where?.id &&
+            u.verificationToken === where?.verificationToken,
+        );
+        rows.forEach((u) => Object.assign(u, strip(data)));
+        return Promise.resolve({ count: rows.length });
       }),
     },
     settings: {
@@ -84,26 +131,31 @@ const buildPrisma = (users: UserRow[], settings: SettingsRow[]) => {
         },
       ),
     },
-    $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
   };
-  return prisma;
+  return {
+    ...client,
+    $transaction: jest.fn(
+      <T>(fn: (tx: typeof client) => Promise<T>): Promise<T> => fn(client),
+    ),
+  };
 };
 
 describe('SettingsService', () => {
   let service: SettingsService;
   let prisma: ReturnType<typeof buildPrisma>;
+  let email: {
+    sendEmailChangeConfirmation: jest.Mock<Promise<boolean>, [string, string]>;
+  };
   let users: UserRow[];
   let settings: SettingsRow[];
 
+  const sentToken = (call = 0) =>
+    email.sendEmailChangeConfirmation.mock.calls[call][1];
+
   beforeEach(async () => {
     users = [
-      {
-        id: 'alice',
-        email: 'alice@acme.io',
-        name: 'Alice Smith',
-        deletedAt: null,
-      },
-      { id: 'bob', email: 'bob@globex.io', name: 'Bob', deletedAt: null },
+      user('alice', 'alice@acme.io', 'Alice Smith'),
+      user('bob', 'bob@globex.io', 'Bob'),
     ];
     settings = [
       {
@@ -124,15 +176,25 @@ describe('SettingsService', () => {
       },
     ];
     prisma = buildPrisma(users, settings);
+    email = {
+      sendEmailChangeConfirmation: jest
+        .fn<Promise<boolean>, [string, string]>()
+        .mockResolvedValue(true),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         SettingsService,
         { provide: PrismaService, useValue: prisma },
+        { provide: EmailService, useValue: email },
       ],
     }).compile();
 
     service = moduleRef.get(SettingsService);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   describe('getSettings', () => {
@@ -142,6 +204,7 @@ describe('SettingsService', () => {
         firstName: 'Alice',
         lastName: 'Smith',
         email: 'alice@acme.io',
+        pendingEmail: null,
         emailNotifications: true,
         failedJobAlerts: false,
       });
@@ -150,6 +213,7 @@ describe('SettingsService', () => {
         firstName: 'Bob',
         lastName: 'Jones',
         email: 'bob@globex.io',
+        pendingEmail: null,
         emailNotifications: false,
         failedJobAlerts: true,
       });
@@ -157,12 +221,7 @@ describe('SettingsService', () => {
     });
 
     it('creates the row on first GET with names from the user', async () => {
-      users.push({
-        id: 'carol',
-        email: 'carol@initech.io',
-        name: 'Carol Ann Lee',
-        deletedAt: null,
-      });
+      users.push(user('carol', 'carol@initech.io', 'Carol Ann Lee'));
 
       const result = await service.getSettings('carol');
 
@@ -176,6 +235,7 @@ describe('SettingsService', () => {
         firstName: 'Carol',
         lastName: 'Ann Lee',
         email: 'carol@initech.io',
+        pendingEmail: null,
         emailNotifications: true,
         failedJobAlerts: true,
       });
@@ -184,7 +244,7 @@ describe('SettingsService', () => {
     });
 
     it('defaults to empty names when the user has none', async () => {
-      users.push({ id: 'dan', email: 'dan@x.io', name: null, deletedAt: null });
+      users.push(user('dan', 'dan@x.io', null));
 
       await expect(service.getSettings('dan')).resolves.toMatchObject({
         firstName: '',
@@ -207,10 +267,9 @@ describe('SettingsService', () => {
   });
 
   describe('updateSettings', () => {
-    it("changes only the caller's row and email", async () => {
+    it("changes only the caller's row", async () => {
       const result = await service.updateSettings('alice', {
         firstName: 'Alicia',
-        email: 'alicia@acme.io',
         failedJobAlerts: true,
       });
 
@@ -218,26 +277,78 @@ describe('SettingsService', () => {
         id: 'settings-alice',
         firstName: 'Alicia',
         lastName: 'Smith',
-        email: 'alicia@acme.io',
+        email: 'alice@acme.io',
+        pendingEmail: null,
         emailNotifications: true,
         failedJobAlerts: true,
       });
       expect(prisma.settings.upsert).toHaveBeenCalledWith(
         expect.objectContaining({ where: { userId: 'alice' } }),
       );
-      expect(prisma.user.update).toHaveBeenCalledWith({
-        where: { id: 'alice' },
-        data: { email: 'alicia@acme.io' },
-        select: { email: true },
-      });
-      await expect(service.getSettings('bob')).resolves.toEqual({
-        id: 'settings-bob',
+      await expect(service.getSettings('bob')).resolves.toMatchObject({
         firstName: 'Bob',
         lastName: 'Jones',
         email: 'bob@globex.io',
-        emailNotifications: false,
-        failedJobAlerts: true,
       });
+    });
+
+    it('keeps the current email until the new one is confirmed', async () => {
+      const result = await service.updateSettings('alice', {
+        firstName: 'Alicia',
+        email: 'alicia@acme.io',
+      });
+
+      expect(result).toMatchObject({
+        firstName: 'Alicia',
+        email: 'alice@acme.io',
+        pendingEmail: 'alicia@acme.io',
+      });
+      expect(users[0]).toMatchObject({
+        email: 'alice@acme.io',
+        emailVerified: false,
+        pendingEmail: 'alicia@acme.io',
+      });
+      expect(email.sendEmailChangeConfirmation).toHaveBeenCalledWith(
+        'alicia@acme.io',
+        expect.any(String),
+      );
+      // The link carries the raw token; only its hash is stored.
+      expect(sentToken()).toHaveLength(43);
+      expect(users[0].verificationToken).toBe(
+        createHash('sha256').update(sentToken()).digest('hex'),
+      );
+      await expect(service.getSettings('alice')).resolves.toMatchObject({
+        email: 'alice@acme.io',
+        pendingEmail: 'alicia@acme.io',
+      });
+    });
+
+    it('starts no change when the email is the current one', async () => {
+      const result = await service.updateSettings('alice', {
+        lastName: 'Smythe',
+        email: 'alice@acme.io',
+      });
+
+      expect(result).toMatchObject({
+        lastName: 'Smythe',
+        email: 'alice@acme.io',
+        pendingEmail: null,
+      });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+      expect(email.sendEmailChangeConfirmation).not.toHaveBeenCalled();
+    });
+
+    it('keeps a pending change when a later save resends the current email', async () => {
+      await service.updateSettings('alice', { email: 'alicia@acme.io' });
+
+      const result = await service.updateSettings('alice', {
+        firstName: 'Ali',
+        email: 'alice@acme.io',
+      });
+
+      expect(result.pendingEmail).toBe('alicia@acme.io');
+      expect(users[0].pendingEmail).toBe('alicia@acme.io');
+      expect(email.sendEmailChangeConfirmation).toHaveBeenCalledTimes(1);
     });
 
     it('leaves fields the caller omitted unchanged', async () => {
@@ -253,12 +364,7 @@ describe('SettingsService', () => {
     });
 
     it('creates the row when a new user saves before any GET', async () => {
-      users.push({
-        id: 'carol',
-        email: 'carol@initech.io',
-        name: 'Carol Lee',
-        deletedAt: null,
-      });
+      users.push(user('carol', 'carol@initech.io', 'Carol Lee'));
 
       const result = await service.updateSettings('carol', {
         lastName: 'Nguyen',
@@ -275,7 +381,7 @@ describe('SettingsService', () => {
       expect(settings.filter((s) => s.userId === 'carol')).toHaveLength(1);
     });
 
-    it('409s when the email belongs to another user', async () => {
+    it('409s when the email belongs to another account', async () => {
       await expect(
         service.updateSettings('alice', {
           firstName: 'Mallory',
@@ -283,16 +389,41 @@ describe('SettingsService', () => {
         }),
       ).rejects.toBeInstanceOf(ConflictException);
 
-      expect(users[0].email).toBe('alice@acme.io');
-      expect(users[1].email).toBe('bob@globex.io');
+      expect(users[0]).toMatchObject({
+        email: 'alice@acme.io',
+        pendingEmail: null,
+        verificationToken: null,
+      });
+      expect(settings[0].firstName).toBe('Alice');
+      expect(email.sendEmailChangeConfirmation).not.toHaveBeenCalled();
     });
 
-    it('rethrows other unique violations', async () => {
-      prisma.$transaction.mockRejectedValueOnce(p2002(['userId']));
+    it('409s when a soft-deleted account still holds the email', async () => {
+      users[1].deletedAt = new Date();
 
       await expect(
-        service.updateSettings('alice', { firstName: 'A' }),
-      ).rejects.toMatchObject({ code: 'P2002' });
+        service.updateSettings('alice', { email: 'bob@globex.io' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(users[0].pendingEmail).toBeNull();
+    });
+
+    it('drops the pending change when the email cannot be sent', async () => {
+      email.sendEmailChangeConfirmation.mockResolvedValueOnce(false);
+
+      await expect(
+        service.updateSettings('alice', {
+          firstName: 'Alicia',
+          email: 'alicia@acme.io',
+        }),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+      expect(users[0]).toMatchObject({
+        email: 'alice@acme.io',
+        pendingEmail: null,
+        verificationToken: null,
+        verificationExpiry: null,
+      });
+      expect(settings[0].firstName).toBe('Alicia');
     });
 
     it('404s for an unknown user without writing', async () => {
@@ -300,6 +431,95 @@ describe('SettingsService', () => {
         service.updateSettings('ghost', { firstName: 'Boo' }),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('confirmEmailChange', () => {
+    it('swaps in the new email and clears the pending change', async () => {
+      await service.updateSettings('alice', { email: 'alicia@acme.io' });
+
+      await expect(service.confirmEmailChange(sentToken())).resolves.toEqual({
+        id: 'alice',
+        email: 'alicia@acme.io',
+      });
+
+      expect(users[0]).toMatchObject({
+        email: 'alicia@acme.io',
+        emailVerified: true,
+        pendingEmail: null,
+        verificationToken: null,
+        verificationExpiry: null,
+      });
+      await expect(service.getSettings('alice')).resolves.toMatchObject({
+        email: 'alicia@acme.io',
+        pendingEmail: null,
+      });
+      expect(users[1].email).toBe('bob@globex.io');
+    });
+
+    it('rejects a link that was already used', async () => {
+      await service.updateSettings('alice', { email: 'alicia@acme.io' });
+      await service.confirmEmailChange(sentToken());
+
+      await expect(
+        service.confirmEmailChange(sentToken()),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects an unknown token', async () => {
+      await expect(
+        service.confirmEmailChange('not-a-real-token'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects an expired link and keeps the current email', async () => {
+      jest.useFakeTimers({ now: new Date('2026-10-16T12:00:00Z') });
+      await service.updateSettings('alice', { email: 'alicia@acme.io' });
+
+      jest.setSystemTime(Date.now() + EMAIL_CHANGE_TTL_MS + 1);
+
+      await expect(service.confirmEmailChange(sentToken())).rejects.toThrow(
+        /expired/,
+      );
+      expect(users[0].email).toBe('alice@acme.io');
+      await expect(service.getSettings('alice')).resolves.toMatchObject({
+        email: 'alice@acme.io',
+        pendingEmail: null,
+      });
+    });
+
+    it('rejects the first link once a newer change replaced it', async () => {
+      await service.updateSettings('alice', { email: 'first@acme.io' });
+      await service.updateSettings('alice', { email: 'second@acme.io' });
+
+      await expect(
+        service.confirmEmailChange(sentToken(0)),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.confirmEmailChange(sentToken(1))).resolves.toEqual({
+        id: 'alice',
+        email: 'second@acme.io',
+      });
+    });
+
+    it('409s when another account took the email before confirmation', async () => {
+      await service.updateSettings('alice', { email: 'shared@acme.io' });
+      users[1].email = 'shared@acme.io';
+
+      await expect(
+        service.confirmEmailChange(sentToken()),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(users[0].email).toBe('alice@acme.io');
+    });
+
+    it("ignores a soft-deleted user's link", async () => {
+      await service.updateSettings('alice', { email: 'alicia@acme.io' });
+      users[0].deletedAt = new Date();
+
+      await expect(
+        service.confirmEmailChange(sentToken()),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(users[0].email).toBe('alice@acme.io');
     });
   });
 });

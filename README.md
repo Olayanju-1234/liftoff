@@ -285,6 +285,16 @@ Every tenant belongs to the account that created it: `POST /tenants` and `POST /
 | GET | `/tenants/:id/events` | Get event log for tenant |
 | GET | `/events` | Event log across the caller's tenants |
 
+### Settings
+
+Settings belong to the caller. A new email doesn't replace the sign-in email right away: it is held as `pendingEmail`, and a link is sent to the new address. The sign-in email changes when that link is opened, within 24 hours. Without `SENDGRID_API_KEY` the link only appears in the tenant-service log.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/settings` | Get the caller's profile, notification settings and any pending email |
+| PUT | `/settings` | Update them; a new email waits for confirmation, and one another account uses gets 409 |
+| POST | `/settings/email/confirm` | Confirm a pending email with the token from the link (no auth; the token is the proof) |
+
 ---
 
 ## Getting Started

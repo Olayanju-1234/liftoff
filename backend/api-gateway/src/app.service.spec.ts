@@ -115,6 +115,19 @@ describe('AppService', () => {
 
       expect(http.put).toHaveBeenCalledWith('/settings', dto, withAuth);
     });
+
+    it('posts email confirmations without an auth header', async () => {
+      const dto = { token: 'abc' };
+      http.post.mockReturnValueOnce(ok({ id: 'user-1', email: 'new@x.io' }));
+
+      await service.confirmEmailChange(dto);
+
+      expect(http.post).toHaveBeenCalledWith(
+        '/settings/email/confirm',
+        dto,
+        {},
+      );
+    });
   });
 
   describe('auth header forwarding', () => {
