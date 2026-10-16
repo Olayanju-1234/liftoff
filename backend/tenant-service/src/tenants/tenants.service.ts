@@ -154,6 +154,24 @@ export class TenantsService {
     return true;
   }
 
+  // Each worker consumes the same event in parallel with this service, so the
+  // next step may already be SUCCESS or FAILED; only start it while PENDING.
+  private async completeStep(
+    tenantId: string,
+    step: ProvisioningStep,
+    next: ProvisioningStep,
+  ) {
+    const data: Prisma.TenantUpdateInput = {};
+    data[step] = StepStatus.SUCCESS;
+    await this.prisma.tenant.update({ where: { id: tenantId }, data });
+
+    const where: Prisma.TenantWhereInput = { id: tenantId };
+    where[next] = StepStatus.PENDING;
+    const start: Prisma.TenantUpdateManyMutationInput = {};
+    start[next] = StepStatus.IN_PROGRESS;
+    await this.prisma.tenant.updateMany({ where, data: start });
+  }
+
   private async logEvent(
     tenantId: string,
     eventType: string,
@@ -185,13 +203,7 @@ export class TenantsService {
   public async handleDbReady(payload: TenantDbReadyPayload) {
     this.logger.log(`DB ready for tenant ${payload.tenantId}`);
     try {
-      await this.prisma.tenant.update({
-        where: { id: payload.tenantId },
-        data: {
-          dbStatus: StepStatus.SUCCESS,
-          dnsStatus: StepStatus.IN_PROGRESS,
-        },
-      });
+      await this.completeStep(payload.tenantId, 'dbStatus', 'dnsStatus');
       await this.logEvent(
         payload.tenantId,
         'tenant.db.ready',
@@ -212,13 +224,7 @@ export class TenantsService {
     queue: 'tenant-service-dns-ready-queue',
   })
   public async handleDnsReady(payload: TenantDnsReadyPayload) {
-    await this.prisma.tenant.update({
-      where: { id: payload.tenantId },
-      data: {
-        dnsStatus: StepStatus.SUCCESS,
-        credentialsStatus: StepStatus.IN_PROGRESS,
-      },
-    });
+    await this.completeStep(payload.tenantId, 'dnsStatus', 'credentialsStatus');
     await this.logEvent(
       payload.tenantId,
       'tenant.dns.ready',
@@ -233,13 +239,11 @@ export class TenantsService {
     queue: 'tenant-service-credentials-ready-queue',
   })
   public async handleCredentialsReady(payload: TenantCredentialsReadyPayload) {
-    await this.prisma.tenant.update({
-      where: { id: payload.tenantId },
-      data: {
-        credentialsStatus: StepStatus.SUCCESS,
-        billingStatus: StepStatus.IN_PROGRESS,
-      },
-    });
+    await this.completeStep(
+      payload.tenantId,
+      'credentialsStatus',
+      'billingStatus',
+    );
     await this.logEvent(
       payload.tenantId,
       'tenant.credentials.ready',
@@ -254,13 +258,11 @@ export class TenantsService {
     queue: 'tenant-service-billing-active-queue',
   })
   public async handleBillingActive(payload: TenantBillingActivePayload) {
-    await this.prisma.tenant.update({
-      where: { id: payload.tenantId },
-      data: {
-        billingStatus: StepStatus.SUCCESS,
-        notificationStatus: StepStatus.IN_PROGRESS,
-      },
-    });
+    await this.completeStep(
+      payload.tenantId,
+      'billingStatus',
+      'notificationStatus',
+    );
     await this.logEvent(
       payload.tenantId,
       'tenant.billing.active',
