@@ -1,6 +1,21 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, type Settings } from '.prisma/tenant-client';
 import { PrismaService } from '../prisma.service';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
+
+export interface SettingsResponse {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  emailNotifications: boolean;
+  failedJobAlerts: boolean;
+}
 
 @Injectable()
 export class SettingsService {
@@ -8,127 +23,89 @@ export class SettingsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  // For now, we'll use a default user ID since we don't have auth
-  // In production, this would come from the authenticated user
-  private readonly DEFAULT_USER_ID = 'default-user';
-
-  async getSettings() {
-    this.logger.log('Fetching settings...');
-
-    // Try to find existing settings
-    let settings = await this.prisma.settings.findFirst({
-      include: { user: true },
-    });
-
-    // If no settings exist, create a default user and settings
-    if (!settings) {
-      this.logger.log('No settings found, creating defaults...');
-
-      // First check if we have any plans, if not create one
-      let plan = await this.prisma.plan.findFirst();
-      if (!plan) {
-        plan = await this.prisma.plan.create({
-          data: {
-            name: 'Basic',
-            maxUsers: 10,
-            maxApiKeys: 5,
-          },
-        });
-      }
-
-      // Check for any tenant
-      let tenant = await this.prisma.tenant.findFirst();
-      if (!tenant) {
-        tenant = await this.prisma.tenant.create({
-          data: {
-            name: 'Default Organization',
-            subdomain: 'default',
-            planId: plan.id,
-          },
-        });
-      }
-
-      // Create default user
-      const user = await this.prisma.user.create({
-        data: {
-          email: 'ops@saascompany.com',
-          name: 'DevOps Engineer',
-          password: 'hashed_password_placeholder',
-          role: 'ADMIN',
-          tenantId: tenant.id,
-        },
-      });
-
-      // Create settings for this user
-      settings = await this.prisma.settings.create({
-        data: {
-          userId: user.id,
-          firstName: 'DevOps',
-          lastName: 'Engineer',
-          emailNotifications: true,
-          failedJobAlerts: true,
-        },
-        include: { user: true },
-      });
+  async getSettings(userId: string): Promise<SettingsResponse> {
+    const user = await this.findUser(userId);
+    if (user.settings) {
+      return this.toResponse(user.settings, user.email);
     }
 
-    return {
-      id: settings.id,
-      firstName: settings.firstName,
-      lastName: settings.lastName,
-      email: settings.user.email,
-      emailNotifications: settings.emailNotifications,
-      failedJobAlerts: settings.failedJobAlerts,
-    };
+    // Upsert, not create: two first GETs can race on the unique userId.
+    const settings = await this.prisma.settings.upsert({
+      where: { userId },
+      create: { userId, ...this.nameDefaults(user.name) },
+      update: {},
+    });
+    this.logger.log(`Created settings for user ${userId}`);
+    return this.toResponse(settings, user.email);
   }
 
-  async updateSettings(updateSettingsDto: UpdateSettingsDto) {
-    this.logger.log({ dto: updateSettingsDto }, 'Updating settings...');
+  async updateSettings(
+    userId: string,
+    dto: UpdateSettingsDto,
+  ): Promise<SettingsResponse> {
+    const user = await this.findUser(userId);
+    const defaults = this.nameDefaults(user.name);
+    const prefs = {
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      emailNotifications: dto.emailNotifications,
+      failedJobAlerts: dto.failedJobAlerts,
+    };
 
-    // Get existing settings
-    const existingSettings = await this.prisma.settings.findFirst({
-      include: { user: true },
-    });
-
-    if (!existingSettings) {
-      throw new NotFoundException(
-        'Settings not found. Please get settings first to initialize.',
-      );
+    try {
+      const [settings, { email }] = await this.prisma.$transaction([
+        this.prisma.settings.upsert({
+          where: { userId },
+          create: {
+            ...prefs,
+            userId,
+            firstName: prefs.firstName ?? defaults.firstName,
+            lastName: prefs.lastName ?? defaults.lastName,
+          },
+          update: prefs,
+        }),
+        this.prisma.user.update({
+          where: { id: userId },
+          data: { email: dto.email },
+          select: { email: true },
+        }),
+      ]);
+      this.logger.log(`Updated settings for user ${userId}`);
+      return this.toResponse(settings, email);
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002' &&
+        (error.meta?.target as string[] | undefined)?.includes('email')
+      ) {
+        throw new ConflictException('This email is already in use.');
+      }
+      throw error;
     }
+  }
 
-    // Update settings
-    const settings = await this.prisma.settings.update({
-      where: { id: existingSettings.id },
-      data: {
-        firstName: updateSettingsDto.firstName ?? existingSettings.firstName,
-        lastName: updateSettingsDto.lastName ?? existingSettings.lastName,
-        emailNotifications:
-          updateSettingsDto.emailNotifications ??
-          existingSettings.emailNotifications,
-        failedJobAlerts:
-          updateSettingsDto.failedJobAlerts ?? existingSettings.failedJobAlerts,
-      },
-      include: { user: true },
+  private async findUser(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId, deletedAt: null },
+      select: { email: true, name: true, settings: true },
     });
-
-    // If email is being updated, update the user as well
-    if (
-      updateSettingsDto.email &&
-      updateSettingsDto.email !== settings.user.email
-    ) {
-      await this.prisma.user.update({
-        where: { id: settings.userId },
-        data: { email: updateSettingsDto.email },
-      });
+    if (!user) {
+      throw new NotFoundException('User not found');
     }
+    return user;
+  }
 
-    this.logger.log('Settings updated successfully');
+  private nameDefaults(name: string | null) {
+    const [firstName = '', ...rest] = (name ?? '').trim().split(/\s+/);
+    return { firstName, lastName: rest.join(' ') };
+  }
 
+  private toResponse(settings: Settings, email: string): SettingsResponse {
     return {
       id: settings.id,
       firstName: settings.firstName,
       lastName: settings.lastName,
-      email: updateSettingsDto.email || settings.user.email,
+      email,
       emailNotifications: settings.emailNotifications,
       failedJobAlerts: settings.failedJobAlerts,
     };
