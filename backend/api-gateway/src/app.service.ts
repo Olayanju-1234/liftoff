@@ -10,6 +10,7 @@ import { AxiosRequestConfig, isAxiosError } from 'axios';
 import { firstValueFrom } from 'rxjs';
 import {
   CancelTenantDto,
+  ConfirmEmailChangeDto,
   CreateTenantDto,
   LoginDto,
   RefreshTokenDto,
@@ -108,6 +109,10 @@ export class AppService {
 
   updateSettings(dto: UpdateSettingsDto, auth?: string) {
     return this.proxy('put', '/settings', dto, auth);
+  }
+
+  confirmEmailChange(dto: ConfirmEmailChangeDto) {
+    return this.proxy('post', '/settings/email/confirm', dto);
   }
 
   // ============ INTERNAL ============
