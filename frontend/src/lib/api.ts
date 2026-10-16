@@ -40,4 +40,7 @@ export const saveSettings = async (settings: Partial<UserSettings>): Promise<Use
     return response.data;
 };
 
+export const confirmEmailChange = (token: string) =>
+    api.post<{ id: string; email: string }>('/settings/email/confirm', { token }).then((res) => res.data);
+
 export default api;
