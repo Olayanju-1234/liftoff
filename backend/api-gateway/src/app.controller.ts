@@ -112,7 +112,7 @@ export class AppController {
 
   @ApiTags('Tenants')
   @ApiBearerAuth('bearer')
-  @ApiOperation({ summary: 'List all tenants' })
+  @ApiOperation({ summary: "List the caller's tenants" })
   @Get('tenants')
   getTenants(@Headers('authorization') auth: string) {
     return this.appService.getTenants(auth);
@@ -120,7 +120,9 @@ export class AppController {
 
   @ApiTags('Tenants')
   @ApiBearerAuth('bearer')
-  @ApiOperation({ summary: 'Cross-tenant event log (most recent 200)' })
+  @ApiOperation({
+    summary: "Event log across the caller's tenants (most recent 200)",
+  })
   @Get('events')
   getEvents(@Headers('authorization') auth: string) {
     return this.appService.getEvents(auth);
