@@ -273,14 +273,17 @@ validation.
 
 ### Tenants
 
+Every tenant belongs to the account that created it: `POST /tenants` and `POST /auth/register` record the caller as its owner. These endpoints only return or change the caller's own tenants. Another account's tenant answers 404, so its ID can't be probed.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/tenants` | List all tenants |
+| GET | `/tenants` | List the caller's tenants |
 | POST | `/tenants` | Create tenant and start provisioning |
 | GET | `/tenants/:id` | Get tenant with step statuses |
 | DELETE | `/tenants/:id` | Delete tenant and clean up resources |
 | POST | `/tenants/:id/cancel` | Cancel in-progress provisioning |
 | GET | `/tenants/:id/events` | Get event log for tenant |
+| GET | `/events` | Event log across the caller's tenants |
 
 ---
 

@@ -94,6 +94,12 @@ export class AuthService {
         },
       });
 
+      // The user row needs the tenant id first, so ownership is set afterwards.
+      await tx.tenant.update({
+        where: { id: tenant.id },
+        data: { ownerId: user.id },
+      });
+
       return { tenant, user };
     });
 
