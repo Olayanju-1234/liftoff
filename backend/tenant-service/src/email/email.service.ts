@@ -1,62 +1,83 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as sgMail from '@sendgrid/mail';
+import { Resend } from 'resend';
 import { errorMessage } from '../common/error-message';
 
 export interface EmailOptions {
   to: string;
   subject: string;
+  html: string;
   text?: string;
-  html?: string;
 }
+
+type EmailProvider = 'resend' | 'sendgrid' | 'log';
 
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private readonly fromEmail: string;
-  private readonly isConfigured: boolean;
+  private readonly provider: EmailProvider;
+  private readonly resend: Resend | null = null;
 
   constructor(private configService: ConfigService) {
-    const apiKey = this.configService.get<string>('SENDGRID_API_KEY');
+    const resendKey = this.configService.get<string>('RESEND_API_KEY');
+    const sendgridKey = this.configService.get<string>('SENDGRID_API_KEY');
     this.fromEmail =
       this.configService.get<string>('EMAIL_FROM') || 'noreply@tenantops.com';
 
-    if (apiKey) {
-      sgMail.setApiKey(apiKey);
-      this.isConfigured = true;
-      this.logger.log('SendGrid email service configured');
+    if (resendKey) {
+      this.resend = new Resend(resendKey);
+      this.provider = 'resend';
+    } else if (sendgridKey) {
+      sgMail.setApiKey(sendgridKey);
+      this.provider = 'sendgrid';
     } else {
-      this.isConfigured = false;
+      this.provider = 'log';
       this.logger.warn(
-        'SendGrid API key not configured - emails will be logged only',
+        'Neither RESEND_API_KEY nor SENDGRID_API_KEY is set - emails will not be sent',
       );
+      return;
     }
+    this.logger.log(
+      `Sending email through ${this.provider} as ${this.fromEmail}`,
+    );
   }
 
+  // Resolves false whenever the email didn't reach a provider, log-only mode included.
   async sendEmail(options: EmailOptions): Promise<boolean> {
-    if (!this.isConfigured) {
-      this.logger.log(
-        `[DEV MODE] Would send email to ${options.to}: ${options.subject}`,
+    if (this.provider === 'log') {
+      // Bodies carry sign-in links, so only the envelope goes to the log.
+      this.logger.warn(
+        `Skipped email "${options.subject}" to ${options.to}: no email provider configured`,
       );
-      this.logger.log(`Content: ${options.text || options.html}`);
-      return true;
+      return false;
     }
 
+    const message = {
+      from: this.fromEmail,
+      to: options.to,
+      subject: options.subject,
+      html: options.html,
+      text: options.text,
+    };
     try {
-      const message: sgMail.MailDataRequired = {
-        to: options.to,
-        from: this.fromEmail,
-        subject: options.subject,
-        text: options.text || '',
-        html: options.html || '',
-      };
-      await sgMail.send(message);
-      this.logger.log(`Email sent successfully to ${options.to}`);
+      if (this.resend) {
+        // The Resend SDK reports API errors in the result instead of throwing.
+        const { error } = await this.resend.emails.send(message);
+        if (error) {
+          throw new Error(`${error.name}: ${error.message}`);
+        }
+      } else {
+        await sgMail.send(message);
+      }
+      this.logger.log(
+        `Email "${options.subject}" sent to ${options.to} via ${this.provider}`,
+      );
       return true;
     } catch (error) {
       this.logger.error(
-        `Failed to send email to ${options.to}:`,
-        errorMessage(error),
+        `Failed to send email "${options.subject}" to ${options.to} via ${this.provider}: ${errorMessage(error)}`,
       );
       return false;
     }
