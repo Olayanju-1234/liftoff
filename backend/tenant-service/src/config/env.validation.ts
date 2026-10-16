@@ -29,9 +29,16 @@ export const envValidationSchema = Joi.object({
   // CORS / frontend integration.
   FRONTEND_URL: Joi.string().optional().allow(''),
 
-  // Email (optional — service degrades to log-only when missing).
+  // Email (optional — Resend, else SendGrid, else nothing is sent).
+  RESEND_API_KEY: Joi.string().optional().allow(''),
   SENDGRID_API_KEY: Joi.string().optional().allow(''),
-  EMAIL_FROM: Joi.string().email().optional(),
+  // A bare address or "Name <address>".
+  EMAIL_FROM: Joi.alternatives()
+    .try(
+      Joi.string().email(),
+      Joi.string().pattern(/^[^<>]+<[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>$/),
+    )
+    .optional(),
 
   // OAuth — optional; routes 401 if a strategy is enabled without creds.
   GOOGLE_CLIENT_ID: Joi.string().optional().allow(''),
