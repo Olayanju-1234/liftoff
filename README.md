@@ -287,7 +287,7 @@ Every tenant belongs to the account that created it: `POST /tenants` and `POST /
 
 ### Settings
 
-Settings belong to the caller. A new email doesn't replace the sign-in email right away: it is held as `pendingEmail`, and a link is sent to the new address. The sign-in email changes when that link is opened, within 24 hours. Without `SENDGRID_API_KEY` the link only appears in the tenant-service log.
+Settings belong to the caller. A new email doesn't replace the sign-in email right away: it is held as `pendingEmail`, and a link is sent to the new address. The sign-in email changes when that link is opened, within 24 hours. With no email provider configured nothing is sent, so the change is refused with a 503 instead of waiting on a link nobody received.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -374,7 +374,7 @@ migration steps are written up in
   (without a key, subscriptions are simulated so the saga still completes, like DNS provisioning)
 
 **Tenant Service (optional email):**
-- `SENDGRID_API_KEY`, `EMAIL_FROM` (emails are only logged when the API key is unset)
+- `RESEND_API_KEY` (preferred), else `SENDGRID_API_KEY`, plus `EMAIL_FROM` (`noreply@…` or `Name <noreply@…>`). With neither key nothing is sent, and the log records only the recipient and subject, never the body or its links.
 
 **Notification Service:**
 - No extra variables; its welcome-email step is a mock
