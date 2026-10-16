@@ -20,8 +20,12 @@ model Tenant {
   planId    String
   
   plan      Plan     @relation(fields: [planId], references: [id])
-  users     User[]   // A tenant can have many users
+  users     User[]   @relation("TenantMembers") // A tenant can have many users
   events    EventLog[]
+
+  // Only the owner can see or change a tenant; a tenant without one is hidden from everyone.
+  ownerId   String?
+  owner     User?    @relation("TenantOwner", fields: [ownerId], references: [id], onDelete: SetNull)
 
   // Provisioning Steps Status
   dbStatus          StepStatus @default(PENDING)
@@ -37,6 +41,8 @@ model Tenant {
   deletedAt DateTime? // Soft delete
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
 }
 
 model User {
@@ -62,7 +68,8 @@ model User {
   resetTokenExpiry DateTime?
   
   tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant    Tenant   @relation("TenantMembers", fields: [tenantId], references: [id], onDelete: Cascade)
+  ownedTenants Tenant[] @relation("TenantOwner")
   settings  Settings?
   
   deletedAt DateTime? // Soft delete

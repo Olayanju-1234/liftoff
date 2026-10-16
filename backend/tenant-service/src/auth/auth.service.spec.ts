@@ -89,6 +89,7 @@ describe('AuthService', () => {
       planId: 'starter',
     };
     let tenantCreate: jest.Mock<Promise<unknown>, [Prisma.TenantCreateArgs]>;
+    let tenantUpdate: jest.Mock<Promise<unknown>, [Prisma.TenantUpdateArgs]>;
 
     const arrangeRegister = () => {
       prisma.user.findUnique.mockResolvedValueOnce(null);
@@ -97,10 +98,13 @@ describe('AuthService', () => {
       tenantCreate = jest
         .fn<Promise<unknown>, [Prisma.TenantCreateArgs]>()
         .mockResolvedValueOnce(workspace);
+      tenantUpdate = jest
+        .fn<Promise<unknown>, [Prisma.TenantUpdateArgs]>()
+        .mockResolvedValueOnce({ ...workspace, ownerId: 'user-1' });
       prisma.$transaction.mockImplementationOnce(
         (fn: (tx: unknown) => Promise<unknown>) =>
           fn({
-            tenant: { create: tenantCreate },
+            tenant: { create: tenantCreate, update: tenantUpdate },
             user: {
               create: jest.fn().mockResolvedValueOnce({
                 id: 'user-1',
@@ -148,6 +152,17 @@ describe('AuthService', () => {
       expect(upsertArgs.create).toMatchObject({ id: 'starter' });
       const [[createArgs]] = tenantCreate.mock.calls;
       expect(createArgs.data.planId).toBe('starter');
+    });
+
+    it('makes the new user the owner of the workspace tenant', async () => {
+      arrangeRegister();
+
+      await service.register(validRegisterDto);
+
+      expect(tenantUpdate).toHaveBeenCalledWith({
+        where: { id: 'tenant-1' },
+        data: { ownerId: 'user-1' },
+      });
     });
 
     it('starts the provisioning saga for the workspace tenant', async () => {

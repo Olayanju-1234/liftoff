@@ -43,7 +43,7 @@ export class TenantsService {
     private readonly amqpConnection: AmqpConnection,
   ) {}
 
-  async create(createTenantDto: CreateTenantDto) {
+  async create(createTenantDto: CreateTenantDto, ownerId: string) {
     // Get or create plan - check by both id and name to avoid unique constraint issues
     let plan = await this.prisma.plan.findFirst({
       where: {
@@ -68,6 +68,7 @@ export class TenantsService {
           name: createTenantDto.name,
           subdomain: createTenantDto.subdomain,
           planId: plan.id,
+          ownerId,
           dbStatus: StepStatus.IN_PROGRESS, // Start first step
         },
       });
@@ -350,16 +351,28 @@ export class TenantsService {
     }
   }
 
-  async findAll() {
+  async findAll(ownerId: string) {
     return this.prisma.tenant.findMany({
+      where: { ownerId },
       include: { plan: true },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async findOne(id: string) {
-    const tenant = await this.prisma.tenant.findUnique({
-      where: { id },
+  // Another account's tenant reads as missing, so its ids can't be probed.
+  private async findOwnedTenant(id: string, ownerId: string) {
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { id, ownerId },
+    });
+    if (!tenant) {
+      throw new NotFoundException(`Tenant ${id} not found`);
+    }
+    return tenant;
+  }
+
+  async findOne(id: string, ownerId: string) {
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { id, ownerId },
       include: {
         plan: true,
         events: { orderBy: { timestamp: 'desc' }, take: 100 },
@@ -371,18 +384,22 @@ export class TenantsService {
     return tenant;
   }
 
-  async findEvents(id: string) {
-    return this.prisma.eventLog.findMany({
-      where: { tenantId: id },
-      orderBy: { timestamp: 'desc' },
-      take: 200,
+  async findEvents(id: string, ownerId: string) {
+    const tenant = await this.prisma.tenant.findFirst({
+      where: { id, ownerId },
+      select: { events: { orderBy: { timestamp: 'desc' }, take: 200 } },
     });
+    if (!tenant) {
+      throw new NotFoundException(`Tenant ${id} not found`);
+    }
+    return tenant.events;
   }
 
-  async findAllEvents() {
+  async findAllEvents(ownerId: string) {
     // Project tenant down to identifying fields only — avoid leaking
     // future-added sensitive columns (e.g. stripe IDs) and keep payload small.
     return this.prisma.eventLog.findMany({
+      where: { tenant: { ownerId } },
       orderBy: { timestamp: 'desc' },
       take: 200,
       include: {
@@ -393,20 +410,29 @@ export class TenantsService {
     });
   }
 
-  async cancel(id: string, reason?: string) {
-    const tenant = await this.prisma.tenant.findUnique({ where: { id } });
+  async cancel(id: string, ownerId: string, reason?: string) {
+    return this.cancelTenant(
+      await this.findOwnedTenant(id, ownerId),
+      reason || 'Cancelled by user',
+    );
+  }
 
+  // The timeout sweeper acts for no user, so it looks the tenant up unscoped.
+  async cancelStale(id: string, reason: string) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id } });
     if (!tenant) {
       throw new NotFoundException(`Tenant ${id} not found`);
     }
+    return this.cancelTenant(tenant, reason);
+  }
 
+  private async cancelTenant(tenant: Tenant, cancelReason: string) {
+    const { id } = tenant;
     if (tenant.status !== TenantStatus.PROVISIONING) {
       throw new BadRequestException(
         `Cannot cancel tenant with status ${tenant.status}`,
       );
     }
-
-    const cancelReason = reason || 'Cancelled by user';
 
     // Update tenant status and all pending/in-progress steps to CANCELLED
     const updatedTenant = await this.prisma.tenant.update({
@@ -459,12 +485,8 @@ export class TenantsService {
     return updatedTenant;
   }
 
-  async delete(id: string) {
-    const tenant = await this.prisma.tenant.findUnique({ where: { id } });
-
-    if (!tenant) {
-      throw new NotFoundException(`Tenant ${id} not found`);
-    }
+  async delete(id: string, ownerId: string) {
+    const tenant = await this.findOwnedTenant(id, ownerId);
 
     // Publish deletion event for other services to clean up resources (schemas, DNS, credentials, etc.)
     await this.amqpConnection.publish('provisioning.direct', 'tenant.deleted', {

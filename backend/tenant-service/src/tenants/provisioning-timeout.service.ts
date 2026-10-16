@@ -52,7 +52,7 @@ export class ProvisioningTimeoutService {
 
       for (const tenant of staleTenants) {
         try {
-          await this.tenantsService.cancel(
+          await this.tenantsService.cancelStale(
             tenant.id,
             `Provisioning timeout - no progress for ${this.TIMEOUT_MINUTES} minutes`,
           );

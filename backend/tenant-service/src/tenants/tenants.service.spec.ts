@@ -20,6 +20,7 @@ type MockPrisma = {
   tenant: {
     create: jest.Mock<Promise<unknown>, [Prisma.TenantCreateArgs]>;
     findUnique: jest.Mock;
+    findFirst: jest.Mock;
     findMany: jest.Mock;
     update: jest.Mock<Promise<unknown>, [Prisma.TenantUpdateArgs]>;
     updateMany: jest.Mock<
@@ -36,6 +37,7 @@ const buildPrisma = (): MockPrisma => ({
   tenant: {
     create: jest.fn<Promise<unknown>, [Prisma.TenantCreateArgs]>(),
     findUnique: jest.fn(),
+    findFirst: jest.fn(),
     findMany: jest.fn(),
     update: jest.fn<Promise<unknown>, [Prisma.TenantUpdateArgs]>(),
     updateMany: jest.fn<
@@ -78,12 +80,13 @@ describe('TenantsService', () => {
         planId: 'starter',
       });
 
-      const result = await service.create(baseDto);
+      const result = await service.create(baseDto, 'owner-1');
 
       expect(prisma.plan.create).not.toHaveBeenCalled();
       expect(prisma.tenant.create).toHaveBeenCalledTimes(1);
       const [[createArgs]] = prisma.tenant.create.mock.calls;
       expect(createArgs.data.dbStatus).toBe(StepStatus.IN_PROGRESS);
+      expect(createArgs.data.ownerId).toBe('owner-1');
       expect(amqp.publish).toHaveBeenCalledWith(
         'provisioning.direct',
         'tenant.requested',
@@ -107,7 +110,9 @@ describe('TenantsService', () => {
       prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
       amqp.publish.mockRejectedValueOnce(new Error('timeout'));
 
-      await expect(service.create(baseDto)).rejects.toThrow('timeout');
+      await expect(service.create(baseDto, 'owner-1')).rejects.toThrow(
+        'timeout',
+      );
 
       const [[{ data }]] = prisma.tenant.updateMany.mock.calls;
       expect(data).toEqual({
@@ -134,7 +139,7 @@ describe('TenantsService', () => {
         planId: 'starter',
       });
 
-      await service.create(baseDto);
+      await service.create(baseDto, 'owner-1');
 
       expect(prisma.plan.create).toHaveBeenCalled();
     });
@@ -151,7 +156,7 @@ describe('TenantsService', () => {
       );
       prisma.tenant.create.mockRejectedValueOnce(p2002);
 
-      await expect(service.create(baseDto)).rejects.toBeInstanceOf(
+      await expect(service.create(baseDto, 'owner-1')).rejects.toBeInstanceOf(
         ConflictException,
       );
       expect(amqp.publish).not.toHaveBeenCalled();
@@ -479,10 +484,107 @@ describe('TenantsService', () => {
     });
   });
 
+  describe('ownership', () => {
+    const owned = {
+      id: 't',
+      subdomain: 'acme',
+      ownerId: 'owner-1' as string | null,
+      status: TenantStatus.PROVISIONING,
+      dbStatus: StepStatus.SUCCESS,
+      dnsStatus: StepStatus.IN_PROGRESS,
+      credentialsStatus: StepStatus.PENDING,
+      billingStatus: StepStatus.PENDING,
+      notificationStatus: StepStatus.PENDING,
+      events: [{ id: 'e1', eventType: 'tenant.created' }],
+    };
+    let stored: typeof owned;
+
+    const scoped = {
+      findOne: (caller: string) => service.findOne('t', caller),
+      findEvents: (caller: string) => service.findEvents('t', caller),
+      cancel: (caller: string) => service.cancel('t', caller, 'changed mind'),
+      delete: (caller: string) => service.delete('t', caller),
+    };
+
+    beforeEach(() => {
+      stored = { ...owned };
+      prisma.tenant.findFirst.mockImplementation(
+        ({ where }: Prisma.TenantFindFirstArgs) =>
+          Promise.resolve(
+            where?.id === stored.id && where?.ownerId === stored.ownerId
+              ? stored
+              : null,
+          ),
+      );
+      prisma.tenant.update.mockImplementation(({ data }) =>
+        Promise.resolve({ ...stored, ...data }),
+      );
+      prisma.tenant.delete.mockResolvedValue(stored);
+    });
+
+    it.each(Object.entries(scoped))(
+      '%s serves the owner',
+      async (_name, call) => {
+        await expect(call('owner-1')).resolves.toBeTruthy();
+        expect(prisma.tenant.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: 't', ownerId: 'owner-1' } }),
+        );
+      },
+    );
+
+    it.each(Object.entries(scoped))(
+      '%s returns 404 to another account and changes nothing',
+      async (_name, call) => {
+        await expect(call('intruder')).rejects.toBeInstanceOf(
+          NotFoundException,
+        );
+        expect(prisma.tenant.update).not.toHaveBeenCalled();
+        expect(prisma.tenant.delete).not.toHaveBeenCalled();
+        expect(amqp.publish).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(Object.entries(scoped))(
+      '%s hides a tenant without an owner from everyone',
+      async (_name, call) => {
+        stored.ownerId = null;
+
+        await expect(call('owner-1')).rejects.toBeInstanceOf(NotFoundException);
+      },
+    );
+
+    it('findEvents returns the owned tenant’s events', async () => {
+      await expect(service.findEvents('t', 'owner-1')).resolves.toEqual(
+        owned.events,
+      );
+    });
+
+    it("lists only the caller's tenants", async () => {
+      prisma.tenant.findMany.mockResolvedValueOnce([]);
+
+      await service.findAll('owner-1');
+
+      expect(prisma.tenant.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { ownerId: 'owner-1' } }),
+      );
+    });
+
+    it("limits the cross-tenant event log to the caller's tenants", async () => {
+      prisma.eventLog.findMany.mockResolvedValueOnce([]);
+
+      await service.findAllEvents('owner-1');
+
+      expect(prisma.eventLog.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { tenant: { ownerId: 'owner-1' } } }),
+      );
+    });
+  });
+
   describe('cancel', () => {
     const provisioningTenant = {
       id: 't',
       subdomain: 'acme',
+      ownerId: 'owner-1',
       status: TenantStatus.PROVISIONING,
       dbStatus: StepStatus.SUCCESS,
       dnsStatus: StepStatus.IN_PROGRESS,
@@ -492,13 +594,13 @@ describe('TenantsService', () => {
     };
 
     it('cancels in-progress + pending steps and publishes tenant.cancelled', async () => {
-      prisma.tenant.findUnique.mockResolvedValueOnce(provisioningTenant);
+      prisma.tenant.findFirst.mockResolvedValueOnce(provisioningTenant);
       prisma.tenant.update.mockResolvedValueOnce({
         ...provisioningTenant,
         status: TenantStatus.CANCELLED,
       });
 
-      await service.cancel('t', 'user changed mind');
+      await service.cancel('t', 'owner-1', 'user changed mind');
 
       const [[{ data: update }]] = prisma.tenant.update.mock.calls;
       expect(update.status).toBe(TenantStatus.CANCELLED);
@@ -515,61 +617,69 @@ describe('TenantsService', () => {
       );
     });
 
-    it('throws NotFoundException when tenant is missing', async () => {
-      prisma.tenant.findUnique.mockResolvedValueOnce(null);
+    it('defaults the reason when the user gives none', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce(provisioningTenant);
+      prisma.tenant.update.mockResolvedValueOnce({});
 
-      await expect(service.cancel('missing')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
+      await service.cancel('t', 'owner-1');
+
+      const [[{ data: update }]] = prisma.tenant.update.mock.calls;
+      expect(update.cancelReason).toBe('Cancelled by user');
     });
 
     it('throws BadRequestException when tenant is not in PROVISIONING state', async () => {
-      prisma.tenant.findUnique.mockResolvedValueOnce({
+      prisma.tenant.findFirst.mockResolvedValueOnce({
         ...provisioningTenant,
         status: TenantStatus.ACTIVE,
       });
 
-      await expect(service.cancel('t')).rejects.toBeInstanceOf(
+      await expect(service.cancel('t', 'owner-1')).rejects.toBeInstanceOf(
         BadRequestException,
       );
       expect(prisma.tenant.update).not.toHaveBeenCalled();
+    });
+
+    it('lets the timeout sweeper cancel any tenant, owned or not', async () => {
+      prisma.tenant.findUnique.mockResolvedValueOnce({
+        ...provisioningTenant,
+        ownerId: null,
+      });
+      prisma.tenant.update.mockResolvedValueOnce({});
+
+      await service.cancelStale('t', 'Provisioning timeout');
+
+      expect(prisma.tenant.findUnique).toHaveBeenCalledWith({
+        where: { id: 't' },
+      });
+      const [[{ data: update }]] = prisma.tenant.update.mock.calls;
+      expect(update.status).toBe(TenantStatus.CANCELLED);
+      expect(update.cancelReason).toBe('Provisioning timeout');
+    });
+
+    it('cancelStale throws NotFoundException when the tenant is gone', async () => {
+      prisma.tenant.findUnique.mockResolvedValueOnce(null);
+
+      await expect(service.cancelStale('missing', 'x')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 
   describe('delete', () => {
     it('emits tenant.deleted before removing the row (so consumers can clean up)', async () => {
-      prisma.tenant.findUnique.mockResolvedValueOnce({
+      prisma.tenant.findFirst.mockResolvedValueOnce({
         id: 't',
         subdomain: 'acme',
+        ownerId: 'owner-1',
       });
       prisma.tenant.delete.mockResolvedValueOnce({ id: 't' });
 
-      await service.delete('t');
+      await service.delete('t', 'owner-1');
 
       // Order matters: publish must precede delete.
       const publishOrder = amqp.publish.mock.invocationCallOrder[0];
       const deleteOrder = prisma.tenant.delete.mock.invocationCallOrder[0];
       expect(publishOrder).toBeLessThan(deleteOrder);
-    });
-
-    it('throws NotFoundException when tenant is missing', async () => {
-      prisma.tenant.findUnique.mockResolvedValueOnce(null);
-
-      await expect(service.delete('nope')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
-      expect(amqp.publish).not.toHaveBeenCalled();
-      expect(prisma.tenant.delete).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('findOne', () => {
-    it('throws NotFoundException when the tenant does not exist', async () => {
-      prisma.tenant.findUnique.mockResolvedValueOnce(null);
-
-      await expect(service.findOne('missing')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
     });
   });
 });
