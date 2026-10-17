@@ -48,8 +48,8 @@ export const PLANS: PlanCard[] = [
         tagline: 'For a live signup flow with real customers behind it.',
         rows: [
             { text: 'Unlimited active tenants' },
-            { text: 'Company API keys', note: 'next release' },
-            { text: 'Ready and failed webhooks, signed', note: 'next release' },
+            { text: 'Company API keys' },
+            { text: 'Ready and failed webhooks, signed' },
             { text: 'Your own Stripe for customer trials', soon: true },
             { text: 'Custom steps that call your URL', soon: true },
             { text: 'Email support from the maintainer' },
