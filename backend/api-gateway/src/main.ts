@@ -57,7 +57,13 @@ async function bootstrap() {
       }
     },
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-api-key',
+      'Idempotency-Key',
+    ],
+    exposedHeaders: ['Idempotent-Replayed', 'Retry-After'],
     credentials: true,
   });
 

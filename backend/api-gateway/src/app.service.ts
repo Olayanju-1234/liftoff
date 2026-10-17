@@ -7,9 +7,12 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { AxiosRequestConfig, isAxiosError } from 'axios';
+import type { FastifyReply } from 'fastify';
 import { firstValueFrom } from 'rxjs';
 import {
   API_KEY_HEADER,
+  IDEMPOTENCY_KEY_HEADER,
+  IDEMPOTENT_REPLAYED_HEADER,
   CancelTenantDto,
   ConfirmEmailChangeDto,
   CreateApiKeyDto,
@@ -28,6 +31,14 @@ export interface Credentials {
   auth?: string;
   apiKey?: string;
 }
+
+// Request headers passed to tenant-service besides the credentials.
+export interface ForwardedHeaders {
+  idempotencyKey?: string;
+}
+
+// Response headers copied back from tenant-service, on success and on 4xx alike.
+const FORWARDED_RESPONSE_HEADERS = [IDEMPOTENT_REPLAYED_HEADER, 'retry-after'];
 
 @Injectable()
 export class AppService {
@@ -69,12 +80,18 @@ export class AppService {
 
   // ============ TENANT METHODS ============
 
-  async createTenant(dto: CreateTenantDto, credentials: Credentials) {
+  async createTenant(
+    dto: CreateTenantDto,
+    credentials: Credentials,
+    headers: ForwardedHeaders = {},
+    reply?: FastifyReply,
+  ) {
     this.logger.log(
       {
         name: dto.name,
         subdomain: dto.subdomain,
         viaApiKey: !!credentials.apiKey,
+        idempotent: !!headers.idempotencyKey,
       },
       'Creating tenant',
     );
@@ -82,7 +99,8 @@ export class AppService {
       'post',
       '/tenants',
       dto,
-      credentials,
+      { ...credentials, ...headers },
+      reply,
     );
     this.logger.log({ tenantId: data.id }, 'Tenant creation initiated');
     return data;
@@ -158,7 +176,8 @@ export class AppService {
     method: 'get' | 'post' | 'put' | 'delete',
     path: string,
     body?: unknown,
-    credentials?: string | Credentials,
+    credentials?: string | (Credentials & ForwardedHeaders),
+    reply?: FastifyReply,
   ): Promise<T> {
     const config = this.buildConfig(
       typeof credentials === 'string' ? { auth: credentials } : credentials,
@@ -170,14 +189,17 @@ export class AppService {
           : await firstValueFrom(
               this.httpService[method]<T>(path, body, config),
             );
+      this.forwardHeaders(response.headers, reply);
       return response.data;
     } catch (error) {
-      this.handleError(error, method, path);
+      this.handleError(error, method, path, reply);
     }
   }
 
-  // Both headers go through verbatim; tenant-service decides what each route accepts.
-  private buildConfig(credentials?: Credentials): AxiosRequestConfig {
+  // Headers go through verbatim; tenant-service decides what each route accepts.
+  private buildConfig(
+    credentials?: Credentials & ForwardedHeaders,
+  ): AxiosRequestConfig {
     const headers: Record<string, string> = {};
     if (credentials?.auth) {
       headers.Authorization = credentials.auth;
@@ -185,7 +207,25 @@ export class AppService {
     if (credentials?.apiKey) {
       headers[API_KEY_HEADER] = credentials.apiKey;
     }
+    if (credentials?.idempotencyKey) {
+      headers[IDEMPOTENCY_KEY_HEADER] = credentials.idempotencyKey;
+    }
     return Object.keys(headers).length > 0 ? { headers } : {};
+  }
+
+  private forwardHeaders(
+    headers: Record<string, unknown> | undefined,
+    reply?: FastifyReply,
+  ): void {
+    if (!reply || !headers) {
+      return;
+    }
+    for (const name of FORWARDED_RESPONSE_HEADERS) {
+      const value = headers[name];
+      if (typeof value === 'string' || typeof value === 'number') {
+        void reply.header(name, String(value));
+      }
+    }
   }
 
   /**
@@ -193,7 +233,12 @@ export class AppService {
    * 4xx from downstream → forwarded as-is (client error).
    * 5xx, network failures, timeouts → 503 (don't leak infra details).
    */
-  private handleError(error: unknown, method: string, path: string): never {
+  private handleError(
+    error: unknown,
+    method: string,
+    path: string,
+    reply?: FastifyReply,
+  ): never {
     if (isAxiosError<DownstreamErrorBody>(error)) {
       const status = error.response?.status;
       const downstreamBody = error.response?.data;
@@ -202,6 +247,10 @@ export class AppService {
         this.logger.warn(
           { status, path, method, err: downstreamBody },
           'Downstream client error',
+        );
+        this.forwardHeaders(
+          error.response?.headers as Record<string, unknown> | undefined,
+          reply,
         );
         throw new HttpException(downstreamBody ?? error.message, status);
       }
