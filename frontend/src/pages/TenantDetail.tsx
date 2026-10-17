@@ -259,8 +259,9 @@ function TitleBlock({ tenant, now }: { tenant: Tenant; now: number }) {
     ];
     return (
         <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-ink/70 bg-rule md:grid-cols-4 xl:grid-cols-7">
-            {cells.map((c) => (
-                <div key={c.k} className="min-w-0 bg-card px-4 py-3" title={c.title}>
+            {cells.map((c, i) => (
+                // Seven cells: the last one fills the row on the 2- and 4-column layouts.
+                <div key={c.k} className={cn('min-w-0 bg-card px-4 py-3', i === cells.length - 1 && 'col-span-2 xl:col-span-1')} title={c.title}>
                     <dt className="label mb-1">{c.k}</dt>
                     <dd className="truncate font-mono text-[13px] text-ink">{c.v}</dd>
                 </div>
