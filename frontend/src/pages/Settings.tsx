@@ -12,8 +12,8 @@ import { previewHost } from '../lib/simple';
 import { fmtStamp } from '../lib/time';
 import { inputClass } from '../lib/ui';
 import { cn } from '../lib/cn';
-import type { ApiKey, Organisation, PlanId, UserSettings } from '../lib/types';
-import { PLAN_IDS } from '../lib/types';
+import type { ApiKey, Organisation, UserSettings } from '../lib/types';
+import { DEFAULT_PLANS, MAX_PLANS, PLAN_ID_OK, organisationPlans } from '../lib/types';
 import PageHeader from '../components/ui/PageHeader';
 import Panel from '../components/ui/Panel';
 import Button from '../components/ui/Button';
@@ -327,47 +327,70 @@ function CompanyPanel({ org }: { org: OrgState }) {
     );
 }
 
-const PLAN_NAMES: Record<PlanId, string> = { starter: 'Starter', pro: 'Pro', enterprise: 'Enterprise' };
 const STRIPE_KEY_OK = /^(sk|rk)_(test|live)_[A-Za-z0-9]{8,}$/;
 const PRICE_OK = /^price_[A-Za-z0-9]{8,}$/;
 
-type PriceDraft = Record<PlanId, string>;
+interface PlanRow {
+    id: string;
+    name: string;
+    description: string;
+    price: string;
+    // Ids are fixed once saved: tenants already carry them.
+    saved: boolean;
+}
 
-const pricesOf = (o: Organisation): PriceDraft => ({
-    starter: o.stripePrices?.starter ?? '',
-    pro: o.stripePrices?.pro ?? '',
-    enterprise: o.stripePrices?.enterprise ?? '',
-});
+const rowsOf = (o: Organisation): PlanRow[] =>
+    organisationPlans(o).map((p) => ({ id: p.id, name: p.name, description: p.description ?? '', price: o.stripePrices?.[p.id] ?? '', saved: true }));
 
-// The company's own Stripe account. Until it is connected every customer's billing step is skipped.
+const sameRows = (a: PlanRow[], b: PlanRow[]) =>
+    a.length === b.length && a.every((r, i) => r.id === b[i].id && r.name === b[i].name && r.description === b[i].description && r.price === b[i].price);
+
+// The company's own Stripe account, and the customer plans its tenants are on. Until Stripe is
+// connected every customer's billing step is skipped and plans carry no price.
 function BillingPanel({ org }: { org: OrgState }) {
     const current = org.current;
     const [key, setKey] = useState('');
-    const [prices, setPrices] = useState<PriceDraft | null>(null);
-    const [busy, setBusy] = useState<'connect' | 'prices' | 'disconnect' | null>(null);
+    const [rows, setRows] = useState<PlanRow[] | null>(null);
+    const [busy, setBusy] = useState<'connect' | 'plans' | 'disconnect' | null>(null);
 
     const connected = !!current?.stripeConfigured;
-    const form = prices ?? (current ? pricesOf(current) : null);
-    const pricesDirty = !!prices && !!current && PLAN_IDS.some((p) => prices[p].trim() !== (current.stripePrices?.[p] ?? ''));
-    const pricesOk = !form || PLAN_IDS.every((p) => !form[p].trim() || PRICE_OK.test(form[p].trim()));
+    const form = rows ?? (current ? rowsOf(current) : null);
+    const dirty = !!rows && !!current && !sameRows(rows, rowsOf(current));
     const keyOk = STRIPE_KEY_OK.test(key.trim());
-    const mapped = current ? PLAN_IDS.filter((p) => !!current.stripePrices?.[p]) : [];
+    const ids = form?.map((r) => r.id.trim().toLowerCase()) ?? [];
+    const rowError = (r: PlanRow, i: number) =>
+        !r.id.trim()
+            ? 'Give the plan an id.'
+            : !PLAN_ID_OK.test(r.id.trim().toLowerCase())
+              ? 'Lowercase letters and digits, with single hyphens or underscores.'
+              : ids.indexOf(r.id.trim().toLowerCase()) !== i
+                ? 'Another plan has this id.'
+                : !r.name.trim()
+                  ? 'Give the plan a name.'
+                  : r.price.trim() && !PRICE_OK.test(r.price.trim())
+                    ? 'A Stripe Price ID, like price_1Q…'
+                    : undefined;
+    const plansOk = !!form && form.length > 0 && form.every((r, i) => !rowError(r, i));
+    const currentPlans = organisationPlans(current);
+    const priced = current ? currentPlans.filter((p) => !!current.stripePrices?.[p.id]).length : 0;
+    const isDefaults = currentPlans.length === DEFAULT_PLANS.length && DEFAULT_PLANS.every((d, i) => currentPlans[i]?.id === d.id && currentPlans[i]?.name === d.name);
 
-    const pricePatch = () =>
-        form
-            ? (Object.fromEntries(PLAN_IDS.map((p) => [p, form[p].trim() || null])) as Record<PlanId, string | null>)
-            : undefined;
+    const edit = (i: number, patch: Partial<PlanRow>) => {
+        if (!form) return;
+        setRows(form.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+    };
+    const addRow = () => form && form.length < MAX_PLANS && setRows([...form, { id: '', name: '', description: '', price: '', saved: false }]);
+    const removeRow = (i: number) => form && form.length > 1 && setRows(form.filter((_, j) => j !== i));
 
     const connect = async (e: FormEvent) => {
         e.preventDefault();
         if (!keyOk) return;
         setBusy('connect');
         try {
-            const next = await updateOrganisation({ stripeSecretKey: key.trim(), ...(pricesDirty && { stripePrices: pricePatch() }) });
+            const next = await updateOrganisation({ stripeSecretKey: key.trim() });
             org.onSaved(next);
             setKey('');
-            setPrices(null);
-            toast.success('Stripe connected. New customers get a subscription from now on.');
+            toast.success('Stripe connected. Set a price per customer plan below.');
         } catch (err) {
             toast.error(apiMessage(err, 'Could not connect Stripe.'));
         } finally {
@@ -375,17 +398,36 @@ function BillingPanel({ org }: { org: OrgState }) {
         }
     };
 
-    const savePrices = async (e: FormEvent) => {
+    const savePlans = async (e: FormEvent) => {
         e.preventDefault();
-        if (!pricesOk) return;
-        setBusy('prices');
+        if (!form || !current || !plansOk) return;
+        setBusy('plans');
         try {
-            const next = await updateOrganisation({ stripePrices: pricePatch() });
+            const plans = form.map((r) => ({ id: r.id.trim().toLowerCase(), name: r.name.trim(), ...(r.description.trim() && { description: r.description.trim() }) }));
+            // Every current plan gets its price or null; plans that were removed lose theirs.
+            const stripePrices: Record<string, string | null> = {};
+            for (const r of form) stripePrices[r.id.trim().toLowerCase()] = connected && r.price.trim() ? r.price.trim() : null;
+            for (const p of currentPlans) if (!(p.id in stripePrices)) stripePrices[p.id] = null;
+            const next = await updateOrganisation({ plans, stripePrices });
             org.onSaved(next);
-            setPrices(null);
-            toast.success('Plan prices saved');
+            setRows(null);
+            toast.success('Customer plans saved');
         } catch (err) {
-            toast.error(apiMessage(err, 'Could not save the prices.'));
+            toast.error(apiMessage(err, 'Could not save the plans.'));
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const resetDefaults = async () => {
+        setBusy('plans');
+        try {
+            const next = await updateOrganisation({ plans: null });
+            org.onSaved(next);
+            setRows(null);
+            toast.success('Back to the default plans');
+        } catch (err) {
+            toast.error(apiMessage(err, 'Could not reset the plans.'));
         } finally {
             setBusy(null);
         }
@@ -404,113 +446,176 @@ function BillingPanel({ org }: { org: OrgState }) {
         }
     };
 
-    const priceFields = form && (
-        <div className="grid gap-4 md:grid-cols-3">
-            {PLAN_IDS.map((p) => (
-                <Field
-                    key={p}
-                    label={`${PLAN_NAMES[p]} price`}
-                    htmlFor={`price-${p}`}
-                    aside="optional"
-                    error={!form[p].trim() || PRICE_OK.test(form[p].trim()) ? undefined : 'A Stripe Price ID, like price_1Q…'}
-                >
-                    <input
-                        id={`price-${p}`}
-                        value={form[p]}
-                        onChange={(e) => setPrices({ ...form, [p]: e.target.value })}
-                        className={cn(inputClass, 'font-mono text-[14px]')}
-                        placeholder="price_…"
-                        spellCheck={false}
-                        autoComplete="off"
-                    />
-                </Field>
-            ))}
-        </div>
-    );
-
     return (
         <Panel
             id="billing"
             fig="7.3"
             title="Billing"
-            meta={connected ? `Stripe connected · ${mapped.length} of ${PLAN_IDS.length} plans priced` : 'Stripe not connected'}
+            meta={current ? (connected ? `Stripe connected · ${priced} of ${currentPlans.length} customer plans priced` : 'Stripe not connected') : undefined}
             className={PANEL}
         >
             <OrgLoadError org={org} what="your billing setup" />
             {!current || !form ? (
                 <div className="h-[66px] animate-pulse rounded bg-paper-deep/60" />
-            ) : connected ? (
-                <form onSubmit={savePrices}>
-                    <div className="mb-5 flex items-start gap-3 rounded border border-go/35 bg-go/[0.05] px-3 py-2.5 text-[14px] text-ink-2">
-                        <CreditCard size={16} className="mt-0.5 shrink-0 text-go" />
-                        <p className="min-w-0">
-                            <span className="font-semibold text-ink">Connected to your Stripe account.</span> Every new customer gets a Stripe customer and a
-                            14-day-trial subscription on the price mapped to their plan. The key is stored encrypted and is never shown again.
-                            {mapped.length < PLAN_IDS.length && (
-                                <>
-                                    {' '}
-                                    Plans without a price (<span className="font-medium text-ink">{PLAN_IDS.filter((p) => !mapped.includes(p)).map((p) => PLAN_NAMES[p]).join(', ')}</span>)
-                                    fail at the billing step until you add one.
-                                </>
-                            )}
-                        </p>
-                    </div>
-                    {priceFields}
-                    <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-rule pt-4">
-                        <Button variant="danger" onClick={disconnect} busy={busy === 'disconnect'} disabled={busy !== null && busy !== 'disconnect'}>
-                            Disconnect Stripe
-                        </Button>
-                        <span className="min-w-0 flex-1 text-[13px] text-ink-3">Disconnecting skips billing for new customers. Existing subscriptions stay in Stripe.</span>
-                        {pricesDirty && <span className="font-mono text-[11.5px] text-hold">unsaved changes</span>}
-                        {pricesDirty && (
-                            <Button variant="ghost" onClick={() => setPrices(null)}>
-                                Discard
-                            </Button>
-                        )}
-                        <Button type="submit" variant="primary" busy={busy === 'prices'} disabled={!pricesDirty || !pricesOk || busy !== null}>
-                            Save prices
-                        </Button>
-                    </div>
-                </form>
             ) : (
-                <form onSubmit={connect}>
-                    <div className="mb-5 flex items-start gap-3 rounded border border-hold/35 bg-hold/[0.06] px-3 py-2.5 text-[14px] text-ink-2">
-                        <CreditCard size={16} className="mt-0.5 shrink-0 text-hold" />
-                        <p className="min-w-0">
-                            <span className="font-semibold text-ink">Billing: not connected.</span> Customers are set up without a subscription and their
-                            billing step reads "Not connected". Nothing is simulated. Connect your Stripe account to start a 14-day trial for each new
-                            customer.
-                        </p>
-                    </div>
-                    <div className="grid gap-4">
-                        <Field
-                            label="Stripe secret key"
-                            htmlFor="stripeKey"
-                            hint="From Stripe → Developers → API keys. A restricted key (rk_…) with write access to Customers and Subscriptions is enough. Stored encrypted on our side; we never show it again."
-                            error={!key || keyOk ? undefined : 'Starts with sk_test_, sk_live_, rk_test_ or rk_live_.'}
-                        >
-                            <input
-                                id="stripeKey"
-                                type="password"
-                                value={key}
-                                onChange={(e) => setKey(e.target.value)}
-                                className={cn(inputClass, 'font-mono text-[14px]')}
-                                placeholder="sk_test_…"
-                                autoComplete="off"
-                                spellCheck={false}
-                            />
-                        </Field>
-                        {priceFields}
-                    </div>
-                    <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-rule pt-4">
-                        <span className="min-w-0 flex-1 text-[13px] text-ink-3">
-                            Prices are Stripe Price IDs for your own plans. A plan without one fails at the billing step, so map the plans you use.
-                        </span>
-                        <Button type="submit" variant="primary" busy={busy === 'connect'} disabled={!keyOk || !pricesOk || busy !== null}>
-                            Connect Stripe
-                        </Button>
-                    </div>
-                </form>
+                <>
+                    {connected ? (
+                        <div className="mb-5 flex flex-wrap items-start gap-3 rounded border border-go/35 bg-go/[0.05] px-3 py-2.5 text-[14px] text-ink-2">
+                            <CreditCard size={16} className="mt-0.5 shrink-0 text-go" />
+                            <p className="min-w-0 flex-1">
+                                <span className="font-semibold text-ink">Connected to your Stripe account.</span> Every new customer gets a Stripe customer and a
+                                14-day-trial subscription on the price of their customer plan. The key is stored encrypted and is never shown again.
+                                {priced < currentPlans.length && (
+                                    <>
+                                        {' '}
+                                        Plans without a price (
+                                        <span className="font-medium text-ink">
+                                            {currentPlans
+                                                .filter((p) => !current.stripePrices?.[p.id])
+                                                .map((p) => p.name)
+                                                .join(', ')}
+                                        </span>
+                                        ) fail at the billing step until you add one.
+                                    </>
+                                )}
+                            </p>
+                            <Button size="sm" variant="danger" onClick={disconnect} busy={busy === 'disconnect'} disabled={busy !== null && busy !== 'disconnect'}>
+                                Disconnect
+                            </Button>
+                        </div>
+                    ) : (
+                        <form onSubmit={connect} className="mb-5">
+                            <div className="mb-4 flex items-start gap-3 rounded border border-hold/35 bg-hold/[0.06] px-3 py-2.5 text-[14px] text-ink-2">
+                                <CreditCard size={16} className="mt-0.5 shrink-0 text-hold" />
+                                <p className="min-w-0">
+                                    <span className="font-semibold text-ink">Billing: not connected.</span> Customers are set up without a subscription and their
+                                    billing step reads "Not connected". Nothing is simulated. Connect your Stripe account to start a 14-day trial for each new
+                                    customer.
+                                </p>
+                            </div>
+                            <div className="flex flex-wrap items-end gap-3">
+                                <Field
+                                    label="Stripe secret key"
+                                    htmlFor="stripeKey"
+                                    className="min-w-0 flex-1 basis-72"
+                                    hint="From Stripe → Developers → API keys. A restricted key (rk_…) with write access to Customers and Subscriptions is enough. Stored encrypted; never shown again."
+                                    error={!key || keyOk ? undefined : 'Starts with sk_test_, sk_live_, rk_test_ or rk_live_.'}
+                                >
+                                    <input
+                                        id="stripeKey"
+                                        type="password"
+                                        value={key}
+                                        onChange={(e) => setKey(e.target.value)}
+                                        className={cn(inputClass, 'font-mono text-[14px]')}
+                                        placeholder="sk_test_…"
+                                        autoComplete="off"
+                                        spellCheck={false}
+                                    />
+                                </Field>
+                                <Button type="submit" variant="primary" busy={busy === 'connect'} disabled={!keyOk || busy !== null} className="mb-[46px]">
+                                    Connect Stripe
+                                </Button>
+                            </div>
+                        </form>
+                    )}
+
+                    <form onSubmit={savePlans} className="border-t border-rule pt-4">
+                        <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                            <h3 className="text-[15px] font-semibold text-ink">Customer plans</h3>
+                            <p className="min-w-0 flex-1 text-[13px] text-ink-3">
+                                The plans your customers are on, in your product's words. The id is what your signup flow sends as{' '}
+                                <span className="font-mono text-ink-2">planId</span>.
+                                {!connected && ' Connect Stripe to set a price per plan.'}
+                            </p>
+                        </div>
+                        <ul className="space-y-2">
+                            {form.map((r, i) => {
+                                const error = rowError(r, i);
+                                return (
+                                    <li key={i} className="rounded border border-rule-strong bg-paper/40 p-3">
+                                        <div className={cn('grid gap-3', connected ? 'md:grid-cols-[150px_minmax(0,1fr)_minmax(0,1.3fr)_190px_auto]' : 'md:grid-cols-[150px_minmax(0,1fr)_minmax(0,1.5fr)_auto]')}>
+                                            <Field label="Id" htmlFor={`plan-id-${i}`}>
+                                                <input
+                                                    id={`plan-id-${i}`}
+                                                    value={r.id}
+                                                    onChange={(e) => edit(i, { id: e.target.value })}
+                                                    readOnly={r.saved}
+                                                    className={cn(inputClass, 'font-mono text-[14px]', r.saved && 'opacity-70')}
+                                                    placeholder="growth"
+                                                    maxLength={40}
+                                                    spellCheck={false}
+                                                    autoComplete="off"
+                                                />
+                                            </Field>
+                                            <Field label="Name" htmlFor={`plan-name-${i}`}>
+                                                <input id={`plan-name-${i}`} value={r.name} onChange={(e) => edit(i, { name: e.target.value })} className={inputClass} placeholder="Growth" maxLength={60} />
+                                            </Field>
+                                            <Field label="Description" htmlFor={`plan-desc-${i}`} aside="optional">
+                                                <input
+                                                    id={`plan-desc-${i}`}
+                                                    value={r.description}
+                                                    onChange={(e) => edit(i, { description: e.target.value })}
+                                                    className={inputClass}
+                                                    placeholder="For teams of 10 to 50"
+                                                    maxLength={120}
+                                                />
+                                            </Field>
+                                            {connected && (
+                                                <Field label="Stripe price" htmlFor={`plan-price-${i}`} aside="optional">
+                                                    <input
+                                                        id={`plan-price-${i}`}
+                                                        value={r.price}
+                                                        onChange={(e) => edit(i, { price: e.target.value })}
+                                                        className={cn(inputClass, 'font-mono text-[14px]')}
+                                                        placeholder="price_…"
+                                                        spellCheck={false}
+                                                        autoComplete="off"
+                                                    />
+                                                </Field>
+                                            )}
+                                            <div className="flex items-end">
+                                                <Button
+                                                    size="sm"
+                                                    variant="ghost"
+                                                    onClick={() => removeRow(i)}
+                                                    disabled={form.length === 1}
+                                                    aria-label={`Remove ${r.name || 'this plan'}`}
+                                                    title={form.length === 1 ? 'Keep at least one plan' : r.saved ? 'Customers already on it keep it; new ones cannot pick it' : 'Remove'}
+                                                    className="mb-px h-10"
+                                                >
+                                                    <Trash2 size={14} />
+                                                </Button>
+                                            </div>
+                                        </div>
+                                        {error && <p className="mt-1.5 text-[13px] text-abort">{error}</p>}
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                        <div className="mt-4 flex flex-wrap items-center gap-3">
+                            <Button size="sm" onClick={addRow} disabled={form.length >= MAX_PLANS || busy !== null}>
+                                <Plus size={13} /> Add plan
+                            </Button>
+                            {!isDefaults && (
+                                <Button size="sm" variant="ghost" onClick={resetDefaults} disabled={busy !== null}>
+                                    Back to defaults
+                                </Button>
+                            )}
+                            <span className="min-w-0 flex-1 text-[13px] text-ink-3">
+                                Removing a plan stops new customers picking it; customers already on it keep it.
+                            </span>
+                            {dirty && <span className="font-mono text-[11.5px] text-hold">unsaved changes</span>}
+                            {dirty && (
+                                <Button variant="ghost" onClick={() => setRows(null)}>
+                                    Discard
+                                </Button>
+                            )}
+                            <Button type="submit" variant="primary" busy={busy === 'plans'} disabled={!dirty || !plansOk || busy !== null}>
+                                Save plans
+                            </Button>
+                        </div>
+                    </form>
+                </>
             )}
         </Panel>
     );

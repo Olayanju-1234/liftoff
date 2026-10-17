@@ -4,7 +4,10 @@ export interface Tenant {
     name: string;
     subdomain: string;
     status: TenantStatus;
+    // The customer's plan on the company's product: one of the organisation's customer plans.
     planId: string;
+    // That plan as the company calls it (falls back to the id for a plan since removed).
+    planName?: string;
     plan?: Plan;
     dbStatus: StepStatus;
     dnsStatus: StepStatus;
@@ -43,7 +46,9 @@ export interface Organisation {
     baseDomain: string | null;
     // True once the company's Stripe key is stored (it is never returned). Until then billing is skipped.
     stripeConfigured: boolean;
-    stripePrices: Record<PlanId, string | null>;
+    // The company's customer plans (the three defaults until it defines its own) and a Stripe price per plan id.
+    plans: CustomerPlan[];
+    stripePrices: Record<string, string | null>;
     // Quotas on adding customers; test customers don't count. Raised by support on request.
     limits: { maxActiveTenants: number; maxProvisionsPerDay: number };
     // Set once the finished onboarding checklist was dismissed; it never shows again after.
@@ -72,8 +77,25 @@ export interface CreatedApiKey extends ApiKey {
     key: string;
 }
 
-export type PlanId = 'starter' | 'pro' | 'enterprise';
-export const PLAN_IDS: PlanId[] = ['starter', 'pro', 'enterprise'];
+// A customer plan as the company defines it under Settings → Billing. Its id is what POST /tenants takes as planId.
+export interface CustomerPlan {
+    id: string;
+    name: string;
+    description?: string;
+}
+
+// What every company starts with; the API returns these until the company defines its own.
+export const DEFAULT_PLANS: CustomerPlan[] = [
+    { id: 'starter', name: 'Starter', description: 'For small teams' },
+    { id: 'pro', name: 'Pro', description: 'For growing teams' },
+    { id: 'enterprise', name: 'Enterprise', description: 'For large organisations' },
+];
+export const PLAN_ID_OK = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
+export const MAX_PLANS = 12;
+
+// The company's plans, or the defaults when the API predates them or returned none.
+export const organisationPlans = (o: Pick<Organisation, 'plans'> | undefined): CustomerPlan[] =>
+    Array.isArray(o?.plans) && o.plans.length > 0 ? o.plans : DEFAULT_PLANS;
 
 export type TenantStatus = 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'FAILED' | 'CANCELLED' | 'DEPROVISIONING' | 'DELETED';
 export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'SKIPPED';

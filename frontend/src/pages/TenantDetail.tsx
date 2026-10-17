@@ -282,7 +282,7 @@ function TitleBlock({ tenant, now }: { tenant: Tenant; now: number }) {
         },
         { k: 'Address', v: tenantHost(tenant), title: `${tenantHost(tenant)} (DNS is simulated; display only)` },
         { k: 'Schema', v: tenant.schemaName ?? schemaName(tenant.subdomain), title: tenant.schemaName ?? schemaName(tenant.subdomain) },
-        { k: 'Plan', v: planLabel(tenant), title: `planId ${tenant.planId}` },
+        { k: 'Customer plan', v: planLabel(tenant), title: `planId ${tenant.planId}: the customer's plan on your product` },
         {
             k: 'Billing',
             v: tenant.stripeSubscriptionId ?? (billingSkip(tenant) === 'not-connected' ? 'not connected' : billingSkip(tenant) === 'test' ? 'skipped (test)' : '—'),

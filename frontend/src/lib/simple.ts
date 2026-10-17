@@ -56,12 +56,6 @@ export const SIMPLE_STEP_STATE: Record<StageState, { label: string; tone: Tone }
     SKIPPED: { label: 'Skipped', tone: 'scrub' },
 };
 
-export const PLAN_BLURBS: Record<string, string> = {
-    starter: 'For small teams',
-    pro: 'For growing teams',
-    enterprise: 'For large organisations',
-};
-
 export const TRIAL_DAYS = 14;
 
 // Billing starts the trial when it activates; fall back to creation time if that event isn't in the log.

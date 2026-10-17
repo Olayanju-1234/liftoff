@@ -45,7 +45,12 @@ export default function TenantManagement() {
     const actions = useTenantActions({ onCancelled: tenants.refresh, onDeleted: tenants.refresh });
 
     const list = useMemo(() => tenants.data ?? [], [tenants.data]);
-    const plans = useMemo(() => Array.from(new Set(list.map((t) => t.planId))).sort(), [list]);
+    // Customer plans in use, by id, labelled as the company calls them.
+    const plans = useMemo(() => {
+        const byId = new Map<string, string>();
+        for (const t of list) if (!byId.has(t.planId)) byId.set(t.planId, planLabel(t));
+        return Array.from(byId.entries()).sort(([a], [b]) => a.localeCompare(b));
+    }, [list]);
     const withCond = list.map((t) => ({ t, c: condition(t, now) }));
 
     const counts = Object.fromEntries(
@@ -130,13 +135,13 @@ export default function TenantManagement() {
                 <select
                     value={plan}
                     onChange={(e) => setPlan(e.target.value)}
-                    aria-label="Filter by plan"
+                    aria-label="Filter by customer plan"
                     className={cn(inputClass, 'w-auto min-w-[140px] pr-8 font-mono text-[13px]')}
                 >
-                    <option value="all">All plans</option>
-                    {plans.map((p) => (
-                        <option key={p} value={p}>
-                            {p}
+                    <option value="all">All customer plans</option>
+                    {plans.map(([id, label]) => (
+                        <option key={id} value={id}>
+                            {label === id ? id : `${label} (${id})`}
                         </option>
                     ))}
                 </select>
@@ -153,7 +158,7 @@ export default function TenantManagement() {
                         ))}
                     </span>
                     <span className="label">State</span>
-                    <span className="label">Plan</span>
+                    <span className="label">Customer plan</span>
                     <span className="label">Created</span>
                     <span />
                 </div>
@@ -185,7 +190,7 @@ export default function TenantManagement() {
                             )
                         }
                     >
-                        {list.length === 0 ? 'A new tenant runs through five stages before it goes active.' : 'Try a different state or plan.'}
+                        {list.length === 0 ? 'A new tenant runs through five stages before it goes active.' : 'Try a different state or customer plan.'}
                     </Empty>
                 ) : (
                     <ul className="divide-y divide-rule">

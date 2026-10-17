@@ -103,12 +103,6 @@ export const STAGES: Stage[] = [
     },
 ];
 
-export const PLANS = [
-    { id: 'starter', name: 'Starter', note: 'Small teams. Billed on the Stripe price you map to it in Settings → Billing.' },
-    { id: 'pro', name: 'Pro', note: 'Growing tenants. Billed on the Stripe price you map to it in Settings → Billing.' },
-    { id: 'enterprise', name: 'Enterprise', note: 'Large tenants. Billed on the Stripe price you map to it in Settings → Billing.' },
-] as const;
-
 export type StageState = StepStatus | 'STALLED';
 
 export type Condition = 'active' | 'running' | 'stalled' | 'waiting' | 'failed' | 'cancelled' | 'suspended' | 'removing' | 'removed';
@@ -138,9 +132,10 @@ export function schemaName(subdomain: string) {
     return `tenant_${subdomain.replace(/[^a-zA-Z0-9]/g, '_')}`;
 }
 
-export function planLabel(t: Pick<Tenant, 'planId' | 'plan'>) {
-    const raw = t.plan?.name ?? t.planId;
-    const trimmed = raw.replace(/^plan_/, '');
+// The customer plan as the company named it; older responses only carry the id.
+export function planLabel(t: Pick<Tenant, 'planId' | 'planName'>) {
+    if (t.planName) return t.planName;
+    const trimmed = t.planId.replace(/^plan_/, '');
     return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 

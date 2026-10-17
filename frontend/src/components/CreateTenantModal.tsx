@@ -4,11 +4,12 @@ import { AlertTriangle } from 'lucide-react';
 import { createTenant, getOrganisation } from '../lib/api';
 import { apiMessage } from '../lib/errors';
 import { useResource } from '../lib/hooks';
-import { PLANS, STAGES } from '../lib/pipeline';
-import { PLAN_BLURBS, SIMPLE_STEPS, previewHost } from '../lib/simple';
+import { STAGES } from '../lib/pipeline';
+import { SIMPLE_STEPS, previewHost } from '../lib/simple';
 import { inputClass } from '../lib/ui';
 import { useIsSimple } from '../lib/mode';
 import { cn } from '../lib/cn';
+import { organisationPlans } from '../lib/types';
 import type { Tenant } from '../lib/types';
 import Modal from './ui/Modal';
 import Button from './ui/Button';
@@ -22,13 +23,12 @@ interface CreateTenantModalProps {
     initialTest?: boolean;
 }
 
-type PlanId = (typeof PLANS)[number]['id'];
-
 export default function CreateTenantModal({ isOpen, onClose, onCreated, initialTest = false }: CreateTenantModalProps) {
     const [name, setName] = useState('');
     const [subdomain, setSubdomain] = useState('');
     const [touched, setTouched] = useState(false);
-    const [plan, setPlan] = useState<PlanId>('pro');
+    // '' until the person picks one: the first of the company's plans is the default.
+    const [plan, setPlan] = useState('');
     const [test, setTest] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -38,6 +38,9 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated, initialT
     // For the address preview only; the API computes the real address.
     const organisation = useResource(getOrganisation);
     const host = (sub: string) => previewHost(sub || 'globex', organisation.data?.baseDomain);
+    // The company's own customer plans; the defaults stand in until they load.
+    const plans = organisationPlans(organisation.data);
+    const selected = plans.some((p) => p.id === plan) ? plan : (plans[0]?.id ?? '');
 
     useEffect(() => {
         if (isOpen && initialTest) setTest(true);
@@ -47,7 +50,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated, initialT
         setName('');
         setSubdomain('');
         setTouched(false);
-        setPlan('pro');
+        setPlan('');
         setTest(false);
         setError('');
         setIdempotencyKey(crypto.randomUUID());
@@ -64,7 +67,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated, initialT
         setLoading(true);
         setError('');
         try {
-            const tenant = await createTenant({ name: name.trim(), subdomain, planId: plan, ...(test && { test: true }) }, idempotencyKey);
+            const tenant = await createTenant({ name: name.trim(), subdomain, planId: selected, ...(test && { test: true }) }, idempotencyKey);
             reset();
             onCreated(tenant);
         } catch (err) {
@@ -89,7 +92,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated, initialT
                     <Button variant="ghost" onClick={close} disabled={loading}>
                         Cancel
                     </Button>
-                    <Button variant="primary" type="submit" form="create-tenant" busy={loading} disabled={!name.trim() || subdomain.length < 2}>
+                    <Button variant="primary" type="submit" form="create-tenant" busy={loading} disabled={!name.trim() || subdomain.length < 2 || !selected}>
                         {simple ? 'Add customer' : 'Start provisioning'}
                     </Button>
                 </>
@@ -137,10 +140,10 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated, initialT
                 </div>
 
                 <fieldset>
-                    <legend className="label mb-1.5 text-ink-2">Plan</legend>
-                    <div className="grid gap-2 sm:grid-cols-3">
-                        {PLANS.map((p) => {
-                            const on = plan === p.id;
+                    <legend className="label mb-1.5 text-ink-2">Customer plan</legend>
+                    <div className={cn('grid gap-2', plans.length === 1 ? '' : plans.length === 2 || plans.length === 4 ? 'sm:grid-cols-2' : 'sm:grid-cols-3')}>
+                        {plans.map((p) => {
+                            const on = selected === p.id;
                             return (
                                 <label
                                     key={p.id}
@@ -157,11 +160,11 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated, initialT
                                         onChange={() => setPlan(p.id)}
                                         className="sr-only"
                                     />
-                                    <span className="block text-[15px] font-semibold">{p.name}</span>
+                                    <span className="block truncate text-[15px] font-semibold">{p.name}</span>
                                     {simple ? (
-                                        <span className={cn('block text-[12.5px]', on ? 'text-paper/75' : 'text-ink-3')}>{PLAN_BLURBS[p.id]}</span>
+                                        <span className={cn('block truncate text-[12.5px]', on ? 'text-paper/75' : 'text-ink-3')}>{p.description ?? '\u00a0'}</span>
                                     ) : (
-                                        <span className={cn('block font-mono text-[11px]', on ? 'text-paper/65' : 'text-ink-3')}>
+                                        <span className={cn('block truncate font-mono text-[11px]', on ? 'text-paper/65' : 'text-ink-3')}>
                                             planId: {p.id}
                                         </span>
                                     )}
@@ -170,7 +173,9 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated, initialT
                         })}
                     </div>
                     <p className="mt-1.5 text-[13px] text-ink-3">
-                        {simple ? 'Every plan starts with a 14-day free trial.' : 'Billing maps the plan to a Stripe price and starts a 14-day trial.'}
+                        {simple
+                            ? 'Their plan on your product. Name your plans and set prices under Settings → Billing.'
+                            : 'Billing subscribes them to the Stripe price you set for this plan under Settings → Billing, with a 14-day trial.'}
                     </p>
                 </fieldset>
 
