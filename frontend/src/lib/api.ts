@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { ApiKey, CreatedApiKey, Tenant, EventLog, Organisation, PlanId, UpdatedOrganisation, UserSettings } from './types';
+import type { ApiKey, CreatedApiKey, Tenant, EventLog, Organisation, PlanId, PublicTenantStatus, UpdatedOrganisation, UserSettings } from './types';
 import type { SessionUser } from './session';
 
 const api = axios.create({
@@ -17,6 +17,9 @@ export const deleteTenant = (id: string) => api.delete<Tenant>(`/tenants/${id}`)
 export const retryTenant = (id: string) => api.post<Tenant>(`/tenants/${id}/retry`).then((res) => res.data);
 export const cancelTenant = (id: string, reason?: string) =>
     api.post<Tenant>(`/tenants/${id}/cancel`, { reason }).then(res => res.data);
+
+// Public status page: no credentials. The interceptor adds none when there is no session.
+export const getPublicStatus = (token: string) => api.get<PublicTenantStatus>(`/status/${encodeURIComponent(token)}`).then((res) => res.data);
 
 // Event APIs
 export const getEvents = () => api.get<EventLog[]>('/events').then(res => res.data);
