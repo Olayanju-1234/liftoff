@@ -192,8 +192,8 @@ const ENDPOINTS: [string, string, string][] = [
     ['GET', '/tenants/:id', 'One tenant with its plan and last 100 events'],
     ['GET', '/tenants/:id/events', 'Event log for one tenant (latest 200)'],
     ['GET', '/events', 'Event log across all your tenants (latest 200)'],
-    ['POST', '/tenants/:id/cancel', 'Cancel a tenant that is still provisioning'],
-    ['DELETE', '/tenants/:id', 'Delete a tenant and its events'],
+    ['POST', '/tenants/:id/cancel', 'Stop a tenant that is still provisioning; from ACTIVE or FAILED, remove it like DELETE'],
+    ['DELETE', '/tenants/:id', 'Remove a tenant: drop its schema, revoke its API key, cancel its Stripe subscription. Ends DELETED; events are kept'],
     ['GET / PUT', '/organisation', 'Your company: name, base domain, webhook URL (PUT returns the signing secret once), Stripe key (never returned) and plan → price map'],
     ['GET / PUT', '/settings', 'Your profile and notification preferences'],
     ['POST', '/api-keys', 'Create a company API key (returned once)'],
@@ -321,6 +321,8 @@ export default function Docs() {
                             ['FAILED', 'A step failed for good, or made no progress for 2 minutes and was timed out ("Step timed out: …" in the event log). The step’s own status is FAILED and the event log holds the error. tenant.failed is sent. Terminal; create again or delete.'],
                             ['CANCELLED', 'You cancelled it, or no step was ever in progress and nothing moved for 30 minutes, so the sweeper did. cancelReason says which. Terminal.'],
                             ['SUSPENDED', 'Reserved for a future pause action; not set by the service today.'],
+                            ['DEPROVISIONING', 'You removed it (DELETE, or cancel from ACTIVE/FAILED). Its schema is being dropped, its API key revoked and its Stripe subscription cancelled. The three teardown* fields say how far it got; DELETE again retries any that failed.'],
+                            ['DELETED', 'Torn down. tenant.deleted is sent. It leaves GET /tenants but GET /tenants/:id still answers, with deletedAt and its events. Test tenants read DELETED at once. Its name and subdomain can be used again. Terminal.'],
                         ]}
                     />
                     <p>
@@ -372,7 +374,8 @@ export default function Docs() {
                     <CodeBlock code={SET_WEBHOOK} title="Set the URL" lang="curl" />
                     <ul className="list-disc space-y-1.5 pl-5">
                         <li>
-                            Events: <Code>tenant.active</Code> and <Code>tenant.failed</Code>. Body: <Code>{'{ "event", "tenant" }'}</Code>, where tenant is the full record.
+                            Events: <Code>tenant.active</Code>, <Code>tenant.failed</Code> and <Code>tenant.deleted</Code> (everything torn down after a removal). Body:{' '}
+                            <Code>{'{ "event", "tenant" }'}</Code>, where tenant is the full record.
                         </li>
                         <li>
                             Headers: <Code>x-liftoff-event</Code>, <Code>x-liftoff-delivery</Code> (a UUID per delivery, reuse it to de-duplicate) and{' '}

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useReducedMotion } from 'framer-motion';
 import { isAxiosError } from 'axios';
-import { ArrowLeft, Ban, Check, ChevronRight, Copy, Trash2 } from 'lucide-react';
+import { ArrowLeft, Ban, Check, ChevronRight, Copy, RotateCcw, Trash2 } from 'lucide-react';
 import { getTenant, getTenantEvents } from '../lib/api';
 import { useNow, useResource } from '../lib/hooks';
 import { useEventFeed } from '../lib/feed';
@@ -13,6 +13,8 @@ import {
     STAGES,
     STEP_TIMEOUT_MS,
     SWEEP_AFTER_MS,
+    TEARDOWN,
+    TEARDOWN_SLOW_MS,
     activeStage,
     billingSkip,
     cancelReasonFrom,
@@ -30,6 +32,7 @@ import {
     stageTimings,
     stepTimeoutAt,
     sweepAt,
+    teardownFailed,
 } from '../lib/pipeline';
 import type { Condition } from '../lib/pipeline';
 import { tenantHost } from '../lib/simple';
@@ -61,7 +64,7 @@ export default function TenantDetail() {
     const tenantRes = useResource(
         async () => {
             const t = await getTenant(id);
-            setLive(t.status === 'PROVISIONING');
+            setLive(t.status === 'PROVISIONING' || t.status === 'DEPROVISIONING');
             return t;
         },
         { interval, key: id },
@@ -138,9 +141,17 @@ export default function TenantDetail() {
                                 <Ban size={14} /> Cancel provisioning
                             </Button>
                         )}
-                        <Button variant="danger" onClick={() => actions.requestDelete(tenant)}>
-                            <Trash2 size={14} /> Delete
-                        </Button>
+                        {tenant.status === 'DEPROVISIONING' ? (
+                            <Button onClick={() => actions.requestDelete(tenant)}>
+                                <RotateCcw size={14} /> Republish tenant.deprovision
+                            </Button>
+                        ) : (
+                            tenant.status !== 'DELETED' && (
+                                <Button variant="danger" onClick={() => actions.requestDelete(tenant)}>
+                                    <Trash2 size={14} /> Delete
+                                </Button>
+                            )
+                        )}
                     </>
                 }
             />
@@ -187,6 +198,8 @@ const CORE_TONE: Record<Condition, CoreView['tone']> = {
     failed: 'fail',
     cancelled: 'cancel',
     suspended: 'cancel',
+    removing: 'cancel',
+    removed: 'cancel',
 };
 
 function buildBoxes(tenant: Tenant, timeline: ReturnType<typeof stageTimings>, now: number): BoxView[] {
@@ -328,6 +341,34 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
             if (!timeline.completeAt) return null;
             tone = 'go';
             head = `Active. Signup to live took ${fmtDuration(timeline.completeAt - timeline.t0)}.`;
+            break;
+        }
+        case 'removing':
+        case 'removed': {
+            const failed = teardownFailed(tenant);
+            const slow = cond === 'removing' && now - Date.parse(tenant.updatedAt) > TEARDOWN_SLOW_MS;
+            tone = failed || slow ? 'hold' : 'scrub';
+            head =
+                cond === 'removed'
+                    ? `DELETED${tenant.deletedAt ? ` ${fmtAgo(Date.parse(tenant.deletedAt), now)}` : ''}. Soft delete: hidden from lists, events kept.`
+                    : failed
+                      ? 'DEPROVISIONING: a teardown dead-lettered.'
+                      : 'DEPROVISIONING: waiting on the workers.';
+            body = (
+                <>
+                    {cond === 'removing' &&
+                        (failed || slow
+                            ? 'Republishing tenant.deprovision resets the failed parts to IN_PROGRESS; every teardown is idempotent. '
+                            : 'tenant.deprovision is out; DELETED follows the last tenant.deprovision.done. ')}
+                    <span className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[12px]">
+                        {TEARDOWN.map((part) => (
+                            <span key={part.key}>
+                                <span className="text-ink-3">{part.name}</span> <Mono>{tenant[part.key] ?? 'PENDING'}</Mono>
+                            </span>
+                        ))}
+                    </span>
+                </>
+            );
             break;
         }
         default:

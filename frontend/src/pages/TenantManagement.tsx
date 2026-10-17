@@ -29,7 +29,7 @@ const FILTER_MATCH: Record<Filter, Condition[]> = {
     inflight: ['running', 'waiting'],
     stalled: ['stalled'],
     failed: ['failed'],
-    cancelled: ['cancelled', 'suspended'],
+    cancelled: ['cancelled', 'suspended', 'removing'],
 };
 
 const TRACK_X = (i: number) => 10 + i * 24;

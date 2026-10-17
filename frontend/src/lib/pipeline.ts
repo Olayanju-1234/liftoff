@@ -111,7 +111,23 @@ export const PLANS = [
 
 export type StageState = StepStatus | 'STALLED';
 
-export type Condition = 'active' | 'running' | 'stalled' | 'waiting' | 'failed' | 'cancelled' | 'suspended';
+export type Condition = 'active' | 'running' | 'stalled' | 'waiting' | 'failed' | 'cancelled' | 'suspended' | 'removing' | 'removed';
+
+export type TeardownKey = 'teardownDbStatus' | 'teardownCredentialsStatus' | 'teardownBillingStatus';
+
+// What DELETE tears down, in plain words and as the event each part logs.
+export const TEARDOWN: { key: TeardownKey; name: string; plain: string; event: string }[] = [
+    { key: 'teardownDbStatus', name: 'Database schema', plain: 'Deleting their database', event: 'tenant.schema.dropped' },
+    { key: 'teardownCredentialsStatus', name: 'API key', plain: 'Revoking their API key', event: 'tenant.credentials.revoked' },
+    { key: 'teardownBillingStatus', name: 'Stripe subscription', plain: 'Cancelling their subscription', event: 'tenant.billing.cancelled' },
+];
+
+// A teardown with no change for this long is probably stuck; removing again retries it.
+export const TEARDOWN_SLOW_MS = 2 * 60_000;
+
+export function teardownFailed(t: Tenant) {
+    return TEARDOWN.some((p) => t[p.key] === 'FAILED');
+}
 
 export function schemaName(subdomain: string) {
     return `tenant_${subdomain.replace(/[^a-zA-Z0-9]/g, '_')}`;
@@ -175,6 +191,10 @@ export function condition(t: Tenant, now: number): Condition {
             return 'cancelled';
         case 'SUSPENDED':
             return 'suspended';
+        case 'DEPROVISIONING':
+            return 'removing';
+        case 'DELETED':
+            return 'removed';
         default:
             if (failedStage(t)) return 'failed';
             if (isUnstarted(t)) return 'waiting';
@@ -238,6 +258,13 @@ const EVENT_LABELS: Record<string, string> = {
     'tenant.billing.skipped': 'Billing skipped',
     'tenant.provisioning.complete': 'Provisioning complete',
     'tenant.cancelled': 'Provisioning cancelled',
+    'tenant.deprovision.requested': 'Removal requested, tenant.deprovision published',
+    'tenant.deprovision.retried': 'Removal retried',
+    'tenant.deprovision.failed': 'A teardown step failed',
+    'tenant.schema.dropped': 'Schema dropped',
+    'tenant.credentials.revoked': 'API key revoked',
+    'tenant.billing.cancelled': 'Stripe subscription cancelled',
+    'tenant.billing.cancelled.warning': 'Subscription left in Stripe',
     'tenant.deleted': 'Tenant deleted',
 };
 
