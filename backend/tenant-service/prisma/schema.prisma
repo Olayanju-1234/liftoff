@@ -85,6 +85,21 @@ model ApiKey {
   @@index([organisationId])
 }
 
+// One row per Idempotency-Key a company sends on POST /tenants. The response is stored
+// once the request succeeds; until then the row reserves the key against a concurrent retry.
+model IdempotencyKey {
+  id             String   @id @default(cuid())
+  organisationId String
+  key            String
+  requestHash    String
+  response       Json?
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  @@unique([organisationId, key])
+  @@index([expiresAt])
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
