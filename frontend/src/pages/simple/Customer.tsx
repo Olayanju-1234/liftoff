@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { isAxiosError } from 'axios';
 import { formatDistanceStrict } from 'date-fns';
-import { ArrowLeft, Ban, Check, Copy, KeyRound, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Ban, Check, Copy, KeyRound, Trash2 } from 'lucide-react';
 import { getTenant, getTenantEvents } from '../../lib/api';
 import { useNow, useResource } from '../../lib/hooks';
 import { useTenantActions } from '../../lib/useTenantActions';
@@ -21,8 +21,18 @@ import {
     sweepAt,
 } from '../../lib/pipeline';
 import type { Condition, Stage } from '../../lib/pipeline';
-import { SIMPLE_STATUS, SIMPLE_STEPS, SIMPLE_STEP_STATE, simpleStatus, stepName, tenantHost, tenantUrl } from '../../lib/simple';
-import { fmtDuration, fmtStamp } from '../../lib/time';
+import {
+    SIMPLE_STATUS,
+    SIMPLE_STEPS,
+    SIMPLE_STEP_STATE,
+    TRIAL_DAYS,
+    simpleStatus,
+    stepName,
+    tenantHost,
+    tenantUrl,
+    trialEndsAt,
+} from '../../lib/simple';
+import { fmtDate, fmtDuration, fmtStamp } from '../../lib/time';
 import { TONE_TEXT } from '../../lib/ui';
 import type { Tone } from '../../lib/ui';
 import { cn } from '../../lib/cn';
@@ -34,7 +44,7 @@ import Empty from '../../components/ui/Empty';
 import { Swatch, Tag } from '../../components/ui/Tag';
 import LoadError from '../../components/LoadError';
 
-export default function SimpleTenant() {
+export default function Customer() {
     const { id = '' } = useParams();
     const navigate = useNavigate();
     const now = useNow();
@@ -70,12 +80,12 @@ export default function SimpleTenant() {
                     <div className="h-64 animate-pulse rounded-md border border-rule bg-card/60" />
                 ) : missing ? (
                     <Panel>
-                        <Empty title="We couldn't find that tenant" action={<BackLink inline />}>
-                            It may have been deleted.
+                        <Empty title="We couldn't find that customer" action={<BackLink inline />}>
+                            They may have been removed.
                         </Empty>
                     </Panel>
                 ) : (
-                    <LoadError error={tenantRes.error} what="this tenant" onRetry={tenantRes.refresh} busy={tenantRes.refreshing} />
+                    <LoadError error={tenantRes.error} what="this customer" onRetry={tenantRes.refresh} busy={tenantRes.refreshing} />
                 )}
             </>
         );
@@ -91,7 +101,7 @@ export default function SimpleTenant() {
             {actions.dialog}
             <BackLink />
             <PageHeader
-                eyebrow="Tenant"
+                eyebrow="Customer"
                 title={tenant.name}
                 aside={
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[13.5px] text-ink-3">
@@ -99,7 +109,7 @@ export default function SimpleTenant() {
                             {status.label}
                         </Tag>
                         <span>{planLabel(tenant)} plan</span>
-                        <span title={fmtStamp(created)}>Created {formatDistanceStrict(created, now, { addSuffix: true })}</span>
+                        <span title={fmtStamp(created)}>Added {formatDistanceStrict(created, now, { addSuffix: true })}</span>
                         {live && <span>Updates every 3 seconds</span>}
                     </div>
                 }
@@ -111,13 +121,15 @@ export default function SimpleTenant() {
                             </Button>
                         )}
                         <Button variant="danger" onClick={() => actions.requestDelete(tenant)}>
-                            <Trash2 size={14} /> Delete
+                            <Trash2 size={14} /> Remove
                         </Button>
                     </>
                 }
             />
 
-            {cond === 'active' && <ReadyPanel tenant={tenant} tookMs={timeline.completeAt ? timeline.completeAt - timeline.t0 : undefined} />}
+            {cond === 'active' && (
+                <ReadyPanel tenant={tenant} events={events} tookMs={timeline.completeAt ? timeline.completeAt - timeline.t0 : undefined} />
+            )}
             <StatusNote tenant={tenant} cond={cond} events={events} now={now} />
 
             <Panel title="Setup progress" meta={cond === 'active' ? 'all five steps finished' : undefined} flush>
@@ -144,6 +156,11 @@ export default function SimpleTenant() {
                         );
                     })}
                 </ol>
+                <div className="border-t border-rule px-4 py-2.5 sm:px-5">
+                    <Link to={`/tenants/${tenant.id}`} className="inline-flex items-center gap-1.5 text-[13px] font-medium text-blueprint hover:underline">
+                        See how this was provisioned <ArrowRight size={13} />
+                    </Link>
+                </div>
             </Panel>
         </>
     );
@@ -152,7 +169,7 @@ export default function SimpleTenant() {
 function BackLink({ inline = false }: { inline?: boolean }) {
     return (
         <Link to="/" className={cn('inline-flex items-center gap-1.5 text-[13.5px] font-medium text-ink-3 hover:text-ink', !inline && 'mb-4')}>
-            <ArrowLeft size={14} /> All tenants
+            <ArrowLeft size={14} /> All customers
         </Link>
     );
 }
@@ -191,15 +208,16 @@ function StepMark({ state, index }: { state: ReturnType<typeof stageState>; inde
     }
 }
 
-function ReadyPanel({ tenant, tookMs }: { tenant: Tenant; tookMs?: number }) {
+function ReadyPanel({ tenant, events, tookMs }: { tenant: Tenant; events: EventLog[]; tookMs?: number }) {
+    const trialEnd = trialEndsAt(tenant, events);
     return (
-        <Panel title="Your tenant is ready" meta={tookMs ? `set up in ${fmtDuration(tookMs)}` : undefined} className="mb-6 border-go/40">
-            <dl className="grid gap-5 sm:grid-cols-2">
+        <Panel title="This customer is ready" meta={tookMs ? `set up in ${fmtDuration(tookMs)}` : undefined} className="mb-6 border-go/40">
+            <dl className="grid gap-5 lg:grid-cols-3">
                 <div className="min-w-0">
                     <dt className="label mb-1.5">Address</dt>
                     <dd>
                         <CopyRow value={tenantUrl(tenant.subdomain)} display={tenantHost(tenant.subdomain)} />
-                        <p className="mt-1.5 text-[13px] text-ink-3">This is where your team will sign in.</p>
+                        <p className="mt-1.5 text-[13px] text-ink-3">Where their team signs in.</p>
                     </dd>
                 </div>
                 <div className="min-w-0">
@@ -209,8 +227,17 @@ function ReadyPanel({ tenant, tookMs }: { tenant: Tenant; tookMs?: number }) {
                             <KeyRound size={14} className="shrink-0 text-ink-3" />
                             <span className="truncate">sk_live_••••••••••••••••</span>
                         </div>
+                        <p className="mt-1.5 text-[13px] text-ink-3">Generated and stored securely. It isn't shown in the dashboard.</p>
+                    </dd>
+                </div>
+                <div className="min-w-0">
+                    <dt className="label mb-1.5">Trial</dt>
+                    <dd>
+                        <div className="flex h-10 items-center rounded border border-rule-strong bg-paper/60 px-3 text-[14px] text-ink">
+                            Ends {fmtDate(trialEnd)}
+                        </div>
                         <p className="mt-1.5 text-[13px] text-ink-3">
-                            A live key was generated for this tenant and is stored securely. It isn't shown in the dashboard.
+                            {TRIAL_DAYS}-day free trial on the {planLabel(tenant)} plan.
                         </p>
                     </dd>
                 </div>
@@ -260,19 +287,19 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
     switch (cond) {
         case 'running':
             tone = 'ignite';
-            head = stage ? `We're ${lower(stage)}.` : 'Setting up your tenant.';
-            body = 'This usually takes less than a minute. You can leave this page and come back.';
+            head = stage ? `${stepName(stage)}.` : 'Setting this customer up.';
+            body = 'This usually takes less than a minute. They get a welcome email once everything is ready.';
             break;
         case 'waiting':
             tone = 'scrub';
             head = "Setup hasn't started yet.";
-            body = `If it doesn't start ${autoCancel}, it will be cancelled automatically and you can create the tenant again.`;
+            body = `If it doesn't start ${autoCancel}, it will be cancelled automatically and you can add the customer again.`;
             break;
         case 'stalled':
             if (!stage) return null;
             tone = 'hold';
             head = `Setup is stuck while ${lower(stage)}.`;
-            body = `Nothing has changed for ${fmtDuration(quietFor(tenant, now))}. It will be cancelled automatically ${autoCancel} unless it resumes. You can cancel it now, or delete it and create the tenant again.`;
+            body = `Nothing has changed for ${fmtDuration(quietFor(tenant, now))}. It will be cancelled automatically ${autoCancel} unless it resumes. You can cancel it now, or remove the customer and add them again.`;
             break;
         case 'failed': {
             tone = 'abort';
@@ -280,7 +307,7 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
             const detail = events.map(eventErrorText).find(Boolean);
             body = (
                 <>
-                    Setup can't continue from here. Delete this tenant and create it again to retry.
+                    Setup can't continue from here, and the customer hasn't been told anything. Remove them and add them again to retry.
                     {detail && (
                         <span className="mt-1.5 block font-mono text-[12px] text-ink-3">
                             <span className="label mr-2 text-ink-4">Detail</span>
@@ -295,7 +322,7 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
             const reason = cancelReasonFrom(tenant, events);
             tone = 'scrub';
             head = isSweeperCancel(reason) ? 'Setup was cancelled automatically because it was stuck for too long.' : 'Setup was cancelled.';
-            body = 'Finished steps were kept and nothing else will happen. Delete this tenant to remove it from your list.';
+            body = 'Finished steps were kept and nothing else will happen. Remove this customer to take them off the list.';
             break;
         }
         default:

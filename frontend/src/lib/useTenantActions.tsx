@@ -3,7 +3,7 @@ import toast from 'react-hot-toast';
 import { cancelTenant, deleteTenant } from './api';
 import { apiMessage } from './errors';
 import type { Tenant } from './types';
-import { useIsSimple } from './viewMode';
+import { useIsSimple } from './mode';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 interface Pending {
@@ -46,9 +46,9 @@ export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDe
             message={
                 simple ? (
                     pending?.kind === 'delete' ? (
-                        <>This removes {name} and its history. It can't be undone.</>
+                        <>This removes {name} and their history. It can't be undone.</>
                     ) : (
-                        <>Setup stops where it is. Steps that already finished are kept.</>
+                        <>Setup stops where it is. Steps that already finished are kept, and the customer won't get a welcome email.</>
                     )
                 ) : pending?.kind === 'delete' ? (
                     <>

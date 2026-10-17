@@ -1,14 +1,15 @@
 import { STAGES } from './pipeline';
 import type { Condition, Stage, StageState, StepKey } from './pipeline';
+import type { EventLog, Tenant } from './types';
 import type { Tone } from './ui';
 
 // Plain-language names for the Simple view. The technical event name sits under each as a secondary line.
 export const STEP_NAMES: Record<StepKey, string> = {
-    dbStatus: 'Creating your database',
-    dnsStatus: 'Setting up your address',
-    credentialsStatus: 'Generating API keys',
-    billingStatus: 'Starting your trial',
-    notificationStatus: 'Sending welcome email',
+    dbStatus: 'Creating their database',
+    dnsStatus: 'Setting up their address',
+    credentialsStatus: 'Generating their API keys',
+    billingStatus: 'Starting their trial',
+    notificationStatus: 'Sending their welcome email',
 };
 
 export const stepName = (stage: Stage) => STEP_NAMES[stage.key];
@@ -53,6 +54,15 @@ export const PLAN_BLURBS: Record<string, string> = {
     pro: 'For growing teams',
     enterprise: 'For large organisations',
 };
+
+export const TRIAL_DAYS = 14;
+
+// Billing starts the trial when it activates; fall back to creation time if that event isn't in the log.
+export function trialEndsAt(t: Tenant, events: EventLog[]): number {
+    const active = events.find((e) => e.eventType === 'tenant.billing.active' && e.status !== 'Error');
+    const start = active ? Date.parse(active.timestamp) : Date.parse(t.createdAt);
+    return start + TRIAL_DAYS * 86_400_000;
+}
 
 // DNS is simulated, so the address is informational. Override the base domain per deployment.
 const TENANT_DOMAIN = (import.meta.env.VITE_TENANT_DOMAIN as string | undefined)?.trim() || 'liftoff.ojusentinel.com';

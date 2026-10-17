@@ -6,7 +6,7 @@ import { apiMessage } from '../lib/errors';
 import { PLANS, STAGES, schemaName } from '../lib/pipeline';
 import { PLAN_BLURBS, SIMPLE_STEPS, tenantHost } from '../lib/simple';
 import { inputClass } from '../lib/ui';
-import { useIsSimple } from '../lib/viewMode';
+import { useIsSimple } from '../lib/mode';
 import { cn } from '../lib/cn';
 import type { Tenant } from '../lib/types';
 import Modal from './ui/Modal';
@@ -67,7 +67,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
             open={isOpen}
             onClose={close}
             fig="New"
-            title={simple ? 'New tenant' : 'Provision a tenant'}
+            title={simple ? 'Add a customer' : 'Provision a tenant'}
             size="lg"
             footer={
                 <>
@@ -75,7 +75,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
                         Cancel
                     </Button>
                     <Button variant="primary" type="submit" form="create-tenant" busy={loading} disabled={!name.trim() || subdomain.length < 2}>
-                        {simple ? 'Create tenant' : 'Start provisioning'}
+                        {simple ? 'Add customer' : 'Start provisioning'}
                     </Button>
                 </>
             }
@@ -88,7 +88,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
                     </div>
                 )}
                 <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Tenant name" htmlFor="tenant-name">
+                    <Field label={simple ? 'Customer name' : 'Tenant name'} htmlFor="tenant-name">
                         <input
                             id="tenant-name"
                             value={name}
@@ -105,7 +105,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
                     <Field
                         label={simple ? 'Address' : 'Subdomain'}
                         htmlFor="tenant-subdomain"
-                        hint={simple ? `Letters only, up to 30. Your address will be ${tenantHost(subdomain || 'globex')}.` : 'Letters only, up to 30.'}
+                        hint={simple ? `Letters only, up to 30. Their address will be ${tenantHost(subdomain || 'globex')}.` : 'Letters only, up to 30.'}
                     >
                         <input
                             id="tenant-subdomain"
@@ -171,7 +171,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
                             ))}
                             <li className="flex gap-2.5 font-medium text-go">
                                 <span className="w-4 font-mono text-[12px]">✓</span>
-                                <span>Your tenant is ready</span>
+                                <span>The customer is ready</span>
                             </li>
                         </ol>
                     ) : (
