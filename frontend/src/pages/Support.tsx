@@ -4,9 +4,9 @@ import { DLX, STALL_AFTER_MS } from '../lib/pipeline';
 import { buttonClass } from '../lib/ui';
 import PageHeader from '../components/ui/PageHeader';
 import Panel from '../components/ui/Panel';
+import { SUPPORT_EMAIL } from '../components/site/site';
 
 const REPO = 'https://github.com/Olayanju-1234/liftoff';
-const SUPPORT_EMAIL = 'josepholayanju2003@gmail.com';
 
 const LINKS = [
     {
