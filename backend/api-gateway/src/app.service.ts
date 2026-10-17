@@ -17,11 +17,14 @@ import {
   ConfirmEmailChangeDto,
   CreateApiKeyDto,
   CreateTenantDto,
+  ForgotPasswordDto,
   LoginDto,
   RefreshTokenDto,
   RegisterDto,
+  ResetPasswordDto,
   UpdateOrganisationDto,
   UpdateSettingsDto,
+  VerifyEmailDto,
 } from '@liftoff/shared-types';
 
 type DownstreamErrorBody = string | Record<string, unknown>;
@@ -68,6 +71,27 @@ export class AppService {
 
   refreshToken(dto: RefreshTokenDto) {
     return this.proxy('post', '/auth/refresh', dto);
+  }
+
+  verifyEmail(dto: VerifyEmailDto) {
+    return this.proxy('post', '/auth/verify-email', dto);
+  }
+
+  resendVerification(auth: string) {
+    return this.proxy('post', '/auth/resend-verification', {}, auth);
+  }
+
+  forgotPassword(dto: ForgotPasswordDto) {
+    this.logger.log('Password reset requested');
+    return this.proxy('post', '/auth/forgot-password', dto);
+  }
+
+  resetPassword(dto: ResetPasswordDto) {
+    // Never log the token or the password.
+    return this.proxy('post', '/auth/reset-password', {
+      token: dto.token,
+      password: dto.password,
+    });
   }
 
   logout(auth: string) {

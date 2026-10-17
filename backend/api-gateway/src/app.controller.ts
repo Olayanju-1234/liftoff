@@ -29,11 +29,14 @@ import {
   ConfirmEmailChangeDto,
   CreateApiKeyDto,
   CreateTenantDto,
+  ForgotPasswordDto,
   LoginDto,
   RefreshTokenDto,
   RegisterDto,
+  ResetPasswordDto,
   UpdateOrganisationDto,
   UpdateSettingsDto,
+  VerifyEmailDto,
 } from '@liftoff/shared-types';
 import { AppService } from './app.service';
 import { ParseCuidPipe } from './common/parse-cuid.pipe';
@@ -64,7 +67,7 @@ export class AppController {
   @ApiOperation({
     summary: 'Sign a company up',
     description:
-      'Creates the admin user and their organisation (companyName + handle). No tenant is provisioned: tenants are the company’s customers, added with POST /tenants.',
+      'Creates the admin user and their organisation (companyName + handle) and emails a verification link (24 h). No tenant is provisioned: tenants are the company’s customers, added with POST /tenants. API keys need the email verified.',
   })
   @ApiResponse({ status: 201, description: 'Tokens + user profile' })
   @ApiResponse({ status: 409, description: 'Email or handle taken' })
@@ -82,6 +85,60 @@ export class AppController {
   @Post('auth/login')
   login(@Body() dto: LoginDto) {
     return this.appService.login(dto);
+  }
+
+  @ApiTags('Auth')
+  @ApiOperation({
+    summary: 'Verify the signup email with the token from the link',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Verified: { id, email, emailVerified }',
+  })
+  @ApiResponse({ status: 400, description: 'Invalid, used or expired link' })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('auth/verify-email')
+  verifyEmail(@Body() dto: VerifyEmailDto) {
+    return this.appService.verifyEmail(dto);
+  }
+
+  @ApiTags('Auth')
+  @ApiBearerAuth('bearer')
+  @ApiOperation({ summary: 'Send the signed-in user a new verification link' })
+  @ApiResponse({ status: 409, description: 'An email change is pending' })
+  @ApiResponse({ status: 503, description: 'Email could not be sent' })
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('auth/resend-verification')
+  resendVerification(@Headers('authorization') auth: string) {
+    return this.appService.resendVerification(auth);
+  }
+
+  @ApiTags('Auth')
+  @ApiOperation({
+    summary: 'Email a password reset link',
+    description:
+      'Always 200 with the same message, whether or not the email has an account. The link is valid for 1 hour and works once.',
+  })
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('auth/forgot-password')
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.appService.forgotPassword(dto);
+  }
+
+  @ApiTags('Auth')
+  @ApiOperation({
+    summary: 'Set a new password with the token from the reset link',
+    description: 'Signs every session of the account out.',
+  })
+  @ApiResponse({ status: 400, description: 'Invalid, used or expired link' })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('auth/reset-password')
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.appService.resetPassword(dto);
   }
 
   @ApiTags('Auth')
@@ -283,8 +340,10 @@ export class AppController {
   @ApiBearerAuth('bearer')
   @ApiOperation({
     summary: 'Create a company API key',
-    description: 'The key is in this response only; store it.',
+    description:
+      'The key is in this response only; store it. Needs a verified email (403 otherwise).',
   })
+  @ApiResponse({ status: 403, description: 'Email not verified yet' })
   @Post('api-keys')
   createApiKey(
     @Body() dto: CreateApiKeyDto,
