@@ -103,6 +103,8 @@ Provisioning states: `PROVISIONING → ACTIVE | FAILED | CANCELLED`, then `→ D
 
 Removal (`DELETE /tenants/:id`, or `POST /tenants/:id/cancel` from `ACTIVE`/`FAILED`) is a second, smaller saga. tenant-service sets the tenant `DEPROVISIONING`, stops any provisioning step still open, and publishes `tenant.deprovision`. db-provisioner drops the schema (`DROP SCHEMA IF EXISTS … CASCADE`, only names matching `tenant_*`, and never a schema another live tenant shares), credentials-service deletes the tenant's key, and billing-service cancels the Stripe subscription in the company's account when there is one. Each answers `tenant.deprovision.done`; tenant-service records it in `teardownDbStatus` / `teardownCredentialsStatus` / `teardownBillingStatus`, and whichever result lands last moves the tenant to `DELETED` (soft: `deletedAt` is set, the row and its events stay, it leaves `GET /tenants`) and sends the `tenant.deleted` webhook. A test tenant reads `DELETED` at once and is cleaned up in the background. Every teardown is idempotent, so a replayed message or a second `DELETE` is safe; a teardown that dead-letters reads `FAILED` and `DELETE` again retries it. A deleted tenant gives its name and subdomain back once its schema is gone (`Tenant.live` becomes null, which the per-organisation unique indexes ignore).
 
+Removal follows how each step ran. A step that ran **custom** is torn down by the company's system: tenant-service POSTs `step.teardown` to the step's URL (signed, with its own `callbackUrl` ending in `/teardown` and a deadline) and the workers are given nothing to drop for it. Its teardown column (database, credentials, billing) mirrors the company's answer, and address and welcome, which have no column, hold the removal the same way: the tenant becomes `DELETED` only when every builtin part and every custom teardown is done. A step that was **skipped** has nothing to tear down (`SKIPPED`). A failed or timed-out custom teardown leaves the tenant `DEPROVISIONING`; `DELETE` again sends a new `step.teardown`.
+
 Step statuses: `PENDING → IN_PROGRESS → SUCCESS | FAILED | CANCELLED | SKIPPED` (`SKIPPED` is billing on a test tenant or without Stripe, or any step the company set to skipped)
 
 Steps never move backwards: tenant-service marks a step `IN_PROGRESS` only while it is still `PENDING`, so a replayed or duplicate result never starts a step twice. `Tenant.stepModes` records how each step ran (`builtin`, `skipped` or `custom`), and each custom request is a `CustomStepCall` row with its URL, deadline, outcome and the company's output.
@@ -473,6 +475,8 @@ curl -s -X POST "$CALLBACK_URL/fail" -H "x-api-key: $LIFTOFF_API_KEY" \
 ```
 
 No callback by the deadline (`timeoutMs`, 10 minutes by default, 1 minute to 24 hours) fails the step with "Your system did not call back within …". Retry sends a new `step.requested` with a new `requestId`; a callback naming an older one gets 409. Test tenants call custom steps too (`tenant.isTest: true`).
+
+When the customer is removed, every step that ran custom gets `step.teardown` at the same URL, with `callbackUrl` ending in `/teardown`: delete what the step made, then `POST $CALLBACK_URL/complete` (or `/fail`). The removal finishes once all of them are in. Liftoff sends it even when the step itself failed, so partial work can be cleaned up too.
 
 ---
 

@@ -82,6 +82,7 @@ describe('TenantsService', () => {
     close: jest.Mock;
     cancelOpen: jest.Mock;
     forTenant: jest.Mock;
+    teardownsToRetry: jest.Mock;
   };
   const statusTokens = {
     hashFor: jest.fn((id: string) => `hash(${id})`),
@@ -114,6 +115,7 @@ describe('TenantsService', () => {
       close: jest.fn().mockResolvedValue(true),
       cancelOpen: jest.fn().mockResolvedValue(0),
       forTenant: jest.fn().mockResolvedValue([]),
+      teardownsToRetry: jest.fn().mockResolvedValue([]),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -1483,8 +1485,12 @@ describe('TenantsService', () => {
           teardownCredentialsStatus: StepStatus.IN_PROGRESS,
           teardownBillingStatus: StepStatus.SKIPPED,
         };
+        // No custom steps here, so no teardown request can hold the removal up.
         const matches = (where: Row) =>
           Object.entries(where).every(([field, cond]) => {
+            if (field === 'customStepCalls') {
+              return true;
+            }
             const c = cond as { in?: unknown[] };
             return (
               c && typeof c === 'object' && 'in' in c ? c.in! : [cond]

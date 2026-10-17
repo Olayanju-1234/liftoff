@@ -1,10 +1,12 @@
 import {
   PROVISIONING_STEP_NAMES,
   STEP_MODES,
+  type DeprovisionPart,
   type ProvisioningStepName,
   type StepMode,
 } from '@liftoff/shared-types';
-import type { ProvisioningStep } from './dead-letters';
+import type { Tenant } from '.prisma/tenant-client';
+import type { ProvisioningStep, TeardownStep } from './dead-letters';
 
 // The API's step names and the Tenant columns that hold each step's status.
 export const STEP_COLUMN: Record<ProvisioningStepName, ProvisioningStep> = {
@@ -48,3 +50,25 @@ export function storedStepModes(raw: unknown): StepModes {
   }
   return modes;
 }
+
+// How a step ran for this tenant. Nothing recorded means builtin: every tenant from before
+// custom steps, and a step the saga never reached (its builtin teardown is a no-op).
+export const ranAs = (
+  tenant: Pick<Tenant, 'stepModes'>,
+  step: ProvisioningStepName,
+): StepMode => storedStepModes(tenant.stepModes)[step] ?? 'builtin';
+
+// Where a step's removal shows on the tenant; address and welcome have no builtin teardown.
+export const TEARDOWN_COLUMN: Partial<
+  Record<ProvisioningStepName, TeardownStep>
+> = {
+  database: 'teardownDbStatus',
+  credentials: 'teardownCredentialsStatus',
+  billing: 'teardownBillingStatus',
+};
+
+export const STEP_FOR_PART: Record<DeprovisionPart, ProvisioningStepName> = {
+  db: 'database',
+  credentials: 'credentials',
+  billing: 'billing',
+};

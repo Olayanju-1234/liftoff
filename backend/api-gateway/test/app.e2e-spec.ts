@@ -308,6 +308,29 @@ describe('API Gateway (e2e)', () => {
       },
     );
 
+    it.each(['complete', 'fail'] as const)(
+      'POST /tenants/:id/steps/:step/teardown/%s forwards to the teardown callback',
+      async (outcome) => {
+        http.post.mockReturnValueOnce(
+          of({ data: { action: 'teardown', outcome: 'recorded' } }),
+        );
+
+        const res = await app.inject({
+          method: 'POST',
+          url: `/tenants/${tenantId}/steps/address/teardown/${outcome}`,
+          headers: { 'x-api-key': apiKey },
+          payload: { requestId: 'cmreq' },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(http.post).toHaveBeenCalledWith(
+          `/tenants/${tenantId}/steps/address/teardown/${outcome}`,
+          expect.objectContaining({ requestId: 'cmreq' }),
+          { headers: { 'x-api-key': apiKey } },
+        );
+      },
+    );
+
     it('accepts an empty body', async () => {
       http.post.mockReturnValueOnce(of({ data: { outcome: 'duplicate' } }));
 

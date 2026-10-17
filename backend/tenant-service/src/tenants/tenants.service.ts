@@ -19,7 +19,10 @@ import {
 } from '.prisma/tenant-client';
 import {
   LIVE_TENANT_STATUSES,
+  PROVISIONING_STEP_NAMES,
   isLiveTenant,
+  type CustomStepAction,
+  type DeprovisionPart,
   type CompleteStepDto,
   type EffectiveStepConfigEntry,
   type FailStepDto,
@@ -61,7 +64,15 @@ import {
 import { PLAN_CATALOG } from './plans';
 import type { CustomerPlan, PlanId } from '@liftoff/shared-types';
 import { stepConfigFor } from '../organisations/step-config';
-import { STEP_COLUMN, STEP_NAME, nextStep, storedStepModes } from './steps';
+import {
+  STEP_COLUMN,
+  STEP_FOR_PART,
+  STEP_NAME,
+  TEARDOWN_COLUMN,
+  nextStep,
+  ranAs,
+  storedStepModes,
+} from './steps';
 import {
   CustomStepsService,
   type CustomStepView,
@@ -95,6 +106,11 @@ interface StepResult {
   input?: object;
 }
 
+// A removal in flight, or done: teardown results still count.
+const REMOVING: TenantStatus[] = [
+  TenantStatus.DEPROVISIONING,
+  TenantStatus.DELETED,
+];
 const TEARDOWN_FINISHED: StepStatus[] = [
   StepStatus.SUCCESS,
   StepStatus.SKIPPED,
@@ -567,10 +583,10 @@ export class TenantsService {
     return true;
   }
 
-  // Closes the request as FAILED and fails the step, unless a callback, the deadline or a
-  // cancel closed it first.
+  // Closes the request as FAILED and fails the step (or its teardown), unless a callback,
+  // the deadline or a cancel closed it first.
   async failCustomStep(
-    call: Pick<CustomStepCall, 'id' | 'tenantId' | 'step' | 'url'>,
+    call: Pick<CustomStepCall, 'id' | 'tenantId' | 'step' | 'url' | 'action'>,
     error: string,
   ): Promise<boolean> {
     const closed = await this.customSteps.close(call.id, StepStatus.FAILED, {
@@ -578,6 +594,15 @@ export class TenantsService {
     });
     if (!closed) {
       return false;
+    }
+    if (call.action === 'teardown') {
+      await this.recordTeardown(
+        call.tenantId,
+        call.step as ProvisioningStepName,
+        StepStatus.FAILED,
+        { requestId: call.id, error },
+      );
+      return true;
     }
     return this.failStep(
       call.tenantId,
@@ -592,24 +617,29 @@ export class TenantsService {
     const minutes = Math.round(
       (call.deadlineAt.getTime() - call.createdAt.getTime()) / 60_000,
     );
+    const within = `within ${minutes} minute${minutes === 1 ? '' : 's'}`;
     return this.failCustomStep(
       call,
-      `Your system did not call back within ${minutes} minute${minutes === 1 ? '' : 's'}`,
+      call.action === 'teardown'
+        ? `Your system did not confirm the teardown ${within}`
+        : `Your system did not call back ${within}`,
     );
   }
 
-  // POST /tenants/:id/steps/:step/complete and /fail, from the company's system.
-  // Idempotent: the same result twice is a duplicate, not an error.
+  // POST /tenants/:id/steps/:step[/teardown]/complete and /fail, from the company's
+  // system. Idempotent: the same result twice is a duplicate, not an error.
   async customStepCallback(
     tenantId: string,
     organisationId: string,
     step: ProvisioningStepName,
+    action: CustomStepAction,
     outcome: typeof StepStatus.SUCCESS | typeof StepStatus.FAILED,
     body: CompleteStepDto & FailStepDto,
   ): Promise<StepCallbackResult> {
+    const teardown = action === 'teardown';
     for (let attempt = 0; ; attempt++) {
       const tenant = await this.findInOrganisation(tenantId, organisationId);
-      const call = await this.customSteps.latest(tenantId, step, 'provision');
+      const call = await this.customSteps.latest(tenantId, step, action);
       const answer = (
         result: StepCallbackResult['outcome'],
         reason?: string,
@@ -617,7 +647,7 @@ export class TenantsService {
       ): StepCallbackResult => ({
         tenantId,
         step,
-        action: 'provision',
+        action,
         outcome: result,
         status,
         ...(reason ? { reason } : {}),
@@ -625,7 +655,9 @@ export class TenantsService {
 
       if (!call) {
         throw new ConflictException(
-          `The ${step} step of this customer is not waiting on your system`,
+          teardown
+            ? `Liftoff is not waiting on your system to tear down the ${step} step of this customer`
+            : `The ${step} step of this customer is not waiting on your system`,
         );
       }
       if (body.requestId && body.requestId !== call.id) {
@@ -633,25 +665,40 @@ export class TenantsService {
           `requestId ${body.requestId} is not the latest request for the ${step} step; that is ${call.id}`,
         );
       }
-      if (!isLiveTenant(tenant.status)) {
+      const counts = teardown
+        ? REMOVING.includes(tenant.status)
+        : isLiveTenant(tenant.status);
+      if (!counts) {
         return answer(
           'ignored',
-          `The customer is ${tenant.status.toLowerCase()}, so this result changes nothing`,
+          teardown
+            ? 'The customer is not being removed, so this result changes nothing'
+            : `The customer is ${tenant.status.toLowerCase()}, so this result changes nothing`,
         );
       }
       if (call.status === outcome) {
         return answer('duplicate');
       }
       if (call.status !== StepStatus.IN_PROGRESS) {
-        throw new ConflictException(
+        const already =
           call.status === StepStatus.FAILED
-            ? `The ${step} step already failed${call.error ? ` (${call.error})` : ''}. Retry the customer to request it again.`
-            : `The ${step} step is already ${call.status.toLowerCase()}`,
+            ? `already failed${call.error ? ` (${call.error})` : ''}`
+            : call.status === StepStatus.SUCCESS
+              ? 'is already done'
+              : 'was cancelled';
+        throw new ConflictException(
+          teardown
+            ? `The ${step} teardown ${already}. Remove the customer again to retry it.`
+            : call.status === StepStatus.FAILED
+              ? `The ${step} step ${already}. Retry the customer to request it again.`
+              : `The ${step} step ${already}`,
         );
       }
 
+      const reason =
+        outcome === StepStatus.FAILED ? failureReason(body) : undefined;
       const closed = await this.customSteps.close(call.id, outcome, {
-        error: outcome === StepStatus.FAILED ? failureReason(body) : undefined,
+        error: reason,
         output: body.output as Prisma.InputJsonObject | undefined,
       });
       if (!closed) {
@@ -664,17 +711,22 @@ export class TenantsService {
         );
       }
 
-      if (outcome === StepStatus.SUCCESS) {
+      const detail = {
+        requestId: call.id,
+        ...(body.output ? { output: body.output } : {}),
+      };
+      if (teardown) {
+        await this.recordTeardown(tenantId, step, outcome, {
+          ...detail,
+          ...(reason ? { error: reason } : {}),
+        });
+      } else if (outcome === StepStatus.SUCCESS) {
         await this.finishStep(tenantId, step, StepStatus.SUCCESS, {
           event: 'tenant.step.completed',
-          payload: {
-            step,
-            requestId: call.id,
-            ...(body.output ? { output: body.output } : {}),
-          },
+          payload: { step, ...detail },
         });
       } else {
-        await this.failStep(tenantId, STEP_COLUMN[step], failureReason(body), {
+        await this.failStep(tenantId, STEP_COLUMN[step], reason!, {
           requestId: call.id,
           url: call.url,
         });
@@ -1174,6 +1226,8 @@ export class TenantsService {
 
   // Starts (or resumes) the teardown saga. Safe to call again: a finished removal is
   // returned as it is, an unfinished one is published again for the parts still open.
+  // A step that ran custom is torn down by the company's system (step.teardown); one that
+  // was skipped has nothing to tear down.
   private async deprovision(
     tenant: Tenant,
     reason: string,
@@ -1183,13 +1237,23 @@ export class TenantsService {
     const resuming =
       tenant.status === TenantStatus.DEPROVISIONING ||
       tenant.status === TenantStatus.DELETED;
-    if (tenant.status === TenantStatus.DELETED && !teardownUnfinished(tenant)) {
+    const customSteps = PROVISIONING_STEP_NAMES.filter(
+      (step) => ranAs(tenant, step) === 'custom',
+    );
+    const customTeardowns = resuming
+      ? await this.customSteps.teardownsToRetry(id, customSteps)
+      : customSteps;
+    if (
+      tenant.status === TenantStatus.DELETED &&
+      !teardownUnfinished(tenant) &&
+      customTeardowns.length === 0
+    ) {
       return this.reload(id);
     }
 
     const data: Prisma.TenantUpdateManyMutationInput = {};
     if (resuming) {
-      // A teardown that dead-lettered gets another go.
+      // A teardown that dead-lettered or failed gets another go.
       for (const step of TEARDOWN_STEPS) {
         if (tenant[step] === StepStatus.FAILED || !tenant[step]) {
           data[step] = StepStatus.IN_PROGRESS;
@@ -1197,6 +1261,11 @@ export class TenantsService {
       }
     } else {
       const now = new Date();
+      const teardownOf = (step: ProvisioningStepName) =>
+        ranAs(tenant, step) === 'skipped'
+          ? StepStatus.SKIPPED
+          : StepStatus.IN_PROGRESS;
+      const billingBuiltin = ranAs(tenant, 'billing') === 'builtin';
       // A test tenant is removed at once: it reads DELETED while the workers clean up.
       Object.assign(data, cancelOpenSteps(tenant), {
         status: tenant.isTest
@@ -1204,10 +1273,11 @@ export class TenantsService {
           : TenantStatus.DEPROVISIONING,
         ...(tenant.isTest ? { deletedAt: now } : {}),
         ...(cancelled ? { cancelledAt: now, cancelReason: reason } : {}),
-        teardownDbStatus: StepStatus.IN_PROGRESS,
-        teardownCredentialsStatus: StepStatus.IN_PROGRESS,
-        teardownBillingStatus:
-          tenant.stripeSubscriptionId && !tenant.isTest
+        teardownDbStatus: teardownOf('database'),
+        teardownCredentialsStatus: teardownOf('credentials'),
+        teardownBillingStatus: !billingBuiltin
+          ? teardownOf('billing')
+          : tenant.stripeSubscriptionId && !tenant.isTest
             ? StepStatus.IN_PROGRESS
             : StepStatus.SKIPPED,
       });
@@ -1239,11 +1309,17 @@ export class TenantsService {
         schema: payload.schemaName,
         subscription: payload.stripeSubscriptionId,
         test: tenant.isTest,
+        ...(customTeardowns.length > 0 ? { customSteps: customTeardowns } : {}),
       },
     );
     if (!resuming && tenant.isTest) {
       await this.logEvent(id, 'tenant.deleted', 'Success', { reason });
       this.webhooks.notify(id, 'tenant.deleted');
+    }
+
+    // Before the broker publish, so a broker outage does not hold the company's back.
+    for (const step of customTeardowns) {
+      await this.requestTeardown(tenant, step);
     }
 
     try {
@@ -1267,10 +1343,26 @@ export class TenantsService {
     return this.reload(id);
   }
 
+  // Workers tear down only what they made: no schema or subscription for a step that
+  // ran custom or was skipped.
   private async deprovisionPayload(
     tenant: Tenant,
     reason: string,
   ): Promise<TenantDeprovisionPayload> {
+    const subscription =
+      tenant.isTest || ranAs(tenant, 'billing') !== 'builtin'
+        ? null
+        : tenant.stripeSubscriptionId;
+    const base = {
+      tenantId: tenant.id,
+      subdomain: tenant.subdomain,
+      stripeSubscriptionId: subscription,
+      reason,
+      ...(tenant.isTest ? { test: true } : {}),
+    };
+    if (ranAs(tenant, 'database') !== 'builtin') {
+      return { ...base, schemaName: null };
+    }
     const schema = tenant.schemaName ?? legacySchemaName(tenant.subdomain);
     // Schema names truncate the organisation handle, so two tenants can in theory share
     // one. Never drop a schema another tenant still uses.
@@ -1286,14 +1378,112 @@ export class TenantsService {
         `Not dropping schema ${schema} for tenant ${tenant.id}: ${sharers} other tenant(s) use it`,
       );
     }
-    return {
-      tenantId: tenant.id,
-      subdomain: tenant.subdomain,
-      schemaName: sharers > 0 ? null : schema,
-      stripeSubscriptionId: tenant.isTest ? null : tenant.stripeSubscriptionId,
-      reason,
-      ...(tenant.isTest ? { test: true } : {}),
-    };
+    return { ...base, schemaName: sharers > 0 ? null : schema };
+  }
+
+  // step.teardown goes where the step is configured now, or else where it was run.
+  private async requestTeardown(
+    tenant: Pick<Tenant, 'id' | 'organisationId'>,
+    step: ProvisioningStepName,
+  ): Promise<void> {
+    const organisation = tenant.organisationId
+      ? await this.prisma.organisation.findUnique({
+          where: { id: tenant.organisationId },
+          select: { stepConfig: true },
+        })
+      : null;
+    const config = stepConfigFor(organisation?.stepConfig, step);
+    const url =
+      (config.mode === 'custom' ? config.url : null) ??
+      (await this.customSteps.latest(tenant.id, step, 'provision'))?.url;
+    if (!url) {
+      // No request ever reached the company for this step, so there is nothing to undo.
+      await this.skipTeardown(tenant.id, step);
+      return;
+    }
+    const call = await this.customSteps.open(tenant.id, step, 'teardown', {
+      url,
+      timeoutMs: config.timeoutMs,
+    });
+    await this.logEvent(
+      tenant.id,
+      'tenant.step.teardown.requested',
+      'Success',
+      {
+        step,
+        requestId: call.id,
+        url: call.url,
+        deadline: call.deadlineAt.toISOString(),
+      },
+    );
+    void this.customSteps
+      .send(call)
+      .then((result) =>
+        result.delivered || result.abandoned
+          ? undefined
+          : this.failCustomStep(
+              call,
+              `Your system did not take the ${step} teardown: ${result.error ?? 'no answer'}`,
+            ),
+      )
+      .catch((error: unknown) =>
+        this.logger.error(
+          `Custom ${step} teardown for tenant ${tenant.id} failed: ${errorMessage(error)}`,
+        ),
+      );
+  }
+
+  private async skipTeardown(
+    tenantId: string,
+    step: ProvisioningStepName,
+  ): Promise<void> {
+    const column = TEARDOWN_COLUMN[step];
+    if (column) {
+      const data: Prisma.TenantUpdateManyMutationInput = {};
+      data[column] = StepStatus.SKIPPED;
+      await this.prisma.tenant.updateMany({
+        where: { id: tenantId, status: { in: REMOVING } },
+        data,
+      });
+    }
+    await this.logEvent(tenantId, 'tenant.step.teardown.skipped', 'Warning', {
+      step,
+      reason: 'No request was ever sent to your system for this step',
+    });
+  }
+
+  // A custom teardown finished or failed. The step's teardown column (database,
+  // credentials, billing) mirrors it, and the tenant is DELETED once nothing is left.
+  private async recordTeardown(
+    tenantId: string,
+    step: ProvisioningStepName,
+    outcome: typeof StepStatus.SUCCESS | typeof StepStatus.FAILED,
+    detail: { requestId?: string; error?: string; output?: object },
+  ): Promise<void> {
+    const column = TEARDOWN_COLUMN[step];
+    if (column) {
+      const data: Prisma.TenantUpdateManyMutationInput = {};
+      data[column] = outcome;
+      await this.prisma.tenant.updateMany({
+        where: { id: tenantId, status: { in: REMOVING } },
+        data,
+      });
+    }
+    if (outcome === StepStatus.SUCCESS) {
+      await this.logEvent(tenantId, 'tenant.step.torn_down', 'Success', {
+        step,
+        ...detail,
+      });
+      await this.finishDeprovision(tenantId);
+      return;
+    }
+    await this.logEvent(tenantId, 'tenant.deprovision.failed', 'Error', {
+      part: step,
+      ...detail,
+    });
+    this.logger.warn(
+      `Custom teardown of ${step} failed for tenant ${tenantId}: ${detail.error}`,
+    );
   }
 
   private async reload(id: string) {
@@ -1319,6 +1509,9 @@ export class TenantsService {
       this.logger.warn(
         `Ignoring tenant.deprovision.done: ${JSON.stringify(payload)}`,
       );
+      return;
+    }
+    if (!(await this.partRanBuiltin(payload.tenantId, payload.part))) {
       return;
     }
     const data: Prisma.TenantUpdateManyMutationInput = {};
@@ -1355,6 +1548,25 @@ export class TenantsService {
     await this.finishDeprovision(payload.tenantId);
   }
 
+  // The worker's result for a part counts only when that step ran builtin; otherwise the
+  // company's teardown (or nothing, for a skipped step) is what the column shows.
+  private async partRanBuiltin(
+    tenantId: string,
+    part: DeprovisionPart,
+  ): Promise<boolean> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { stepModes: true },
+    });
+    if (tenant && ranAs(tenant, STEP_FOR_PART[part]) !== 'builtin') {
+      this.logger.debug(
+        `Teardown ${part} result for tenant ${tenantId} ignored: that step did not run builtin`,
+      );
+      return false;
+    }
+    return true;
+  }
+
   // Whichever result lands last moves the tenant to DELETED; the where clause makes it once.
   private async finishDeprovision(tenantId: string) {
     const finished = { in: TEARDOWN_FINISHED };
@@ -1365,6 +1577,13 @@ export class TenantsService {
         teardownDbStatus: finished,
         teardownCredentialsStatus: finished,
         teardownBillingStatus: finished,
+        // Address and welcome have no column: their custom teardowns must be done too.
+        customStepCalls: {
+          none: {
+            action: 'teardown',
+            status: { in: [StepStatus.IN_PROGRESS, StepStatus.FAILED] },
+          },
+        },
       },
       data: { status: TenantStatus.DELETED, deletedAt: new Date(), live: null },
     });
@@ -1391,6 +1610,9 @@ export class TenantsService {
     part: TenantDeprovisionDonePayload['part'],
     message: DeadLetterMessage,
   ) {
+    if (!(await this.partRanBuiltin(tenantId, part))) {
+      return;
+    }
     const data: Prisma.TenantUpdateManyMutationInput = {};
     data[TEARDOWN_STEP_BY_PART[part]] = StepStatus.FAILED;
     const { count } = await this.prisma.tenant.updateMany({
@@ -1420,5 +1642,5 @@ export class TenantsService {
   }
 }
 
-const failureReason = (body: FailStepDto) =>
+const failureReason = (body: FailStepDto): string =>
   body.error?.trim() || 'Your system reported that the step failed';

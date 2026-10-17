@@ -175,7 +175,7 @@ export class AppService {
   stepCallback(
     id: string,
     step: ProvisioningStepName,
-    outcome: 'complete' | 'fail',
+    outcome: 'complete' | 'fail' | 'teardown/complete' | 'teardown/fail',
     dto: CompleteStepDto | FailStepDto,
     credentials: Credentials,
   ) {

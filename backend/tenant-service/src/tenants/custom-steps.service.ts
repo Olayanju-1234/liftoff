@@ -68,7 +68,8 @@ export class CustomStepsService {
   }
 
   // A new request for the step; an older one still open is superseded, so only the
-  // latest can be called back.
+  // latest can be called back. A retried teardown also retires the one that failed, so
+  // the removal is no longer held up by it.
   async open(
     tenantId: string,
     step: ProvisioningStepName,
@@ -83,6 +84,12 @@ export class CustomStepsService {
         error: 'Superseded by a newer request',
       },
     });
+    if (action === 'teardown') {
+      await this.prisma.customStepCall.updateMany({
+        where: { tenantId, step, action, status: StepStatus.FAILED },
+        data: { status: StepStatus.CANCELLED },
+      });
+    }
     return this.prisma.customStepCall.create({
       data: {
         tenantId,
@@ -196,6 +203,28 @@ export class CustomStepsService {
       },
     });
     return count;
+  }
+
+  // Of these custom steps, the ones whose teardown was never sent, failed or was cut short.
+  async teardownsToRetry(
+    tenantId: string,
+    steps: ProvisioningStepName[],
+  ): Promise<ProvisioningStepName[]> {
+    const latest = new Map<string, StepStatus>();
+    const calls = await this.prisma.customStepCall.findMany({
+      where: { tenantId, action: 'teardown' },
+      orderBy: { createdAt: 'desc' },
+      select: { step: true, status: true },
+    });
+    for (const call of calls) {
+      if (!latest.has(call.step)) {
+        latest.set(call.step, call.status);
+      }
+    }
+    return steps.filter((step) => {
+      const status = latest.get(step);
+      return status !== StepStatus.IN_PROGRESS && status !== StepStatus.SUCCESS;
+    });
   }
 
   overdue(now: Date): Promise<CustomStepCall[]> {
