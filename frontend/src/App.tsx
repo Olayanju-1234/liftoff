@@ -20,6 +20,10 @@ const Support = lazy(() => import('./pages/Support'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 const Customers = lazy(() => import('./pages/simple/Customers'));
 const Customer = lazy(() => import('./pages/simple/Customer'));
+const Pricing = lazy(() => import('./pages/Pricing'));
+const Docs = lazy(() => import('./pages/Docs'));
+const Terms = lazy(() => import('./pages/Terms'));
+const Privacy = lazy(() => import('./pages/Privacy'));
 
 function App() {
     return (
@@ -32,6 +36,10 @@ function App() {
                         <Route path="/register" element={<Register />} />
                         <Route path="/confirm-email" element={<ConfirmEmail />} />
                         <Route path="/about" element={<Landing />} />
+                        <Route path="/pricing" element={<Pricing />} />
+                        <Route path="/docs" element={<Docs />} />
+                        <Route path="/terms" element={<Terms />} />
+                        <Route path="/privacy" element={<Privacy />} />
 
                         <Route path="/" element={<ProtectedRoute />}>
                             <Route index element={<Customers />} />
