@@ -15,7 +15,8 @@ export function setupSwagger(app: NestFastifyApplication): void {
       'Public-facing entry point for Liftoff. A SaaS company signs up, ' +
         'its customers are the tenants it provisions, and it can drive that ' +
         'with a company API key and receive a signed webhook when a tenant ' +
-        'is ready. Proxies ' +
+        'is ready. `POST /tenants` takes an `Idempotency-Key` header so a ' +
+        'retried signup never creates two tenants. Proxies ' +
         'authenticated requests to the internal **tenant-service**, which ' +
         'owns the provisioning state machine and consumes events from five ' +
         'downstream worker services (db-provisioner, dns-provisioner, ' +

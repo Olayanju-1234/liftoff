@@ -190,12 +190,76 @@ describe('API Gateway (e2e)', () => {
         payload: { name: 'Globex', subdomain: 'globex', planId: 'starter' },
       });
 
-      expect(res.statusCode).toBe(201);
+      expect(res.statusCode).toBe(202);
       expect(http.post).toHaveBeenCalledWith(
         '/tenants',
         { name: 'Globex', subdomain: 'globex', planId: 'starter' },
         { headers: { 'x-api-key': 'lk_company_key' } },
       );
+    });
+
+    it('POST /tenants forwards Idempotency-Key and passes Idempotent-Replayed back', async () => {
+      http.post.mockReturnValueOnce(
+        of({
+          data: { id: tenantId },
+          headers: { 'idempotent-replayed': 'true' },
+        }),
+      );
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/tenants',
+        headers: {
+          'x-api-key': 'lk_company_key',
+          'idempotency-key': 'signup-42',
+        },
+        payload: { name: 'Globex', subdomain: 'globex', planId: 'starter' },
+      });
+
+      expect(res.statusCode).toBe(202);
+      expect(res.headers['idempotent-replayed']).toBe('true');
+      expect(http.post).toHaveBeenCalledWith(
+        '/tenants',
+        { name: 'Globex', subdomain: 'globex', planId: 'starter' },
+        {
+          headers: {
+            'x-api-key': 'lk_company_key',
+            'idempotency-key': 'signup-42',
+          },
+        },
+      );
+    });
+
+    it('passes a downstream 422 (key reused with another body) and its headers through', async () => {
+      const config = { headers: new AxiosHeaders() };
+      http.post.mockReturnValueOnce(
+        throwError(
+          () =>
+            new AxiosError('Request failed', 'ERR_BAD_REQUEST', config, null, {
+              status: 422,
+              statusText: 'Unprocessable Entity',
+              data: { statusCode: 422, message: 'Idempotency-Key reused' },
+              headers: { 'retry-after': '30' },
+              config,
+            }),
+        ),
+      );
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/tenants',
+        headers: {
+          'x-api-key': 'lk_company_key',
+          'idempotency-key': 'signup-42',
+        },
+        payload: { name: 'Other', subdomain: 'other', planId: 'starter' },
+      });
+
+      expect(res.statusCode).toBe(422);
+      expect(res.json<{ message: string }>().message).toBe(
+        'Idempotency-Key reused',
+      );
+      expect(res.headers['retry-after']).toBe('30');
     });
 
     it('GET /tenants/:id forwards a key sent as a bearer token verbatim', async () => {

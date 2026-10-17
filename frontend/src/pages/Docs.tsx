@@ -12,6 +12,7 @@ const TOC = [
     { id: 'auth-today', label: 'Authentication today' },
     { id: 'steps', label: 'The five steps' },
     { id: 'status', label: 'Status and polling' },
+    { id: 'idempotency', label: 'Idempotency' },
     { id: 'webhooks', label: 'Webhooks and signatures' },
     { id: 'errors', label: 'Errors' },
     { id: 'limits', label: 'Rate limits' },
@@ -21,11 +22,24 @@ const TOC = [
 const CREATE = `curl -X POST ${API_BASE}/tenants \\
   -H "Authorization: Bearer $LIFTOFF_KEY" \\
   -H "Content-Type: application/json" \\
+  -H "Idempotency-Key: signup-7f3c2a9e" \\
   -d '{
     "name": "Globex",
     "subdomain": "globex",
     "planId": "starter"
   }'`;
+
+const IDEMPOTENT_RETRY = `# First attempt timed out on your side; send the same request with the same key.
+curl -i -X POST ${API_BASE}/tenants \\
+  -H "Authorization: Bearer $LIFTOFF_KEY" \\
+  -H "Content-Type: application/json" \\
+  -H "Idempotency-Key: signup-7f3c2a9e" \\
+  -d '{ "name": "Globex", "subdomain": "globex", "planId": "starter" }'
+
+HTTP/1.1 202 Accepted
+Idempotent-Replayed: true
+
+{ "id": "cm2k7x1q90000abcd1234efgh", "name": "Globex", "status": "PROVISIONING", … }`;
 
 const CREATE_RESPONSE = `HTTP/1.1 202 Accepted
 Content-Type: application/json
@@ -130,7 +144,8 @@ const ERRORS: [string, string, string][] = [
     ['404', 'Not found', 'No tenant with that ID belongs to your account. Another account’s tenant also answers 404, never 403.'],
     ['409', 'Conflict', 'The tenant name or subdomain is already taken, or at sign-up the email or subdomain is.'],
     ['429', 'Too many requests', 'You hit a rate limit (next section). Wait for the minute to roll over; the response is not retried for you.'],
-    ['502 / 503', 'Upstream unavailable', 'The gateway could not reach the tenant service, usually during a deploy. Safe to retry after a few seconds. Note: POST /tenants is not idempotent yet, so check GET /tenants before re-creating.'],
+    ['422', 'Unprocessable', 'An Idempotency-Key was reused with a different body. Use a new key for a new request.'],
+    ['502 / 503', 'Upstream unavailable', 'The gateway could not reach the tenant service, usually during a deploy. Safe to retry after a few seconds; send the same Idempotency-Key on POST /tenants so the retry cannot create a second tenant.'],
 ];
 
 const ENDPOINTS: [string, string, string][] = [
@@ -139,7 +154,7 @@ const ENDPOINTS: [string, string, string][] = [
     ['POST', '/auth/refresh', 'Exchange a refresh token for a new access token'],
     ['POST', '/auth/logout', 'Invalidate the current refresh token'],
     ['GET', '/auth/me', 'The signed-in user'],
-    ['POST', '/tenants', 'Create a tenant and start provisioning (202)'],
+    ['POST', '/tenants', 'Create a tenant and start provisioning (202). Takes an Idempotency-Key'],
     ['GET', '/tenants', 'List your tenants with step statuses'],
     ['GET', '/tenants/:id', 'One tenant with its plan and last 100 events'],
     ['GET', '/tenants/:id/events', 'Event log for one tenant (latest 200)'],
@@ -268,7 +283,30 @@ export default function Docs() {
                     </p>
                 </DocSection>
 
-                <DocSection id="webhooks" n="05" title="Webhooks and signatures">
+                <DocSection id="idempotency" n="05" title="Idempotency">
+                    <p>
+                        A signup flow that retries on a timeout must not create two tenants. Send an <Code>Idempotency-Key</Code> header on <Code>POST /tenants</Code>: any
+                        string up to 255 characters that is unique per request, such as a UUID or your own signup ID. The first response for a key is stored for 24 hours and
+                        replayed, with the same status and body, on every repeat.
+                    </p>
+                    <ul className="list-disc space-y-1.5 pl-5">
+                        <li>
+                            Keys are scoped to your organisation, so they cannot collide with another company’s.
+                        </li>
+                        <li>
+                            A replay carries <Code>Idempotent-Replayed: true</Code>. The tenant may have moved on since the first response: poll <Code>GET /tenants/:id</Code> for
+                            its current status.
+                        </li>
+                        <li>
+                            The same key with a different body gets <Code>422</Code>. Two requests with the same key at the same time: the second gets <Code>409</Code> until the
+                            first has finished, then replays it.
+                        </li>
+                        <li>Only successful responses are stored. If the first attempt fails (a 409 on the subdomain, say), the key is free again.</li>
+                    </ul>
+                    <CodeBlock code={IDEMPOTENT_RETRY} title="Retry" lang="curl" />
+                </DocSection>
+
+                <DocSection id="webhooks" n="06" title="Webhooks and signatures">
                     <p className="flex flex-wrap items-center gap-2">
                         <Soon>Next release</Soon>
                         <span>The behaviour below is what the company-accounts release ships; header names are final.</span>
@@ -293,7 +331,7 @@ export default function Docs() {
                     <CodeBlock code={VERIFY} title="Verify (Node)" lang="ts" />
                 </DocSection>
 
-                <DocSection id="errors" n="06" title="Errors">
+                <DocSection id="errors" n="07" title="Errors">
                     <p>Errors are JSON with the HTTP status repeated in the body. The gateway passes the tenant service’s status and message through unchanged.</p>
                     <CodeBlock code={ERROR_BODY} title="Shape" lang="json" />
                     <div className="overflow-hidden rounded-md border border-rule bg-card">
@@ -316,7 +354,7 @@ export default function Docs() {
                     </div>
                 </DocSection>
 
-                <DocSection id="limits" n="07" title="Rate limits">
+                <DocSection id="limits" n="08" title="Rate limits">
                     <p>Limits are per client IP and per minute. Over the limit you get a 429 and nothing is queued; wait for the window to pass.</p>
                     <div className="overflow-hidden rounded-md border border-rule bg-card">
                         <ul className="divide-y divide-rule">
@@ -335,7 +373,7 @@ export default function Docs() {
                     </p>
                 </DocSection>
 
-                <DocSection id="reference" n="08" title="API reference">
+                <DocSection id="reference" n="09" title="API reference">
                     <p>
                         The full reference is generated from the code and lives in Swagger on the gateway. Every route except <Code>/health</Code>, <Code>/auth/register</Code>,{' '}
                         <Code>/auth/login</Code> and <Code>/auth/refresh</Code> needs a bearer token.

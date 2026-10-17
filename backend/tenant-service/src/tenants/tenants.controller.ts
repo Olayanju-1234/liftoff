@@ -3,22 +3,33 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
   Post,
+  Res,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiHeader,
   ApiOperation,
+  ApiResponse,
   ApiSecurity,
   ApiTags,
 } from '@nestjs/swagger';
+import type { FastifyReply } from 'fastify';
+import {
+  IDEMPOTENCY_KEY_HEADER,
+  IDEMPOTENCY_KEY_MAX_LENGTH,
+  IDEMPOTENT_REPLAYED_HEADER,
+} from '@liftoff/shared-types';
 import { ParseCuidPipe } from '../common/parse-cuid.pipe';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CurrentOrganisation } from '../auth/decorators/current-organisation.decorator';
 import { AllowApiKey } from '../auth/decorators/allow-api-key.decorator';
 import { TenantsService } from './tenants.service';
+import { IdempotencyService } from './idempotency.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { CancelTenantDto } from './dto/cancel-tenant.dto';
 
@@ -26,7 +37,10 @@ import { CancelTenantDto } from './dto/cancel-tenant.dto';
 @ApiBearerAuth('bearer')
 @Controller('tenants')
 export class TenantsController {
-  constructor(private readonly tenantsService: TenantsService) {}
+  constructor(
+    private readonly tenantsService: TenantsService,
+    private readonly idempotency: IdempotencyService,
+  ) {}
 
   @Post()
   @AllowApiKey()
@@ -34,17 +48,46 @@ export class TenantsController {
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Create a customer tenant and emit tenant.requested',
-    description: 'Accepts a user token or a company API key.',
+    description:
+      'Accepts a user token or a company API key. Send an Idempotency-Key to make retries safe: the first response for a key is stored for 24 h per organisation and replayed on a repeat, with Idempotent-Replayed: true.',
   })
-  create(
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description: `Any string up to ${IDEMPOTENCY_KEY_MAX_LENGTH} characters, unique per request (a UUID works).`,
+  })
+  @ApiResponse({ status: 202, description: 'Tenant accepted, or replayed' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Name or subdomain taken, or the first request with this Idempotency-Key is still running',
+  })
+  @ApiResponse({
+    status: 422,
+    description: 'Idempotency-Key reused with a different body',
+  })
+  async create(
     @Body() createTenantDto: CreateTenantDto,
     @CurrentOrganisation() organisationId: string,
     @CurrentUser('id') userId: string | undefined,
+    @Headers(IDEMPOTENCY_KEY_HEADER) idempotencyKey: string | undefined,
+    @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    return this.tenantsService.create(createTenantDto, {
+    const creator = { organisationId, ownerId: userId ?? null };
+    const key = idempotencyKey?.trim();
+    if (!key) {
+      return this.tenantsService.create(createTenantDto, creator);
+    }
+    const { body, replayed } = await this.idempotency.run(
       organisationId,
-      ownerId: userId ?? null,
-    });
+      key,
+      createTenantDto,
+      () => this.tenantsService.create(createTenantDto, creator),
+    );
+    if (replayed) {
+      void reply.header(IDEMPOTENT_REPLAYED_HEADER, 'true');
+    }
+    return body;
   }
 
   @Get()

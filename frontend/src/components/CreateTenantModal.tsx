@@ -28,6 +28,8 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
     const [plan, setPlan] = useState<PlanId>('pro');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    // One key per form fill: resubmitting after a timeout replays the first result instead of creating twice.
+    const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
     const simple = useIsSimple();
 
     const reset = () => {
@@ -36,6 +38,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
         setTouched(false);
         setPlan('pro');
         setError('');
+        setIdempotencyKey(crypto.randomUUID());
     };
 
     const close = () => {
@@ -49,7 +52,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
         setLoading(true);
         setError('');
         try {
-            const tenant = await createTenant({ name: name.trim(), subdomain, planId: plan });
+            const tenant = await createTenant({ name: name.trim(), subdomain, planId: plan }, idempotencyKey);
             reset();
             onCreated(tenant);
         } catch (err) {

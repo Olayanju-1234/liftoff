@@ -9,6 +9,7 @@ import {
   Param,
   Post,
   Put,
+  Res,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -19,8 +20,11 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
+import type { FastifyReply } from 'fastify';
 import {
   API_KEY_HEADER,
+  IDEMPOTENCY_KEY_HEADER,
+  IDEMPOTENCY_KEY_MAX_LENGTH,
   CancelTenantDto,
   ConfirmEmailChangeDto,
   CreateApiKeyDto,
@@ -114,25 +118,47 @@ export class AppController {
     required: false,
     description: 'Company API key, instead of a user token',
   })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description: `Makes retries safe. Any string up to ${IDEMPOTENCY_KEY_MAX_LENGTH} characters, unique per request (a UUID works). The first response for a key is stored for 24 h per organisation and replayed on a repeat, marked Idempotent-Replayed: true. The same key with a different body gets 422.`,
+  })
   @ApiOperation({
     summary: 'Create a customer tenant and start the provisioning pipeline',
     description:
-      'Authenticate with a user token or a company API key (x-api-key, or Authorization: Bearer lk_…). 10 requests per minute per IP.',
+      'Authenticate with a user token or a company API key (x-api-key, or Authorization: Bearer lk_…). 10 requests per minute per IP. Send an Idempotency-Key so a retried request cannot create a second tenant.',
   })
   @ApiResponse({
     status: 202,
-    description: 'Tenant accepted; pipeline started',
+    description:
+      'Tenant accepted; pipeline started. A replay of an earlier request carries Idempotent-Replayed: true',
   })
   @ApiResponse({ status: 401, description: 'Missing or invalid credentials' })
-  @ApiResponse({ status: 409, description: 'Name or subdomain taken' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Name or subdomain taken, or the first request with this Idempotency-Key is still running',
+  })
+  @ApiResponse({
+    status: 422,
+    description: 'Idempotency-Key reused with a different body',
+  })
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.ACCEPTED)
   @Post('tenants')
   createTenant(
     @Body() dto: CreateTenantDto,
     @Headers('authorization') auth: string,
     @Headers(API_KEY_HEADER) apiKey: string,
+    @Headers(IDEMPOTENCY_KEY_HEADER) idempotencyKey: string | undefined,
+    @Res({ passthrough: true }) reply: FastifyReply,
   ) {
-    return this.appService.createTenant(dto, { auth, apiKey });
+    return this.appService.createTenant(
+      dto,
+      { auth, apiKey },
+      { idempotencyKey },
+      reply,
+    );
   }
 
   @ApiTags('Tenants')

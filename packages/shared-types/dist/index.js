@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
+exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
 class CreateTenantDto {
@@ -245,6 +245,9 @@ __decorate([
 ], CreateApiKeyDto.prototype, "name", void 0);
 exports.API_KEY_HEADER = 'x-api-key';
 exports.API_KEY_PREFIX = 'lk_';
+exports.IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
+exports.IDEMPOTENCY_KEY_MAX_LENGTH = 255;
+exports.IDEMPOTENT_REPLAYED_HEADER = 'idempotent-replayed';
 exports.WEBHOOK_SIGNATURE_HEADER = 'x-liftoff-signature';
 exports.WEBHOOK_EVENT_HEADER = 'x-liftoff-event';
 exports.WEBHOOK_DELIVERY_HEADER = 'x-liftoff-delivery';
