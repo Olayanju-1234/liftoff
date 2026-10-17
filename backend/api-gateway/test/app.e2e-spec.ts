@@ -275,6 +275,57 @@ describe('API Gateway (e2e)', () => {
     });
   });
 
+  describe('public status page', () => {
+    const token = 'A'.repeat(43);
+
+    it('GET /status/:token proxies without any credentials', async () => {
+      const status = { company: 'Acme', name: 'Globex', state: 'setting-up' };
+      http.get.mockReturnValueOnce(of({ data: status }));
+
+      const res = await app.inject({ method: 'GET', url: `/status/${token}` });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(status);
+      expect(http.get).toHaveBeenCalledWith(`/status/${token}`, {});
+    });
+
+    it.each([
+      'short',
+      'A'.repeat(42),
+      'A'.repeat(44),
+      `${'A'.repeat(42)}=`,
+      `${'A'.repeat(40)}%2F..`,
+    ])('GET /status/%s answers 404 without proxying', async (bad) => {
+      const res = await app.inject({ method: 'GET', url: `/status/${bad}` });
+
+      expect(res.statusCode).toBe(404);
+      expect(http.get).not.toHaveBeenCalled();
+    });
+
+    it("passes tenant-service's 404 for an unknown token through", async () => {
+      const config = { headers: new AxiosHeaders() };
+      http.get.mockReturnValueOnce(
+        throwError(
+          () =>
+            new AxiosError('Not found', 'ERR_BAD_REQUEST', config, null, {
+              status: 404,
+              statusText: 'Not Found',
+              data: { statusCode: 404, message: 'No setup matches this link' },
+              headers: {},
+              config,
+            }),
+        ),
+      );
+
+      const res = await app.inject({ method: 'GET', url: `/status/${token}` });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json<{ message: string }>().message).toBe(
+        'No setup matches this link',
+      );
+    });
+  });
+
   describe('company API keys', () => {
     const tenantId = 'cmv9gs7040002vyzf6leznb2s';
 

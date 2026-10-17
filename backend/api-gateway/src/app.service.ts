@@ -57,6 +57,12 @@ export class AppService {
     return 'Hello from API Gateway!';
   }
 
+  // ============ PUBLIC STATUS PAGE ============
+
+  getPublicStatus(token: string) {
+    return this.proxy('get', `/status/${token}`);
+  }
+
   // ============ AUTH METHODS ============
 
   register(dto: RegisterDto) {
