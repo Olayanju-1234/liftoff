@@ -74,7 +74,7 @@ export default function Register() {
                 tenantName: form.tenantName,
                 subdomain: form.subdomain,
             });
-            toast.success('Workspace created');
+            toast.success('Account created');
             navigate('/', { replace: true });
         } catch (err) {
             setError(apiMessage(err, 'Registration failed.'));
@@ -83,8 +83,8 @@ export default function Register() {
     };
 
     const preview: [string, string][] = [
-        ['Tenant', form.tenantName || 'Your organisation'],
-        ['Subdomain', form.subdomain || 'subdomain'],
+        ['Company', form.tenantName || 'Your company'],
+        ['Handle', form.subdomain || 'handle'],
         ['Admin', form.email || 'you@company.com'],
         ['Role', 'ADMIN'],
     ];
@@ -92,8 +92,8 @@ export default function Register() {
     return (
         <AuthShell
             sheet="A2"
-            title="Create a workspace"
-            lede="Your organisation becomes the first tenant record, and you become its admin."
+            title="Create your company account"
+            lede="The account your team uses to onboard customers. Your company gets a workspace of its own, and you become its admin."
             aside={
                 <div className="flex flex-1 flex-col justify-center px-12 py-10 xl:px-16">
                     <p className="label mb-3">Fig. B — what sign-up writes</p>
@@ -105,7 +105,7 @@ export default function Register() {
                             </div>
                         ))}
                     </div>
-                    <p className="label mb-2">Then, for every tenant you provision</p>
+                    <p className="label mb-2">Then, for every customer you add</p>
                     <StageLadder caption="tenant ACTIVE, usually in about four seconds" />
                 </div>
             }
@@ -134,7 +134,7 @@ export default function Register() {
                         />
                     </Field>
                 </div>
-                <Field label="Organisation" htmlFor="tenantName">
+                <Field label="Company name" htmlFor="tenantName">
                     <input
                         id="tenantName"
                         autoComplete="organization"
@@ -146,7 +146,7 @@ export default function Register() {
                         required
                     />
                 </Field>
-                <Field label="Subdomain" htmlFor="subdomain" error={problems.subdomain} hint="Lowercase letters, numbers and hyphens.">
+                <Field label="Company handle" htmlFor="subdomain" error={problems.subdomain} hint="Lowercase letters, numbers and hyphens. Used for your own workspace address.">
                     <input
                         id="subdomain"
                         value={form.subdomain}
@@ -190,7 +190,7 @@ export default function Register() {
                     disabled={!form.email || !form.tenantName || !form.subdomain || !form.password}
                     className="mt-2 h-11 w-full text-[15px]"
                 >
-                    {loading ? 'Creating workspace' : 'Create workspace'}
+                    {loading ? 'Creating account' : 'Create account'}
                     {!loading && <ArrowRight size={16} />}
                 </Button>
             </form>

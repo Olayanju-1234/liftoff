@@ -4,7 +4,9 @@ import { AlertTriangle } from 'lucide-react';
 import { createTenant } from '../lib/api';
 import { apiMessage } from '../lib/errors';
 import { PLANS, STAGES, schemaName } from '../lib/pipeline';
+import { PLAN_BLURBS, SIMPLE_STEPS, tenantHost } from '../lib/simple';
 import { inputClass } from '../lib/ui';
+import { useIsSimple } from '../lib/mode';
 import { cn } from '../lib/cn';
 import type { Tenant } from '../lib/types';
 import Modal from './ui/Modal';
@@ -26,6 +28,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
     const [plan, setPlan] = useState<PlanId>('pro');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const simple = useIsSimple();
 
     const reset = () => {
         setName('');
@@ -64,7 +67,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
             open={isOpen}
             onClose={close}
             fig="New"
-            title="Provision a tenant"
+            title={simple ? 'Add a customer' : 'Provision a tenant'}
             size="lg"
             footer={
                 <>
@@ -72,7 +75,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
                         Cancel
                     </Button>
                     <Button variant="primary" type="submit" form="create-tenant" busy={loading} disabled={!name.trim() || subdomain.length < 2}>
-                        Start provisioning
+                        {simple ? 'Add customer' : 'Start provisioning'}
                     </Button>
                 </>
             }
@@ -85,7 +88,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
                     </div>
                 )}
                 <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Tenant name" htmlFor="tenant-name">
+                    <Field label={simple ? 'Customer name' : 'Tenant name'} htmlFor="tenant-name">
                         <input
                             id="tenant-name"
                             value={name}
@@ -99,7 +102,11 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
                             required
                         />
                     </Field>
-                    <Field label="Subdomain" htmlFor="tenant-subdomain" hint="Letters only, up to 30.">
+                    <Field
+                        label={simple ? 'Address' : 'Subdomain'}
+                        htmlFor="tenant-subdomain"
+                        hint={simple ? `Letters only, up to 30. Their address will be ${tenantHost(subdomain || 'globex')}.` : 'Letters only, up to 30.'}
+                    >
                         <input
                             id="tenant-subdomain"
                             value={subdomain}
@@ -136,32 +143,53 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
                                         className="sr-only"
                                     />
                                     <span className="block text-[15px] font-semibold">{p.name}</span>
-                                    <span className={cn('block font-mono text-[11px]', on ? 'text-paper/65' : 'text-ink-3')}>
-                                        planId: {p.id}
-                                    </span>
+                                    {simple ? (
+                                        <span className={cn('block text-[12.5px]', on ? 'text-paper/75' : 'text-ink-3')}>{PLAN_BLURBS[p.id]}</span>
+                                    ) : (
+                                        <span className={cn('block font-mono text-[11px]', on ? 'text-paper/65' : 'text-ink-3')}>
+                                            planId: {p.id}
+                                        </span>
+                                    )}
                                 </label>
                             );
                         })}
                     </div>
-                    <p className="mt-1.5 text-[13px] text-ink-3">Billing maps the plan to a Stripe price and starts a 14-day trial.</p>
+                    <p className="mt-1.5 text-[13px] text-ink-3">
+                        {simple ? 'Every plan starts with a 14-day free trial.' : 'Billing maps the plan to a Stripe price and starts a 14-day trial.'}
+                    </p>
                 </fieldset>
 
                 <div className="rounded border border-dashed border-rule-strong bg-paper/60 px-4 py-3">
                     <p className="label mb-2">What happens next</p>
-                    <ol className="grid gap-x-6 gap-y-1 font-mono text-[12px] text-ink-2 sm:grid-cols-2">
-                        {STAGES.map((s) => (
-                            <li key={s.key} className="flex gap-2">
-                                <span className="w-6 text-ink-3">{s.code}</span>
-                                <span className="truncate">
-                                    {s.index === 0 ? `schema ${schemaName(subdomain || 'globex')}` : s.name.toLowerCase()}
-                                </span>
+                    {simple ? (
+                        <ol className="grid gap-x-6 gap-y-1.5 text-[13.5px] text-ink-2 sm:grid-cols-2">
+                            {SIMPLE_STEPS.map(({ stage, name }, i) => (
+                                <li key={stage.key} className="flex gap-2.5">
+                                    <span className="num w-4 font-mono text-[12px] text-ink-3">{i + 1}</span>
+                                    <span>{name}</span>
+                                </li>
+                            ))}
+                            <li className="flex gap-2.5 font-medium text-go">
+                                <span className="w-4 font-mono text-[12px]">✓</span>
+                                <span>The customer is ready</span>
                             </li>
-                        ))}
-                        <li className="flex gap-2 text-go">
-                            <span className="w-6">GO</span>
-                            <span>tenant ACTIVE</span>
-                        </li>
-                    </ol>
+                        </ol>
+                    ) : (
+                        <ol className="grid gap-x-6 gap-y-1 font-mono text-[12px] text-ink-2 sm:grid-cols-2">
+                            {STAGES.map((s) => (
+                                <li key={s.key} className="flex gap-2">
+                                    <span className="w-6 text-ink-3">{s.code}</span>
+                                    <span className="truncate">
+                                        {s.index === 0 ? `schema ${schemaName(subdomain || 'globex')}` : s.name.toLowerCase()}
+                                    </span>
+                                </li>
+                            ))}
+                            <li className="flex gap-2 text-go">
+                                <span className="w-6">GO</span>
+                                <span>tenant ACTIVE</span>
+                            </li>
+                        </ol>
+                    )}
                 </div>
             </form>
         </Modal>

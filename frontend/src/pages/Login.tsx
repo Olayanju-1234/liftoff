@@ -41,7 +41,7 @@ export default function Login() {
         <AuthShell
             sheet="A1"
             title="Sign in"
-            lede="Back to the board. Your tenants, their sequences and anything parked in the dead-letter exchange."
+            lede="Your customers, how far along each one is, and anything that needs attention."
             aside={
                 <div className="flex flex-1 flex-col justify-center px-12 py-10 xl:px-16">
                     <p className="label mb-2">Fig. A — the sequence you'll be watching</p>
@@ -89,7 +89,7 @@ export default function Login() {
                 </Button>
             </form>
             <p className="mt-5 border-t border-rule pt-4 text-[14px] text-ink-3">
-                No workspace yet?{' '}
+                No company account yet?{' '}
                 <Link to="/register" className="link font-medium">
                     Create one
                 </Link>

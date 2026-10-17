@@ -18,6 +18,8 @@ const FailedJobs = lazy(() => import('./pages/FailedJobs'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Support = lazy(() => import('./pages/Support'));
 const NotFound = lazy(() => import('./pages/NotFound'));
+const Customers = lazy(() => import('./pages/simple/Customers'));
+const Customer = lazy(() => import('./pages/simple/Customer'));
 
 function App() {
     return (
@@ -32,7 +34,9 @@ function App() {
                         <Route path="/about" element={<Landing />} />
 
                         <Route path="/" element={<ProtectedRoute />}>
-                            <Route index element={<Dashboard />} />
+                            <Route index element={<Customers />} />
+                            <Route path="customers/:id" element={<Customer />} />
+                            <Route path="under-the-hood" element={<Dashboard />} />
                             <Route path="tenants" element={<TenantManagement />} />
                             <Route path="tenants/:id" element={<TenantDetail />} />
                             <Route path="events" element={<EventLogs />} />

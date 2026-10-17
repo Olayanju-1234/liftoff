@@ -6,9 +6,11 @@ import { useAuth } from '../lib/auth-context';
 import { checkHealth, getTenants } from '../lib/api';
 import { useNow, useResource } from '../lib/hooks';
 import { condition } from '../lib/pipeline';
+import { HOOD_HOME, isHoodPath } from '../lib/mode';
 import { cn } from '../lib/cn';
 import { Wordmark } from './ui/Brand';
 import { Swatch } from './ui/Tag';
+import ModeLink from './ModeLink';
 
 interface NavItem {
     to: string;
@@ -18,11 +20,29 @@ interface NavItem {
     badge?: 'tenants' | 'inflight' | 'attention';
 }
 
-const NAV: { group: string; items: NavItem[] }[] = [
+type NavGroup = { group: string; items: NavItem[] };
+
+// The product for the company's staff. Only the pages a non-engineer needs.
+const SIMPLE_NAV: NavGroup[] = [
+    {
+        group: 'Onboarding',
+        items: [{ to: '/', label: 'Customers', n: '01', end: true, badge: 'attention' }],
+    },
+    {
+        group: 'Account',
+        items: [
+            { to: '/settings', label: 'Settings', n: '02' },
+            { to: '/support', label: 'Help', n: '03' },
+        ],
+    },
+];
+
+// The engineering view, kept intact under the hood.
+const HOOD_NAV: NavGroup[] = [
     {
         group: 'Operate',
         items: [
-            { to: '/', label: 'Overview', n: '01', end: true },
+            { to: HOOD_HOME, label: 'Overview', n: '01', end: true },
             { to: '/tenants', label: 'Tenants', n: '02', badge: 'tenants' },
             { to: '/pipeline', label: 'Pipeline board', n: '03', badge: 'inflight' },
         ],
@@ -45,7 +65,9 @@ const NAV: { group: string; items: NavItem[] }[] = [
 ];
 
 const CRUMBS: Record<string, string> = {
-    '': 'Overview',
+    '': 'Customers',
+    customers: 'Customers',
+    'under-the-hood': 'Under the hood',
     tenants: 'Tenants',
     pipeline: 'Pipeline board',
     events: 'Event log',
@@ -66,11 +88,14 @@ const API_HOST = (() => {
 export default function Layout() {
     const [menuOpen, setMenuOpen] = useState(false);
     const location = useLocation();
+    const { user } = useAuth();
+    const hood = isHoodPath(location.pathname);
     const now = useNow();
     const health = useResource(checkHealth, { interval: 30_000 });
     const tenants = useResource(getTenants, { interval: 30_000 });
 
-    const list = tenants.data ?? [];
+    // The Simple view lists customers only, so the company's own workspace tenant stays out of its counts.
+    const list = (tenants.data ?? []).filter((t) => hood || t.id !== user?.tenantId);
     const counts = {
         tenants: list.length,
         inflight: list.filter((t) => ['running', 'stalled', 'waiting'].includes(condition(t, now))).length,
@@ -78,14 +103,14 @@ export default function Layout() {
     };
 
     const [first, second] = location.pathname.split('/').filter(Boolean);
-    const crumbs = [CRUMBS[first ?? ''] ?? 'Not found', second ? `${second.slice(0, 10)}…` : null].filter(Boolean);
+    const crumbs = [CRUMBS[first ?? ''] ?? 'Not found', second ? (first === 'customers' ? 'Customer' : `${second.slice(0, 10)}…`) : null].filter(
+        Boolean,
+    );
 
     const gw = health.data;
     const utc = new Date(now).toISOString().slice(11, 19);
 
-    const rail = (
-        <RailContent counts={counts} onNavigate={() => setMenuOpen(false)} />
-    );
+    const rail = <RailContent counts={counts} hood={hood} onNavigate={() => setMenuOpen(false)} />;
 
     return (
         <div className="min-h-screen">
@@ -134,28 +159,49 @@ export default function Layout() {
                             </span>
                         ))}
                     </nav>
-                    <div className="ml-auto flex items-center gap-4 font-mono text-[11px] uppercase tracking-[0.08em]">
-                        <span className="num hidden text-ink-3 sm:inline" title="Coordinated Universal Time">
-                            {utc} UTC
-                        </span>
-                        <Link
-                            to="/health"
-                            className="flex items-center gap-2 rounded-sm border border-rule-strong bg-card px-2 py-1 text-ink-2 transition-colors hover:border-ink-3"
-                            title={`Gateway at ${API_HOST}`}
-                        >
-                            <span className="hidden text-ink-3 md:inline">Gateway</span>
-                            {gw ? (
-                                <>
-                                    <Swatch tone={gw.status === 'Operational' ? 'go' : 'abort'} />
-                                    <span className={gw.status === 'Operational' ? 'text-go' : 'text-abort'}>
-                                        {gw.status === 'Operational' ? 'Go' : 'No-go'}
-                                    </span>
-                                    <span className="num text-ink-3">{gw.latency} ms</span>
-                                </>
-                            ) : (
-                                <span className="text-ink-3">Polling…</span>
-                            )}
-                        </Link>
+                    <div className="ml-auto flex items-center gap-3 font-mono text-[11px] uppercase tracking-[0.08em] sm:gap-4">
+                        {hood && (
+                            <span className="num hidden text-ink-3 sm:inline" title="Coordinated Universal Time">
+                                {utc} UTC
+                            </span>
+                        )}
+                        <ModeLink />
+                        {hood ? (
+                            <Link
+                                to="/health"
+                                className="flex items-center gap-2 rounded-sm border border-rule-strong bg-card px-2 py-1 text-ink-2 transition-colors hover:border-ink-3"
+                                title={`Gateway at ${API_HOST}`}
+                            >
+                                <span className="hidden text-ink-3 md:inline">Gateway</span>
+                                {gw ? (
+                                    <>
+                                        <Swatch tone={gw.status === 'Operational' ? 'go' : 'abort'} />
+                                        <span className={gw.status === 'Operational' ? 'text-go' : 'text-abort'}>
+                                            {gw.status === 'Operational' ? 'Go' : 'No-go'}
+                                        </span>
+                                        <span className="num text-ink-3">{gw.latency} ms</span>
+                                    </>
+                                ) : (
+                                    <span className="text-ink-3">Polling…</span>
+                                )}
+                            </Link>
+                        ) : (
+                            <span
+                                className="hidden items-center gap-2 rounded-sm border border-rule-strong bg-card px-2 py-1 text-ink-2 sm:flex"
+                                title="Connection to the Liftoff server"
+                            >
+                                {gw ? (
+                                    <>
+                                        <Swatch tone={gw.status === 'Operational' ? 'go' : 'abort'} />
+                                        <span className={gw.status === 'Operational' ? 'text-go' : 'text-abort'}>
+                                            {gw.status === 'Operational' ? 'Connected' : 'Connection problem'}
+                                        </span>
+                                    </>
+                                ) : (
+                                    <span className="text-ink-3">Connecting…</span>
+                                )}
+                            </span>
+                        )}
                     </div>
                 </div>
 
@@ -173,9 +219,11 @@ export default function Layout() {
 
 function RailContent({
     counts,
+    hood,
     onNavigate,
 }: {
     counts: Record<'tenants' | 'inflight' | 'attention', number>;
+    hood: boolean;
     onNavigate: () => void;
 }) {
     const { user, logout } = useAuth();
@@ -197,12 +245,12 @@ function RailContent({
     return (
         <>
             <div className="px-5 pb-6 pt-5">
-                <Link to="/" onClick={onNavigate} className="inline-block">
-                    <Wordmark sub="Provisioning control" />
+                <Link to={hood ? HOOD_HOME : '/'} onClick={onNavigate} className="inline-block">
+                    <Wordmark sub={hood ? 'Under the hood' : 'Customer onboarding'} />
                 </Link>
             </div>
             <nav className="scrollbar-thin flex-1 overflow-y-auto px-3" aria-label="Main">
-                {NAV.map((group) => (
+                {(hood ? HOOD_NAV : SIMPLE_NAV).map((group) => (
                     <div key={group.group} className="mb-5">
                         <p className="label mb-1.5 px-2 text-ink-4">{group.group}</p>
                         <ul className="space-y-0.5">
@@ -247,6 +295,14 @@ function RailContent({
                     </div>
                 ))}
                 <Link
+                    to={hood ? '/' : HOOD_HOME}
+                    onClick={onNavigate}
+                    className="mb-1.5 flex items-center gap-3 rounded px-2 py-1.5 text-[13px] text-ink-3 transition-colors hover:text-ink"
+                >
+                    <span className="w-5 font-mono text-[10.5px] text-ink-4">{hood ? '←' : '↗'}</span>
+                    {hood ? 'Back to customers' : 'Under the hood'}
+                </Link>
+                <Link
                     to="/about"
                     onClick={onNavigate}
                     className="mb-4 flex items-center gap-3 rounded px-2 py-1.5 text-[13px] text-ink-3 transition-colors hover:text-ink"
@@ -274,9 +330,11 @@ function RailContent({
                         <LogOut size={15} />
                     </button>
                 </div>
-                <p className="mt-2 truncate px-2 font-mono text-[10px] text-ink-4" title="API gateway">
-                    api · {API_HOST}
-                </p>
+                {hood && (
+                    <p className="mt-2 truncate px-2 font-mono text-[10px] text-ink-4" title="API gateway">
+                        api · {API_HOST}
+                    </p>
+                )}
             </div>
         </>
     );

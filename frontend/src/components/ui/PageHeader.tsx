@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 interface PageHeaderProps {
-    sheet: string;
+    sheet?: string;
     eyebrow: string;
     title: ReactNode;
     lede?: ReactNode;
@@ -15,8 +15,12 @@ export default function PageHeader({ sheet, eyebrow, title, lede, actions, aside
             <div className="flex flex-wrap items-end gap-x-6 gap-y-4">
                 <div className="min-w-0 flex-1 basis-full md:basis-0">
                     <p className="label mb-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 whitespace-nowrap">
-                        <span className="text-ink">Sheet {sheet}</span>
-                        <span aria-hidden className="h-px w-6 bg-rule-strong" />
+                        {sheet && (
+                            <>
+                                <span className="text-ink">Sheet {sheet}</span>
+                                <span aria-hidden className="h-px w-6 bg-rule-strong" />
+                            </>
+                        )}
                         <span>{eyebrow}</span>
                     </p>
                     <h1 className="font-cond text-[38px] font-semibold leading-[0.95] tracking-[-0.01em] text-ink sm:text-[46px]">
