@@ -2,6 +2,7 @@ export declare class CreateTenantDto {
     name: string;
     subdomain: string;
     planId: string;
+    test?: boolean;
 }
 export declare class CancelTenantDto {
     reason?: string;
@@ -67,35 +68,39 @@ export interface TenantWebhookPayload<TTenant = unknown> {
 }
 export declare const PLAN_IDS: readonly ["starter", "pro", "enterprise"];
 export type PlanId = (typeof PLAN_IDS)[number];
-export interface TenantRequestedPayload {
+export interface TestModeFlag {
+    test?: boolean;
+}
+export interface TenantRequestedPayload extends TestModeFlag {
     tenantId: string;
     subdomain: string;
     planId: string;
     schemaName?: string;
 }
-export interface TenantDbReadyPayload {
+export interface TenantDbReadyPayload extends TestModeFlag {
     tenantId: string;
     subdomain: string;
     planId: string;
 }
-export interface TenantDnsReadyPayload {
+export interface TenantDnsReadyPayload extends TestModeFlag {
     tenantId: string;
     subdomain: string;
     planId: string;
 }
-export interface TenantCredentialsReadyPayload {
+export interface TenantCredentialsReadyPayload extends TestModeFlag {
     tenantId: string;
     subdomain: string;
     planId: string;
 }
-export interface TenantBillingActivePayload {
+export interface TenantBillingActivePayload extends TestModeFlag {
     tenantId: string;
     subdomain: string;
     planId: string;
-    stripeCustomerId: string;
-    stripeSubscriptionId: string;
+    stripeCustomerId: string | null;
+    stripeSubscriptionId: string | null;
     subscriptionStatus: string;
     trialEnd: string | null;
+    skipped?: boolean;
 }
 export interface ProvisioningCompletePayload {
     tenantId: string;
