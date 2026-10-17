@@ -48,7 +48,7 @@ export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDe
                     pending?.kind === 'delete' ? (
                         <>This removes {name} and their history. It can't be undone.</>
                     ) : (
-                        <>Setup stops where it is. Steps that already finished are kept, and the customer won't get a welcome email.</>
+                        <>Setup stops where it is. Steps that already finished are kept, and your team won't get the ready email.</>
                     )
                 ) : pending?.kind === 'delete' ? (
                     <>
