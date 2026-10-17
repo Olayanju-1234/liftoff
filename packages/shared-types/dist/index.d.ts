@@ -1,3 +1,4 @@
+import { type ValidatorConstraintInterface } from 'class-validator';
 export declare class CreateTenantDto {
     name: string;
     subdomain: string;
@@ -47,10 +48,29 @@ export declare class ConfirmEmailChangeDto {
 export declare const STRIPE_SECRET_KEY_PATTERN: RegExp;
 export declare const STRIPE_SECRET_KEY_MAX_LENGTH = 200;
 export declare const STRIPE_PRICE_ID_PATTERN: RegExp;
-export declare class StripePricesDto {
-    starter?: string | null;
-    pro?: string | null;
-    enterprise?: string | null;
+export declare const CUSTOMER_PLAN_ID_PATTERN: RegExp;
+export declare const CUSTOMER_PLAN_ID_MAX_LENGTH = 40;
+export declare const CUSTOMER_PLAN_NAME_MAX_LENGTH = 60;
+export declare const CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH = 120;
+export declare const MAX_CUSTOMER_PLANS = 12;
+export interface CustomerPlan {
+    id: string;
+    name: string;
+    description?: string;
+}
+export declare const DEFAULT_CUSTOMER_PLANS: readonly CustomerPlan[];
+export declare class CustomerPlanDto implements CustomerPlan {
+    id: string;
+    name: string;
+    description?: string;
+}
+export declare class UniqueCustomerPlanIds implements ValidatorConstraintInterface {
+    validate(plans: unknown): boolean;
+    defaultMessage(): string;
+}
+export declare class IsStripePriceMap implements ValidatorConstraintInterface {
+    validate(value: unknown): boolean;
+    defaultMessage(): string;
 }
 export declare class UpdateOrganisationDto {
     name?: string;
@@ -58,10 +78,11 @@ export declare class UpdateOrganisationDto {
     rotateWebhookSecret?: boolean;
     baseDomain?: string | null;
     stripeSecretKey?: string | null;
-    stripePrices?: StripePricesDto | null;
+    stripePrices?: StripePrices | null;
+    plans?: CustomerPlanDto[] | null;
     dismissOnboarding?: boolean;
 }
-export type StripePrices = Record<PlanId, string | null>;
+export type StripePrices = Record<string, string | null>;
 export declare class CreateApiKeyDto {
     name: string;
 }

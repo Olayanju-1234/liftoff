@@ -21,7 +21,7 @@ import {
 } from './dead-letters';
 
 type MockPrisma = {
-  plan: { findFirst: jest.Mock; create: jest.Mock };
+  plan: { findFirst: jest.Mock; findUnique: jest.Mock; create: jest.Mock };
   tenant: {
     create: jest.Mock<Promise<unknown>, [Prisma.TenantCreateArgs]>;
     findUnique: jest.Mock;
@@ -40,7 +40,7 @@ type MockPrisma = {
 };
 
 const buildPrisma = (): MockPrisma => ({
-  plan: { findFirst: jest.fn(), create: jest.fn() },
+  plan: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn() },
   tenant: {
     create: jest.fn<Promise<unknown>, [Prisma.TenantCreateArgs]>(),
     findUnique: jest.fn(),
@@ -60,9 +60,11 @@ const buildPrisma = (): MockPrisma => ({
     findFirst: jest.fn().mockResolvedValue(null),
   },
   organisation: {
-    findUnique: jest
-      .fn()
-      .mockResolvedValue({ handle: 'acme-corp', baseDomain: null }),
+    findUnique: jest.fn().mockResolvedValue({
+      handle: 'acme-corp',
+      baseDomain: null,
+      plans: null,
+    }),
   },
 });
 
@@ -113,7 +115,7 @@ describe('TenantsService', () => {
 
   describe('create', () => {
     it('reuses existing plan and publishes tenant.requested', async () => {
-      prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
+      prisma.plan.findUnique.mockResolvedValueOnce({ id: 'starter' });
       prisma.tenant.create.mockImplementationOnce(({ data }) =>
         Promise.resolve({
           id: 'tenant-1',
@@ -134,6 +136,7 @@ describe('TenantsService', () => {
         `hash(${createArgs.data.id as string})`,
       );
       expect(result.statusUrl).toBe('https://app.test/status/tok(tenant-1)');
+      expect(result.planName).toBe('Starter');
       expect(createArgs.data.dbStatus).toBe(StepStatus.IN_PROGRESS);
       expect(createArgs.data.organisationId).toBe('org-1');
       expect(createArgs.data.ownerId).toBe('owner-1');
@@ -157,7 +160,7 @@ describe('TenantsService', () => {
     });
 
     it('provisions a test tenant outside the quotas, with billing told to skip', async () => {
-      prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
+      prisma.plan.findUnique.mockResolvedValueOnce({ id: 'starter' });
       prisma.tenant.create.mockImplementationOnce(({ data }) =>
         Promise.resolve({
           id: 'tenant-t',
@@ -201,7 +204,7 @@ describe('TenantsService', () => {
         handle: 'acme-corp',
         baseDomain: 'acme.app',
       });
-      prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
+      prisma.plan.findUnique.mockResolvedValueOnce({ id: 'starter' });
       prisma.tenant.create.mockResolvedValueOnce({
         id: 'tenant-1',
         subdomain: 'globex',
@@ -227,7 +230,7 @@ describe('TenantsService', () => {
     });
 
     it('fails the tenant at its first step when tenant.requested cannot be published', async () => {
-      prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
+      prisma.plan.findUnique.mockResolvedValueOnce({ id: 'starter' });
       prisma.tenant.create.mockResolvedValueOnce({
         id: 'tenant-1',
         subdomain: 'acme',
@@ -256,7 +259,7 @@ describe('TenantsService', () => {
     });
 
     it('records no owner when an API key, not a user, creates the tenant', async () => {
-      prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
+      prisma.plan.findUnique.mockResolvedValueOnce({ id: 'starter' });
       prisma.tenant.create.mockResolvedValueOnce({
         id: 'tenant-1',
         subdomain: 'acme',
@@ -273,7 +276,7 @@ describe('TenantsService', () => {
     });
 
     it('creates plan on the fly when missing', async () => {
-      prisma.plan.findFirst.mockResolvedValueOnce(null);
+      prisma.plan.findUnique.mockResolvedValueOnce(null);
       prisma.plan.create.mockResolvedValueOnce({ id: 'starter' });
       prisma.tenant.create.mockResolvedValueOnce({
         id: 'tenant-2',
@@ -287,7 +290,7 @@ describe('TenantsService', () => {
     });
 
     it('translates the per-organisation unique violation into a 409 naming the field', async () => {
-      prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
+      prisma.plan.findUnique.mockResolvedValueOnce({ id: 'starter' });
       const p2002 = new Prisma.PrismaClientKnownRequestError(
         'Unique constraint failed',
         {
@@ -304,6 +307,121 @@ describe('TenantsService', () => {
         ),
       );
       expect(amqp.publish).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('customer plans on create', () => {
+    const custom = [
+      { id: 'growth', name: 'Growth', description: 'For teams of 10 to 50' },
+      { id: 'scale', name: 'Scale' },
+    ];
+
+    it('refuses a plan the company does not have with 400 naming its plans, before quotas or writes', async () => {
+      await expect(
+        service.create({ ...baseDto, planId: 'platinum' }, creator),
+      ).rejects.toMatchObject({
+        constructor: BadRequestException,
+        message:
+          'Unknown customer plan "platinum". Your plans: starter, pro, enterprise.',
+      });
+      expect(quotas.assertCanProvision).not.toHaveBeenCalled();
+      expect(prisma.tenant.create).not.toHaveBeenCalled();
+      expect(amqp.publish).not.toHaveBeenCalled();
+    });
+
+    it('accepts a default plan by name, as older clients sent it', async () => {
+      prisma.plan.findUnique.mockResolvedValueOnce({ id: 'pro' });
+      prisma.tenant.create.mockResolvedValueOnce({
+        id: 'tenant-1',
+        subdomain: 'acme',
+        planId: 'pro',
+      });
+
+      const result = await service.create(
+        { ...baseDto, planId: 'Pro' },
+        creator,
+      );
+
+      const [[createArgs]] = prisma.tenant.create.mock.calls;
+      expect(createArgs.data.planId).toBe('pro');
+      expect(result.planName).toBe('Pro');
+    });
+
+    it("validates against the company's own plans once it defined some, and labels the tenant with its name", async () => {
+      prisma.organisation.findUnique.mockResolvedValue({
+        handle: 'acme-corp',
+        baseDomain: null,
+        plans: custom,
+      });
+      prisma.plan.findUnique.mockResolvedValueOnce(null);
+      prisma.plan.create.mockResolvedValueOnce({ id: 'growth' });
+      prisma.tenant.create.mockResolvedValueOnce({
+        id: 'tenant-1',
+        subdomain: 'acme',
+        planId: 'growth',
+      });
+
+      const result = await service.create(
+        { ...baseDto, planId: 'growth' },
+        creator,
+      );
+
+      expect(prisma.plan.create).toHaveBeenCalledWith({
+        data: { id: 'growth', name: 'growth', maxUsers: 5, maxApiKeys: 3 },
+      });
+      expect(result.planName).toBe('Growth');
+      await expect(service.create(baseDto, creator)).rejects.toThrow(
+        'Unknown customer plan "starter". Your plans: growth, scale.',
+      );
+    });
+
+    it("gives the Plan row a company-suffixed name when another company's plan took it", async () => {
+      prisma.organisation.findUnique.mockResolvedValue({
+        handle: 'acme-corp',
+        baseDomain: null,
+        plans: [{ id: 'team', name: 'Team' }],
+      });
+      prisma.plan.findUnique.mockResolvedValue(null);
+      const taken = new Prisma.PrismaClientKnownRequestError('taken', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { target: ['name'] },
+      });
+      prisma.plan.create
+        .mockRejectedValueOnce(taken)
+        .mockResolvedValueOnce({ id: 'team' });
+      prisma.tenant.create.mockResolvedValueOnce({
+        id: 'tenant-1',
+        subdomain: 'acme',
+        planId: 'team',
+      });
+
+      await service.create({ ...baseDto, planId: 'team' }, creator);
+
+      expect(prisma.plan.create).toHaveBeenLastCalledWith({
+        data: {
+          id: 'team',
+          name: 'team (acme-corp)',
+          maxUsers: 5,
+          maxApiKeys: 3,
+        },
+      });
+    });
+
+    it('names a tenant by the plan the company calls it, falling back to the id for a removed plan', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        baseDomain: 'acme.app',
+        plans: [custom[0]],
+      });
+      prisma.tenant.findMany.mockResolvedValueOnce([
+        { id: 't1', subdomain: 'a', planId: 'growth' },
+        { id: 't2', subdomain: 'b', planId: 'scale' },
+      ]);
+
+      const result = await service.findAll('org-1');
+
+      expect(result.map((t) => t.planName)).toEqual(['Growth', 'scale']);
+      expect(result[0].address).toBe('a.acme.app');
     });
   });
 

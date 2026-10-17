@@ -13,6 +13,7 @@ import { assertPublicDestination, parseWebhookUrl } from './destination';
 import { signWebhookBody } from './signature';
 import { withAddress } from '../tenants/address';
 import { StatusTokenService } from '../status/status-token.service';
+import { effectivePlans, planNameFor } from '../organisations/customer-plans';
 
 export const WEBHOOK_TIMEOUT_MS = 10_000;
 // Four attempts: now, then after 1 s, 5 s and 25 s.
@@ -49,7 +50,12 @@ export class WebhookService {
       where: { id: tenantId },
       include: {
         organisation: {
-          select: { webhookUrl: true, webhookSecret: true, baseDomain: true },
+          select: {
+            webhookUrl: true,
+            webhookSecret: true,
+            baseDomain: true,
+            plans: true,
+          },
         },
       },
     });
@@ -70,6 +76,10 @@ export class WebhookService {
       tenant: {
         ...withAddress(tenantRow, organisation.baseDomain),
         statusUrl: this.statusTokens.urlFor(tenantRow.id),
+        planName: planNameFor(
+          effectivePlans(organisation.plans),
+          tenantRow.planId,
+        ),
       },
     };
     const body = JSON.stringify(payload);

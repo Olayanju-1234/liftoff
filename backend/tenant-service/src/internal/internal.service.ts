@@ -37,7 +37,7 @@ export class InternalService {
         stripeSubscriptionId: tenant.stripeSubscriptionId,
         configured: false,
         stripeSecretKey: null,
-        prices: { starter: null, pro: null, enterprise: null },
+        prices: {},
       };
     }
     const stripe = await this.organisations.stripeCredentials(

@@ -7,7 +7,8 @@ import {
 import { Test } from '@nestjs/testing';
 import { Prisma } from '.prisma/tenant-client';
 
-import { OrganisationsService, toStripePrices } from './organisations.service';
+import { OrganisationsService } from './organisations.service';
+import { DEFAULT_CUSTOMER_PLANS } from '@liftoff/shared-types';
 import { OrgSecretsService } from './org-secrets.service';
 import { PrismaService } from '../prisma.service';
 
@@ -30,6 +31,7 @@ const row = {
   baseDomain: null as string | null,
   stripeSecretKeyEncrypted: null as string | null,
   stripePrices: null as Prisma.JsonValue | null,
+  plans: null as Prisma.JsonValue | null,
   maxActiveTenants: 10,
   maxProvisionsPerDay: 50,
   onboardingDismissedAt: null as Date | null,
@@ -89,6 +91,7 @@ describe('OrganisationsService', () => {
         webhookConfigured: true,
         baseDomain: null,
         stripeConfigured: false,
+        plans: DEFAULT_CUSTOMER_PLANS,
         stripePrices: noPrices,
         limits: { maxActiveTenants: 10, maxProvisionsPerDay: 50 },
         onboardingDismissedAt: null,
@@ -384,7 +387,8 @@ describe('OrganisationsService', () => {
       await expect(service.stripeCredentials('org-1')).resolves.toEqual({
         configured: true,
         stripeSecretKey: 'sk_live_abcdefghijk',
-        prices: { ...noPrices, pro: 'price_pro' },
+        // Every stored price, keyed by plan id: a tenant may be on a plan since removed.
+        prices: { pro: 'price_pro' },
       });
     });
 
@@ -397,7 +401,7 @@ describe('OrganisationsService', () => {
       await expect(service.stripeCredentials('org-1')).resolves.toEqual({
         configured: false,
         stripeSecretKey: null,
-        prices: noPrices,
+        prices: {},
       });
       expect(secrets.decrypt).not.toHaveBeenCalled();
     });
@@ -410,13 +414,91 @@ describe('OrganisationsService', () => {
     });
   });
 
-  describe('toStripePrices', () => {
-    it('keeps only known plans with string ids', () => {
-      expect(toStripePrices(null)).toEqual(noPrices);
-      expect(toStripePrices(['price_a'])).toEqual(noPrices);
-      expect(
-        toStripePrices({ starter: 'price_a', pro: 7, other: 'x' }),
-      ).toEqual({ ...noPrices, starter: 'price_a' });
+  describe('customer plans', () => {
+    const custom = [
+      { id: 'growth', name: 'Growth', description: 'For teams of 10 to 50' },
+      { id: 'scale', name: 'Scale' },
+    ];
+
+    it('shows the defaults with a price slot each when none are defined', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...row,
+        stripePrices: { pro: 'price_pro', legacy: 'price_legacy' },
+      });
+
+      const result = await service.get('org-1');
+
+      expect(result.plans).toEqual(DEFAULT_CUSTOMER_PLANS);
+      expect(result.stripePrices).toEqual({
+        starter: null,
+        pro: 'price_pro',
+        enterprise: null,
+      });
+      expect(result).not.toHaveProperty('storedPrices');
+    });
+
+    it('stores the plans the company defines and prices them by id', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(row);
+
+      const result = await service.update('org-1', {
+        plans: custom,
+        stripePrices: { growth: 'price_growth' },
+      });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data.plans).toEqual(custom);
+      expect(data.stripePrices).toEqual({ growth: 'price_growth' });
+      expect(result.plans).toEqual(custom);
+      expect(result.stripePrices).toEqual({
+        growth: 'price_growth',
+        scale: null,
+      });
+      expect(result).not.toHaveProperty('storedPrices');
+    });
+
+    it('clears one price with null without touching the others, and keeps prices of removed plans for their tenants', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...row,
+        plans: custom,
+        stripePrices: { growth: 'price_growth', scale: 'price_scale' },
+      });
+
+      const result = await service.update('org-1', {
+        plans: [custom[0]],
+        stripePrices: { growth: null },
+      });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data.stripePrices).toEqual({ scale: 'price_scale' });
+      expect(result.plans).toEqual([custom[0]]);
+      expect(result.stripePrices).toEqual({ growth: null });
+    });
+
+    it('goes back to the defaults with plans: null', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...row,
+        plans: custom,
+      });
+
+      const result = await service.update('org-1', { plans: null });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data).toEqual({ plans: Prisma.DbNull });
+      expect(result.plans).toEqual(DEFAULT_CUSTOMER_PLANS);
+    });
+
+    it('hands billing every stored price, not just the current plans', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        stripeSecretKeyEncrypted: 'enc(sk_live_abcdefghijk)',
+        stripePrices: { growth: 'price_growth', legacy: 'price_legacy' },
+      });
+
+      const result = await service.stripeCredentials('org-1');
+
+      expect(result.prices).toEqual({
+        growth: 'price_growth',
+        legacy: 'price_legacy',
+      });
     });
   });
 });

@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.INTERNAL_TOKEN_HEADER = exports.DEPROVISION_PARTS = exports.isLiveTenant = exports.LIVE_TENANT_STATUSES = exports.STATUS_TOKEN_PATTERN = exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.StripePricesDto = exports.STRIPE_PRICE_ID_PATTERN = exports.STRIPE_SECRET_KEY_MAX_LENGTH = exports.STRIPE_SECRET_KEY_PATTERN = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = exports.VerifyEmailDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
+exports.INTERNAL_TOKEN_HEADER = exports.DEPROVISION_PARTS = exports.isLiveTenant = exports.LIVE_TENANT_STATUSES = exports.STATUS_TOKEN_PATTERN = exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.IsStripePriceMap = exports.UniqueCustomerPlanIds = exports.CustomerPlanDto = exports.DEFAULT_CUSTOMER_PLANS = exports.MAX_CUSTOMER_PLANS = exports.CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH = exports.CUSTOMER_PLAN_NAME_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_PATTERN = exports.STRIPE_PRICE_ID_PATTERN = exports.STRIPE_SECRET_KEY_MAX_LENGTH = exports.STRIPE_SECRET_KEY_PATTERN = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = exports.VerifyEmailDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
 const swagger_1 = require("@nestjs/swagger");
 const class_transformer_1 = require("class-transformer");
 const class_validator_1 = require("class-validator");
@@ -36,7 +36,10 @@ __decorate([
     __metadata("design:type", String)
 ], CreateTenantDto.prototype, "subdomain", void 0);
 __decorate([
-    (0, swagger_1.ApiProperty)({ example: 'starter', description: 'Plan name or ID.' }),
+    (0, swagger_1.ApiProperty)({
+        example: 'starter',
+        description: "One of your customer plans, by id (or name): starter, pro or enterprise unless you defined your own under Settings → Billing (PUT /organisation { plans }). It is the customer's plan on your product, not Liftoff's pricing.",
+    }),
     (0, class_validator_1.IsString)(),
     (0, class_validator_1.IsNotEmpty)(),
     __metadata("design:type", String)
@@ -247,39 +250,95 @@ __decorate([
 exports.STRIPE_SECRET_KEY_PATTERN = /^(sk|rk)_(test|live)_[A-Za-z0-9]{8,}$/;
 exports.STRIPE_SECRET_KEY_MAX_LENGTH = 200;
 exports.STRIPE_PRICE_ID_PATTERN = /^price_[A-Za-z0-9]{8,}$/;
-class StripePricesDto {
+exports.CUSTOMER_PLAN_ID_PATTERN = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
+exports.CUSTOMER_PLAN_ID_MAX_LENGTH = 40;
+exports.CUSTOMER_PLAN_NAME_MAX_LENGTH = 60;
+exports.CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH = 120;
+exports.MAX_CUSTOMER_PLANS = 12;
+exports.DEFAULT_CUSTOMER_PLANS = [
+    { id: 'starter', name: 'Starter', description: 'For small teams' },
+    { id: 'pro', name: 'Pro', description: 'For growing teams' },
+    {
+        id: 'enterprise',
+        name: 'Enterprise',
+        description: 'For large organisations',
+    },
+];
+class CustomerPlanDto {
 }
-exports.StripePricesDto = StripePricesDto;
+exports.CustomerPlanDto = CustomerPlanDto;
 __decorate([
-    (0, swagger_1.ApiPropertyOptional)({ example: 'price_1Q…', nullable: true }),
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.ValidateIf)((dto) => dto.starter !== null),
+    (0, swagger_1.ApiProperty)({
+        example: 'growth',
+        maxLength: exports.CUSTOMER_PLAN_ID_MAX_LENGTH,
+        description: 'What POST /tenants sends as planId. Lowercase letters and digits, single hyphens or underscores. Keep it stable once customers are on it.',
+    }),
+    (0, class_transformer_1.Transform)(({ value }) => typeof value === 'string' ? value.trim().toLowerCase() : value),
     (0, class_validator_1.IsString)(),
-    (0, class_validator_1.Matches)(exports.STRIPE_PRICE_ID_PATTERN, {
-        message: 'starter must be a Stripe Price ID (price_…)',
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.MaxLength)(exports.CUSTOMER_PLAN_ID_MAX_LENGTH),
+    (0, class_validator_1.Matches)(exports.CUSTOMER_PLAN_ID_PATTERN, {
+        message: 'a plan id is lowercase letters and digits, with single hyphens or underscores',
     }),
     __metadata("design:type", String)
-], StripePricesDto.prototype, "starter", void 0);
+], CustomerPlanDto.prototype, "id", void 0);
 __decorate([
-    (0, swagger_1.ApiPropertyOptional)({ example: 'price_1Q…', nullable: true }),
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.ValidateIf)((dto) => dto.pro !== null),
+    (0, swagger_1.ApiProperty)({ example: 'Growth', maxLength: exports.CUSTOMER_PLAN_NAME_MAX_LENGTH }),
+    (0, class_transformer_1.Transform)(({ value }) => typeof value === 'string' ? value.trim() : value),
     (0, class_validator_1.IsString)(),
-    (0, class_validator_1.Matches)(exports.STRIPE_PRICE_ID_PATTERN, {
-        message: 'pro must be a Stripe Price ID (price_…)',
-    }),
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.MaxLength)(exports.CUSTOMER_PLAN_NAME_MAX_LENGTH),
     __metadata("design:type", String)
-], StripePricesDto.prototype, "pro", void 0);
+], CustomerPlanDto.prototype, "name", void 0);
 __decorate([
-    (0, swagger_1.ApiPropertyOptional)({ example: 'price_1Q…', nullable: true }),
-    (0, class_validator_1.IsOptional)(),
-    (0, class_validator_1.ValidateIf)((dto) => dto.enterprise !== null),
-    (0, class_validator_1.IsString)(),
-    (0, class_validator_1.Matches)(exports.STRIPE_PRICE_ID_PATTERN, {
-        message: 'enterprise must be a Stripe Price ID (price_…)',
+    (0, swagger_1.ApiPropertyOptional)({
+        example: 'For teams of 10 to 50',
+        maxLength: exports.CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH,
     }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(exports.CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH),
     __metadata("design:type", String)
-], StripePricesDto.prototype, "enterprise", void 0);
+], CustomerPlanDto.prototype, "description", void 0);
+let UniqueCustomerPlanIds = class UniqueCustomerPlanIds {
+    validate(plans) {
+        if (!Array.isArray(plans)) {
+            return true;
+        }
+        const ids = plans
+            .map((plan) => plan && typeof plan === 'object'
+            ? plan.id
+            : undefined)
+            .filter((id) => typeof id === 'string')
+            .map((id) => id.trim().toLowerCase());
+        return new Set(ids).size === ids.length;
+    }
+    defaultMessage() {
+        return 'plan ids must be unique';
+    }
+};
+exports.UniqueCustomerPlanIds = UniqueCustomerPlanIds;
+exports.UniqueCustomerPlanIds = UniqueCustomerPlanIds = __decorate([
+    (0, class_validator_1.ValidatorConstraint)({ name: 'uniqueCustomerPlanIds', async: false })
+], UniqueCustomerPlanIds);
+let IsStripePriceMap = class IsStripePriceMap {
+    validate(value) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return false;
+        }
+        return Object.entries(value).every(([plan, price]) => exports.CUSTOMER_PLAN_ID_PATTERN.test(plan) &&
+            plan.length <= exports.CUSTOMER_PLAN_ID_MAX_LENGTH &&
+            (price === null ||
+                (typeof price === 'string' && exports.STRIPE_PRICE_ID_PATTERN.test(price))));
+    }
+    defaultMessage() {
+        return 'stripePrices maps plan ids to Stripe Price IDs (price_…) or null';
+    }
+};
+exports.IsStripePriceMap = IsStripePriceMap;
+exports.IsStripePriceMap = IsStripePriceMap = __decorate([
+    (0, class_validator_1.ValidatorConstraint)({ name: 'stripePriceMap', async: false })
+], IsStripePriceMap);
 class UpdateOrganisationDto {
 }
 exports.UpdateOrganisationDto = UpdateOrganisationDto;
@@ -346,17 +405,33 @@ __decorate([
 ], UpdateOrganisationDto.prototype, "stripeSecretKey", void 0);
 __decorate([
     (0, swagger_1.ApiPropertyOptional)({
-        type: () => StripePricesDto,
+        type: 'object',
+        additionalProperties: { type: 'string', nullable: true },
         nullable: true,
-        description: 'Stripe Price IDs per customer plan, used when the billing step subscribes a new tenant. A plan without a price fails the billing step for tenants on it. null clears the map.',
+        example: { starter: 'price_1Q…', pro: null },
+        description: 'Stripe Price ID per customer plan id, used when the billing step subscribes a new tenant; merged into the stored map, null for a plan clears its price. A plan without a price fails the billing step for tenants on it. null clears the whole map.',
     }),
     (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.ValidateIf)((dto) => dto.stripePrices !== null),
-    (0, class_validator_1.IsObject)(),
-    (0, class_validator_1.ValidateNested)(),
-    (0, class_transformer_1.Type)(() => StripePricesDto),
-    __metadata("design:type", StripePricesDto)
+    (0, class_validator_1.Validate)(IsStripePriceMap),
+    __metadata("design:type", Object)
 ], UpdateOrganisationDto.prototype, "stripePrices", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        type: () => [CustomerPlanDto],
+        nullable: true,
+        description: "The company's own customer plans (1 to 12), replacing the defaults starter / pro / enterprise; POST /tenants then only accepts these ids. Tenants already on a removed plan keep it. null goes back to the defaults.",
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((dto) => dto.plans !== null),
+    (0, class_validator_1.IsArray)(),
+    (0, class_validator_1.ArrayMinSize)(1),
+    (0, class_validator_1.ArrayMaxSize)(exports.MAX_CUSTOMER_PLANS),
+    (0, class_validator_1.ValidateNested)({ each: true }),
+    (0, class_transformer_1.Type)(() => CustomerPlanDto),
+    (0, class_validator_1.Validate)(UniqueCustomerPlanIds),
+    __metadata("design:type", Array)
+], UpdateOrganisationDto.prototype, "plans", void 0);
 __decorate([
     (0, swagger_1.ApiPropertyOptional)({
         description: 'true hides the finished onboarding checklist on the dashboard for good (onboardingDismissedAt is set once and kept).',

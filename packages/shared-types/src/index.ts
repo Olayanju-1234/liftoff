@@ -1,20 +1,25 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   IsAlpha,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsFQDN,
   IsNotEmpty,
-  IsObject,
   IsOptional,
   IsString,
   IsUrl,
   Matches,
   MaxLength,
   MinLength,
+  Validate,
   ValidateIf,
   ValidateNested,
+  ValidatorConstraint,
+  type ValidatorConstraintInterface,
 } from 'class-validator';
 
 // ============================================================================
@@ -39,7 +44,11 @@ export class CreateTenantDto {
   @MaxLength(30)
   subdomain: string;
 
-  @ApiProperty({ example: 'starter', description: 'Plan name or ID.' })
+  @ApiProperty({
+    example: 'starter',
+    description:
+      "One of your customer plans, by id (or name): starter, pro or enterprise unless you defined your own under Settings → Billing (PUT /organisation { plans }). It is the customer's plan on your product, not Liftoff's pricing.",
+  })
   @IsString()
   @IsNotEmpty()
   planId: string;
@@ -239,34 +248,113 @@ export const STRIPE_SECRET_KEY_PATTERN = /^(sk|rk)_(test|live)_[A-Za-z0-9]{8,}$/
 export const STRIPE_SECRET_KEY_MAX_LENGTH = 200;
 export const STRIPE_PRICE_ID_PATTERN = /^price_[A-Za-z0-9]{8,}$/;
 
-// One Stripe Price ID per customer plan. Any plan may be left out.
-export class StripePricesDto {
-  @ApiPropertyOptional({ example: 'price_1Q…', nullable: true })
-  @IsOptional()
-  @ValidateIf((dto: StripePricesDto) => dto.starter !== null)
-  @IsString()
-  @Matches(STRIPE_PRICE_ID_PATTERN, {
-    message: 'starter must be a Stripe Price ID (price_…)',
-  })
-  starter?: string | null;
+// ----------------------------------------------------------------------------
+// Customer plans: what a tenant's planId refers to. The company's own plans on its own
+// product, nothing to do with Liftoff's pricing. A company that defines none gets the
+// three defaults.
+// ----------------------------------------------------------------------------
 
-  @ApiPropertyOptional({ example: 'price_1Q…', nullable: true })
-  @IsOptional()
-  @ValidateIf((dto: StripePricesDto) => dto.pro !== null)
-  @IsString()
-  @Matches(STRIPE_PRICE_ID_PATTERN, {
-    message: 'pro must be a Stripe Price ID (price_…)',
-  })
-  pro?: string | null;
+export const CUSTOMER_PLAN_ID_PATTERN = /^[a-z0-9]+(?:[-_][a-z0-9]+)*$/;
+export const CUSTOMER_PLAN_ID_MAX_LENGTH = 40;
+export const CUSTOMER_PLAN_NAME_MAX_LENGTH = 60;
+export const CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH = 120;
+export const MAX_CUSTOMER_PLANS = 12;
 
-  @ApiPropertyOptional({ example: 'price_1Q…', nullable: true })
-  @IsOptional()
-  @ValidateIf((dto: StripePricesDto) => dto.enterprise !== null)
-  @IsString()
-  @Matches(STRIPE_PRICE_ID_PATTERN, {
-    message: 'enterprise must be a Stripe Price ID (price_…)',
+export interface CustomerPlan {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export const DEFAULT_CUSTOMER_PLANS: readonly CustomerPlan[] = [
+  { id: 'starter', name: 'Starter', description: 'For small teams' },
+  { id: 'pro', name: 'Pro', description: 'For growing teams' },
+  {
+    id: 'enterprise',
+    name: 'Enterprise',
+    description: 'For large organisations',
+  },
+];
+
+export class CustomerPlanDto implements CustomerPlan {
+  @ApiProperty({
+    example: 'growth',
+    maxLength: CUSTOMER_PLAN_ID_MAX_LENGTH,
+    description:
+      'What POST /tenants sends as planId. Lowercase letters and digits, single hyphens or underscores. Keep it stable once customers are on it.',
   })
-  enterprise?: string | null;
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(CUSTOMER_PLAN_ID_MAX_LENGTH)
+  @Matches(CUSTOMER_PLAN_ID_PATTERN, {
+    message:
+      'a plan id is lowercase letters and digits, with single hyphens or underscores',
+  })
+  id: string;
+
+  @ApiProperty({ example: 'Growth', maxLength: CUSTOMER_PLAN_NAME_MAX_LENGTH })
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(CUSTOMER_PLAN_NAME_MAX_LENGTH)
+  name: string;
+
+  @ApiPropertyOptional({
+    example: 'For teams of 10 to 50',
+    maxLength: CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH)
+  description?: string;
+}
+
+@ValidatorConstraint({ name: 'uniqueCustomerPlanIds', async: false })
+export class UniqueCustomerPlanIds implements ValidatorConstraintInterface {
+  validate(plans: unknown): boolean {
+    if (!Array.isArray(plans)) {
+      return true;
+    }
+    const ids = plans
+      .map((plan: unknown) =>
+        plan && typeof plan === 'object'
+          ? (plan as { id?: unknown }).id
+          : undefined,
+      )
+      .filter((id): id is string => typeof id === 'string')
+      .map((id) => id.trim().toLowerCase());
+    return new Set(ids).size === ids.length;
+  }
+
+  defaultMessage(): string {
+    return 'plan ids must be unique';
+  }
+}
+
+// { <plan id>: "price_…" | null }. null clears that plan's price.
+@ValidatorConstraint({ name: 'stripePriceMap', async: false })
+export class IsStripePriceMap implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return false;
+    }
+    return Object.entries(value as Record<string, unknown>).every(
+      ([plan, price]) =>
+        CUSTOMER_PLAN_ID_PATTERN.test(plan) &&
+        plan.length <= CUSTOMER_PLAN_ID_MAX_LENGTH &&
+        (price === null ||
+          (typeof price === 'string' && STRIPE_PRICE_ID_PATTERN.test(price))),
+    );
+  }
+
+  defaultMessage(): string {
+    return 'stripePrices maps plan ids to Stripe Price IDs (price_…) or null';
+  }
 }
 
 export class UpdateOrganisationDto {
@@ -333,17 +421,33 @@ export class UpdateOrganisationDto {
   stripeSecretKey?: string | null;
 
   @ApiPropertyOptional({
-    type: () => StripePricesDto,
+    type: 'object',
+    additionalProperties: { type: 'string', nullable: true },
     nullable: true,
+    example: { starter: 'price_1Q…', pro: null },
     description:
-      'Stripe Price IDs per customer plan, used when the billing step subscribes a new tenant. A plan without a price fails the billing step for tenants on it. null clears the map.',
+      'Stripe Price ID per customer plan id, used when the billing step subscribes a new tenant; merged into the stored map, null for a plan clears its price. A plan without a price fails the billing step for tenants on it. null clears the whole map.',
   })
   @IsOptional()
   @ValidateIf((dto: UpdateOrganisationDto) => dto.stripePrices !== null)
-  @IsObject()
-  @ValidateNested()
-  @Type(() => StripePricesDto)
-  stripePrices?: StripePricesDto | null;
+  @Validate(IsStripePriceMap)
+  stripePrices?: StripePrices | null;
+
+  @ApiPropertyOptional({
+    type: () => [CustomerPlanDto],
+    nullable: true,
+    description:
+      "The company's own customer plans (1 to 12), replacing the defaults starter / pro / enterprise; POST /tenants then only accepts these ids. Tenants already on a removed plan keep it. null goes back to the defaults.",
+  })
+  @IsOptional()
+  @ValidateIf((dto: UpdateOrganisationDto) => dto.plans !== null)
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(MAX_CUSTOMER_PLANS)
+  @ValidateNested({ each: true })
+  @Type(() => CustomerPlanDto)
+  @Validate(UniqueCustomerPlanIds)
+  plans?: CustomerPlanDto[] | null;
 
   @ApiPropertyOptional({
     description:
@@ -354,8 +458,8 @@ export class UpdateOrganisationDto {
   dismissOnboarding?: boolean;
 }
 
-// What GET /organisation says about Stripe: whether a key is stored, and the prices.
-export type StripePrices = Record<PlanId, string | null>;
+// Stripe Price ID (or null) per customer plan id.
+export type StripePrices = Record<string, string | null>;
 
 export class CreateApiKeyDto {
   @ApiProperty({ example: 'Billing integration', maxLength: 100 })
@@ -403,7 +507,7 @@ export interface TenantWebhookPayload<TTenant = unknown> {
 // Plans
 // ============================================================================
 
-// Billing prices exactly these IDs, so seeds and signups must use them.
+// The default customer plan ids (see DEFAULT_CUSTOMER_PLANS); the seed keeps Plan rows for them.
 export const PLAN_IDS = ['starter', 'pro', 'enterprise'] as const;
 export type PlanId = (typeof PLAN_IDS)[number];
 
