@@ -44,12 +44,23 @@ export declare class UpdateSettingsDto {
 export declare class ConfirmEmailChangeDto {
     token: string;
 }
+export declare const STRIPE_SECRET_KEY_PATTERN: RegExp;
+export declare const STRIPE_SECRET_KEY_MAX_LENGTH = 200;
+export declare const STRIPE_PRICE_ID_PATTERN: RegExp;
+export declare class StripePricesDto {
+    starter?: string | null;
+    pro?: string | null;
+    enterprise?: string | null;
+}
 export declare class UpdateOrganisationDto {
     name?: string;
     webhookUrl?: string | null;
     rotateWebhookSecret?: boolean;
     baseDomain?: string | null;
+    stripeSecretKey?: string | null;
+    stripePrices?: StripePricesDto | null;
 }
+export type StripePrices = Record<PlanId, string | null>;
 export declare class CreateApiKeyDto {
     name: string;
 }
@@ -92,6 +103,7 @@ export interface TenantCredentialsReadyPayload extends TestModeFlag {
     subdomain: string;
     planId: string;
 }
+export type BillingSkipReason = 'test' | 'not-connected';
 export interface TenantBillingActivePayload extends TestModeFlag {
     tenantId: string;
     subdomain: string;
@@ -101,8 +113,18 @@ export interface TenantBillingActivePayload extends TestModeFlag {
     subscriptionStatus: string;
     trialEnd: string | null;
     skipped?: boolean;
+    skipReason?: BillingSkipReason;
 }
 export interface ProvisioningCompletePayload {
     tenantId: string;
     subdomain: string;
+}
+export declare const INTERNAL_TOKEN_HEADER = "x-internal-token";
+export interface InternalBillingConfig {
+    tenantId: string;
+    organisationId: string;
+    test: boolean;
+    configured: boolean;
+    stripeSecretKey: string | null;
+    prices: StripePrices;
 }

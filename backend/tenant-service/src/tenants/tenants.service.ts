@@ -215,8 +215,9 @@ export class TenantsService {
     outcome:
       | typeof StepStatus.SUCCESS
       | typeof StepStatus.SKIPPED = StepStatus.SUCCESS,
+    extra: Prisma.TenantUpdateInput = {},
   ) {
-    const data: Prisma.TenantUpdateInput = {};
+    const data: Prisma.TenantUpdateInput = { ...extra };
     data[step] = outcome;
     await this.prisma.tenant.update({ where: { id: tenantId }, data });
 
@@ -313,13 +314,20 @@ export class TenantsService {
     queue: 'tenant-service-billing-active-queue',
   })
   public async handleBillingActive(payload: TenantBillingActivePayload) {
-    // A test tenant's billing is skipped, not simulated: the row says so and the saga moves on.
+    // Billing is skipped, never simulated: a test tenant, or a company without Stripe.
+    // The row says so and the saga moves on.
     const skipped = payload.skipped === true;
     await this.completeStep(
       payload.tenantId,
       'billingStatus',
       'notificationStatus',
       skipped ? StepStatus.SKIPPED : StepStatus.SUCCESS,
+      skipped
+        ? {}
+        : {
+            stripeCustomerId: payload.stripeCustomerId,
+            stripeSubscriptionId: payload.stripeSubscriptionId,
+          },
     );
     await this.logEvent(
       payload.tenantId,

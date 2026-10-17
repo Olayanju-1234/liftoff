@@ -5,6 +5,7 @@ import {
 } from '@golevelup/nestjs-rabbitmq';
 import { PLAN_IDS } from '@liftoff/shared-types';
 import type {
+  InternalBillingConfig,
   TenantBillingActivePayload,
   TenantCredentialsReadyPayload,
 } from '@liftoff/shared-types';
@@ -13,6 +14,7 @@ import { Test } from '@nestjs/testing';
 import type Stripe from 'stripe';
 
 import { AppService } from './app.service';
+import { InternalApiClient } from './internal-api.client';
 
 const mockStripe = {
   customers: {
@@ -31,8 +33,9 @@ jest.mock('stripe', () => jest.fn(() => mockStripe));
 const mockStripeConstructor = jest.requireMock<jest.Mock>('stripe');
 
 describe('AppService', () => {
-  const env = process.env;
+  let service: AppService;
   let amqp: { publish: jest.Mock };
+  let internalApi: { billingConfig: jest.Mock };
 
   const payload: TenantCredentialsReadyPayload = {
     tenantId: 'tenant-1',
@@ -40,29 +43,29 @@ describe('AppService', () => {
     planId: 'pro',
   };
 
+  const connected: InternalBillingConfig = {
+    tenantId: 'tenant-1',
+    organisationId: 'org-1',
+    test: false,
+    configured: true,
+    stripeSecretKey: 'sk_test_orgkey12345',
+    prices: {
+      starter: 'price_starter',
+      pro: 'price_pro',
+      enterprise: 'price_enterprise',
+    },
+  };
+
   // 2026-10-29T00:00:00.000Z
   const trialEnd = 1793232000;
 
-  const createService = async () => {
-    const moduleRef = await Test.createTestingModule({
-      providers: [AppService, { provide: AmqpConnection, useValue: amqp }],
-    }).compile();
-    return moduleRef.get(AppService);
-  };
-
-  beforeEach(() => {
-    process.env = {
-      ...env,
-      STRIPE_SECRET_KEY: 'sk_test_123',
-      STRIPE_PRICE_STARTER: 'price_starter',
-      STRIPE_PRICE_PRO: 'price_pro',
-      STRIPE_PRICE_ENTERPRISE: 'price_enterprise',
-    };
+  beforeEach(async () => {
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     mockStripeConstructor.mockClear();
     amqp = { publish: jest.fn().mockResolvedValue(true) };
+    internalApi = { billingConfig: jest.fn().mockResolvedValue(connected) };
     mockStripe.customers.create
       .mockReset()
       .mockResolvedValue({ id: 'cus_123' });
@@ -71,10 +74,18 @@ describe('AppService', () => {
       status: 'trialing',
       trial_end: trialEnd,
     });
+
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        AppService,
+        { provide: AmqpConnection, useValue: amqp },
+        { provide: InternalApiClient, useValue: internalApi },
+      ],
+    }).compile();
+    service = moduleRef.get(AppService);
   });
 
   afterEach(() => {
-    process.env = env;
     jest.restoreAllMocks();
   });
 
@@ -98,27 +109,25 @@ describe('AppService', () => {
     });
   });
 
-  it('refuses to start without a Stripe price for every plan', async () => {
-    delete process.env.STRIPE_PRICE_PRO;
-    delete process.env.STRIPE_PRICE_ENTERPRISE;
-
-    await expect(createService()).rejects.toThrow(
-      'Missing Stripe Price ID env vars: STRIPE_PRICE_PRO, STRIPE_PRICE_ENTERPRISE',
-    );
-  });
-
-  it("starts a 14-day trial on the plan's price, then publishes tenant.billing.active", async () => {
-    const service = await createService();
-
+  it("subscribes the tenant in the company's own Stripe account with a 14-day trial", async () => {
     await expect(
       service.handleTenantCredentialsReady(payload),
     ).resolves.toBeUndefined();
 
+    expect(internalApi.billingConfig).toHaveBeenCalledWith('tenant-1');
+    expect(mockStripeConstructor).toHaveBeenCalledWith(
+      'sk_test_orgkey12345',
+      expect.anything(),
+    );
     expect(mockStripe.subscriptions.create).toHaveBeenCalledWith(
       expect.objectContaining({
         customer: 'cus_123',
         items: [{ price: 'price_pro' }],
         trial_period_days: 14,
+        metadata: expect.objectContaining({
+          tenantId: 'tenant-1',
+          liftoffOrganisationId: 'org-1',
+        }) as unknown,
       }),
     );
     const billingActive: TenantBillingActivePayload = {
@@ -138,15 +147,32 @@ describe('AppService', () => {
     );
   });
 
-  it('never calls Stripe for a test tenant and publishes billing.active as skipped', async () => {
-    const service = await createService();
+  it.each(PLAN_IDS)(
+    'uses the price the company mapped to plan %s, case-insensitively',
+    async (planId) => {
+      await service.handleTenantCredentialsReady({
+        ...payload,
+        planId: planId.toUpperCase(),
+      });
+
+      expect(mockStripe.subscriptions.create).toHaveBeenCalledWith(
+        expect.objectContaining({ items: [{ price: `price_${planId}` }] }),
+      );
+    },
+  );
+
+  it('skips billing as not-connected when the company has no Stripe key, without calling Stripe', async () => {
+    internalApi.billingConfig.mockResolvedValueOnce({
+      ...connected,
+      configured: false,
+      stripeSecretKey: null,
+    });
 
     await expect(
-      service.handleTenantCredentialsReady({ ...payload, test: true }),
+      service.handleTenantCredentialsReady(payload),
     ).resolves.toBeUndefined();
 
-    expect(mockStripe.customers.create).not.toHaveBeenCalled();
-    expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+    expect(mockStripeConstructor).not.toHaveBeenCalled();
     const skipped: TenantBillingActivePayload = {
       tenantId: 'tenant-1',
       subdomain: 'acme',
@@ -156,7 +182,7 @@ describe('AppService', () => {
       subscriptionStatus: 'skipped',
       trialEnd: null,
       skipped: true,
-      test: true,
+      skipReason: 'not-connected',
     };
     expect(amqp.publish).toHaveBeenCalledWith(
       'provisioning.direct',
@@ -165,8 +191,38 @@ describe('AppService', () => {
     );
   });
 
+  it('never simulates a subscription: no sim_ ids anywhere', async () => {
+    internalApi.billingConfig.mockResolvedValueOnce({
+      ...connected,
+      configured: false,
+      stripeSecretKey: null,
+    });
+
+    await service.handleTenantCredentialsReady(payload);
+
+    expect(JSON.stringify(amqp.publish.mock.calls)).not.toContain('sim_');
+  });
+
+  it('skips a test tenant without asking tenant-service or Stripe', async () => {
+    await expect(
+      service.handleTenantCredentialsReady({ ...payload, test: true }),
+    ).resolves.toBeUndefined();
+
+    expect(internalApi.billingConfig).not.toHaveBeenCalled();
+    expect(mockStripe.customers.create).not.toHaveBeenCalled();
+    expect(amqp.publish).toHaveBeenCalledWith(
+      'provisioning.direct',
+      'tenant.billing.active',
+      expect.objectContaining({
+        skipped: true,
+        skipReason: 'test',
+        test: true,
+        stripeSubscriptionId: null,
+      }),
+    );
+  });
+
   it('nacks without requeue when the skipped billing cannot be published', async () => {
-    const service = await createService();
     amqp.publish.mockRejectedValueOnce(new Error('channel closed'));
 
     const result = await service.handleTenantCredentialsReady({
@@ -175,29 +231,7 @@ describe('AppService', () => {
     });
 
     expect(result).toBeInstanceOf(Nack);
-  });
-
-  it.each(PLAN_IDS)(
-    'subscribes the shared plan id %s to its Stripe price',
-    async (planId) => {
-      const service = await createService();
-
-      await service.handleTenantCredentialsReady({ ...payload, planId });
-
-      expect(mockStripe.subscriptions.create).toHaveBeenCalledWith(
-        expect.objectContaining({ items: [{ price: `price_${planId}` }] }),
-      );
-    },
-  );
-
-  it('matches the plan id case-insensitively', async () => {
-    const service = await createService();
-
-    await service.handleTenantCredentialsReady({ ...payload, planId: 'PRO' });
-
-    expect(mockStripe.subscriptions.create).toHaveBeenCalledWith(
-      expect.objectContaining({ items: [{ price: 'price_pro' }] }),
-    );
+    expect((result as Nack).requeue).toBe(false);
   });
 
   it('publishes a null trialEnd when the subscription has no trial', async () => {
@@ -206,7 +240,6 @@ describe('AppService', () => {
       status: 'active',
       trial_end: null,
     });
-    const service = await createService();
 
     await service.handleTenantCredentialsReady(payload);
 
@@ -217,17 +250,41 @@ describe('AppService', () => {
     );
   });
 
-  it('nacks without requeue and creates no subscription for an unknown plan', async () => {
-    const service = await createService();
+  it('nacks without requeue and creates nothing when the plan has no price', async () => {
+    internalApi.billingConfig.mockResolvedValueOnce({
+      ...connected,
+      prices: { ...connected.prices, pro: null },
+    });
 
+    const result = await service.handleTenantCredentialsReady(payload);
+
+    expect(result).toBeInstanceOf(Nack);
+    expect((result as Nack).requeue).toBe(false);
+    expect(mockStripe.customers.create).not.toHaveBeenCalled();
+    expect(amqp.publish).not.toHaveBeenCalled();
+  });
+
+  it('nacks without requeue for an unknown plan', async () => {
     const result = await service.handleTenantCredentialsReady({
       ...payload,
       planId: 'platinum',
     });
 
     expect(result).toBeInstanceOf(Nack);
-    expect((result as Nack).requeue).toBe(false);
     expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+    expect(amqp.publish).not.toHaveBeenCalled();
+  });
+
+  it('nacks without requeue when tenant-service cannot be reached, so the step is FAILED and retryable', async () => {
+    internalApi.billingConfig.mockRejectedValueOnce(
+      new Error('tenant-service answered 503'),
+    );
+
+    const result = await service.handleTenantCredentialsReady(payload);
+
+    expect(result).toBeInstanceOf(Nack);
+    expect((result as Nack).requeue).toBe(false);
+    expect(mockStripeConstructor).not.toHaveBeenCalled();
     expect(amqp.publish).not.toHaveBeenCalled();
   });
 
@@ -235,7 +292,6 @@ describe('AppService', () => {
     mockStripe.subscriptions.create.mockRejectedValueOnce(
       new Error('card_declined'),
     );
-    const service = await createService();
 
     const result = await service.handleTenantCredentialsReady(payload);
 
@@ -246,75 +302,10 @@ describe('AppService', () => {
 
   it('nacks without requeue when publishing fails, so the message dead-letters', async () => {
     amqp.publish.mockRejectedValueOnce(new Error('channel closed'));
-    const service = await createService();
 
     const result = await service.handleTenantCredentialsReady(payload);
 
     expect(result).toBeInstanceOf(Nack);
     expect((result as Nack).requeue).toBe(false);
-  });
-  describe('without a Stripe key', () => {
-    beforeEach(() => {
-      delete process.env.STRIPE_SECRET_KEY;
-      delete process.env.STRIPE_PRICE_STARTER;
-      delete process.env.STRIPE_PRICE_PRO;
-      delete process.env.STRIPE_PRICE_ENTERPRISE;
-      jest.useFakeTimers({ now: new Date('2026-10-15T00:00:00.000Z') });
-    });
-
-    afterEach(() => jest.useRealTimers());
-
-    it('starts, and publishes a simulated 14-day trial without calling Stripe', async () => {
-      const service = await createService();
-
-      await expect(
-        service.handleTenantCredentialsReady(payload),
-      ).resolves.toBeUndefined();
-
-      expect(mockStripeConstructor).not.toHaveBeenCalled();
-      expect(mockStripe.customers.create).not.toHaveBeenCalled();
-      const billingActive: TenantBillingActivePayload = {
-        tenantId: 'tenant-1',
-        subdomain: 'acme',
-        planId: 'pro',
-        stripeCustomerId: 'sim_cus_tenant-1',
-        stripeSubscriptionId: 'sim_sub_tenant-1',
-        subscriptionStatus: 'trialing',
-        trialEnd: '2026-10-29T00:00:00.000Z',
-      };
-      expect(amqp.publish).toHaveBeenCalledWith(
-        'provisioning.direct',
-        'tenant.billing.active',
-        billingActive,
-      );
-    });
-
-    it.each(PLAN_IDS)(
-      'simulates a subscription for the shared plan id %s',
-      async (planId) => {
-        const service = await createService();
-
-        await service.handleTenantCredentialsReady({ ...payload, planId });
-
-        expect(amqp.publish).toHaveBeenCalledWith(
-          'provisioning.direct',
-          'tenant.billing.active',
-          expect.objectContaining({ planId }),
-        );
-      },
-    );
-
-    it('nacks without requeue for an unknown plan', async () => {
-      const service = await createService();
-
-      const result = await service.handleTenantCredentialsReady({
-        ...payload,
-        planId: 'platinum',
-      });
-
-      expect(result).toBeInstanceOf(Nack);
-      expect((result as Nack).requeue).toBe(false);
-      expect(amqp.publish).not.toHaveBeenCalled();
-    });
   });
 });

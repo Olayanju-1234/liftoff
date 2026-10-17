@@ -84,7 +84,7 @@ graph LR
 | db-provisioner-service | 3002 | Creates isolated PostgreSQL schema per tenant |
 | credentials-service | 3003 | Generates and stores API keys per tenant |
 | dns-provisioner-service | 3004 | Registers subdomain DNS records |
-| billing-service | 3005 | Creates Stripe customer and subscription with 14-day trial |
+| billing-service | 3005 | Subscribes the tenant in the company's own Stripe account (14-day trial), or records the step as SKIPPED |
 | notification-service | 3006 | Sends welcome email and publishes provisioning.complete |
 
 ### API Gateway
@@ -103,7 +103,7 @@ Steps never move backwards. Each worker consumes its event in parallel with tena
 
 ### Billing Service
 
-Subscribes to `tenant.credentials.ready`. Validates Stripe Price IDs at startup (fails fast if any env var is missing). Creates a Stripe Customer and Subscription with a 14-day trial, then publishes `tenant.billing.active` with the real Stripe IDs.
+Subscribes to `tenant.credentials.ready`. Billing is never simulated. The company connects its own Stripe account with `PUT /organisation {"stripeSecretKey": "sk_…", "stripePrices": {"starter": "price_…", …}}` (Settings → Billing in the dashboard); the key is stored AES-256-GCM encrypted with `ORG_SECRETS_KEY` and never returned (`stripeConfigured: true` instead). For each tenant, billing-service fetches that configuration from tenant-service's internal API (`GET /internal/tenants/:id/billing`, authenticated with the shared `INTERNAL_API_TOKEN`, so the key never travels through RabbitMQ), creates a Stripe Customer and a Subscription with a 14-day trial on the price mapped to the tenant's plan, and publishes `tenant.billing.active` with the real ids, which tenant-service stores on the tenant. With no Stripe connected, or for a test tenant, it publishes `skipped: true` with a `skipReason` and the step is recorded as `SKIPPED`: the dashboard then says "Billing: not connected".
 
 ---
 
@@ -136,8 +136,8 @@ sequenceDiagram
     Creds->>RabbitMQ: publish tenant.credentials.ready
 
     RabbitMQ->>Billing: consume tenant.credentials.ready
-    Billing->>Billing: stripe.customers.create()
-    Billing->>Billing: stripe.subscriptions.create() + 14-day trial
+    Billing->>Billing: GET tenant-service /internal/tenants/:id/billing
+    Billing->>Billing: company's Stripe: customers.create() + subscriptions.create() (14-day trial), or skip
     Billing->>RabbitMQ: publish tenant.billing.active
 
     RabbitMQ->>Notify: consume tenant.billing.active
@@ -164,8 +164,9 @@ interface TenantDnsReadyPayload    { tenantId; subdomain; planId }
 interface TenantCredentialsReadyPayload { tenantId; subdomain; planId }
 interface TenantBillingActivePayload {
   tenantId; subdomain; planId;
-  stripeCustomerId; stripeSubscriptionId;
+  stripeCustomerId: string | null; stripeSubscriptionId: string | null;
   subscriptionStatus; trialEnd: string | null;
+  skipped?: boolean; skipReason?: 'test' | 'not-connected';
 }
 interface ProvisioningCompletePayload { tenantId; subdomain }
 ```
@@ -489,9 +490,12 @@ migration steps are written up in
   the `credentials` schema (pinned in its `schema.prisma`). db-provisioner-service
   manages no tables; it only creates a `tenant_<subdomain>` schema per tenant.
 
-**Billing Service (optional Stripe):**
-- `STRIPE_SECRET_KEY`, `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_ENTERPRISE`
-  (without a key, subscriptions are simulated so the saga still completes, like DNS provisioning)
+**Tenant Service (per-organisation secrets and the internal API):**
+- `ORG_SECRETS_KEY` (32+ chars): encrypts each company's Stripe key at rest. Without it, connecting Stripe answers 503 and billing is `SKIPPED` for everyone.
+- `INTERNAL_API_TOKEN` (32+ chars): shared with the workers for `GET /internal/*`. Without it the internal API answers 503.
+
+**Billing Service:**
+- `TENANT_SERVICE_URL`, `INTERNAL_API_TOKEN`: where to fetch each company's Stripe configuration. There is no platform-wide Stripe key: a company connects its own through `PUT /organisation`. Without both variables, real tenants fail at billing (dead letter → `FAILED`); test tenants are still `SKIPPED`.
 
 **Tenant Service (optional email):**
 - `RESEND_API_KEY` (preferred), else `SENDGRID_API_KEY`, plus `EMAIL_FROM` (`noreply@…` or `Name <noreply@…>`). With neither key nothing is sent, and the log records only the recipient and subject, never the body or its links.
@@ -514,9 +518,9 @@ Each service reacts to events independently rather than a central orchestrator d
 
 Direct exchange routing is sufficient at this scale. RabbitMQ's at-least-once delivery with acknowledgments, dead letter queues, and simpler operational profile made it the right choice for a task-queue workload.
 
-### Billing service fails fast on startup
+### Billing is per organisation and never simulated
 
-`buildPlanPriceMap()` validates all Stripe Price ID environment variables at module load time. If any are missing, the service refuses to start. This prevents the scenario where a subscription is attempted with an empty price ID, which would throw a Stripe API error at the worst possible moment (mid-provisioning, after the customer was already created).
+A company's customers must be subscribed in that company's Stripe account, not in liftoff's, so there is no platform-wide Stripe key. Each organisation stores its own key (encrypted at rest with `ORG_SECRETS_KEY`) and a plan → Price ID map. billing-service fetches them from tenant-service over an internal HTTP API instead of carrying the key through RabbitMQ, checks the price before creating the Stripe customer, and with nothing connected records the step as `SKIPPED` rather than inventing a subscription: a support person reading "Billing: not connected" is better served than one reading a trial that does not exist.
 
 ### Database-per-tenant via schema isolation
 

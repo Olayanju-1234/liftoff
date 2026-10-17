@@ -83,7 +83,7 @@ export const STAGES: Stage[] = [
         emits: 'tenant.billing.active',
         deadLetterKey: 'billing.failed',
         action: 'STRIPE SUB',
-        detail: 'Creates a Stripe customer and a subscription with a 14-day trial.',
+        detail: "Creates a customer and a 14-day-trial subscription in the company's own Stripe account; SKIPPED when none is connected.",
         typicalMs: 1240,
     },
     {
@@ -104,9 +104,9 @@ export const STAGES: Stage[] = [
 ];
 
 export const PLANS = [
-    { id: 'starter', name: 'Starter', note: 'Small teams. Price from STRIPE_PRICE_STARTER.' },
-    { id: 'pro', name: 'Pro', note: 'Growing tenants. Price from STRIPE_PRICE_PRO.' },
-    { id: 'enterprise', name: 'Enterprise', note: 'Large tenants. Price from STRIPE_PRICE_ENTERPRISE.' },
+    { id: 'starter', name: 'Starter', note: 'Small teams. Billed on the Stripe price you map to it in Settings → Billing.' },
+    { id: 'pro', name: 'Pro', note: 'Growing tenants. Billed on the Stripe price you map to it in Settings → Billing.' },
+    { id: 'enterprise', name: 'Enterprise', note: 'Large tenants. Billed on the Stripe price you map to it in Settings → Billing.' },
 ] as const;
 
 export type StageState = StepStatus | 'STALLED';
@@ -235,7 +235,7 @@ const EVENT_LABELS: Record<string, string> = {
     'tenant.dns.ready': 'Subdomain registered',
     'tenant.credentials.ready': 'API key issued',
     'tenant.billing.active': 'Stripe subscription active',
-    'tenant.billing.skipped': 'Billing skipped (test tenant)',
+    'tenant.billing.skipped': 'Billing skipped',
     'tenant.provisioning.complete': 'Provisioning complete',
     'tenant.cancelled': 'Provisioning cancelled',
     'tenant.deleted': 'Tenant deleted',
@@ -243,6 +243,14 @@ const EVENT_LABELS: Record<string, string> = {
 
 export function eventLabel(eventType: string) {
     return EVENT_LABELS[eventType] ?? eventType.replace(/^tenant\./, '').replace(/\./g, ' ');
+}
+
+// Billing is SKIPPED for a test tenant or when the company has not connected Stripe.
+export type BillingSkip = 'test' | 'not-connected';
+
+export function billingSkip(t: Pick<Tenant, 'billingStatus' | 'isTest'>): BillingSkip | undefined {
+    if (t.billingStatus !== 'SKIPPED') return undefined;
+    return t.isTest ? 'test' : 'not-connected';
 }
 
 export function eventErrorText(e: EventLog): string | undefined {

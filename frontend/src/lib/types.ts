@@ -19,6 +19,9 @@ export interface Tenant {
     schemaName?: string | null;
     // Test mode: set up like a real tenant, billing SKIPPED, outside the quotas, deletable any time.
     isTest?: boolean;
+    // What billing created in the company's Stripe account; null when the step was skipped.
+    stripeCustomerId?: string | null;
+    stripeSubscriptionId?: string | null;
     createdAt: string;
     updatedAt: string;
 }
@@ -31,11 +34,17 @@ export interface Organisation {
     webhookUrl: string | null;
     webhookConfigured: boolean;
     baseDomain: string | null;
+    // True once the company's Stripe key is stored (it is never returned). Until then billing is skipped.
+    stripeConfigured: boolean;
+    stripePrices: Record<PlanId, string | null>;
     // Quotas on adding customers; test customers don't count. Raised by support on request.
     limits: { maxActiveTenants: number; maxProvisionsPerDay: number };
     createdAt: string;
     updatedAt: string;
 }
+
+export type PlanId = 'starter' | 'pro' | 'enterprise';
+export const PLAN_IDS: PlanId[] = ['starter', 'pro', 'enterprise'];
 
 export type TenantStatus = 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'FAILED' | 'CANCELLED';
 export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'SKIPPED';

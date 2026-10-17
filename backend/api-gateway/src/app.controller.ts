@@ -325,9 +325,13 @@ export class AppController {
   @ApiOperation({
     summary: "Update the caller's company",
     description:
-      'Setting webhookUrl (or rotateWebhookSecret) returns webhookSecret once. tenant.active and tenant.failed are POSTed there, signed with it in x-liftoff-signature.',
+      'Setting webhookUrl (or rotateWebhookSecret) returns webhookSecret once. tenant.active and tenant.failed are POSTed there, signed with it in x-liftoff-signature. stripeSecretKey connects the company’s own Stripe account (stored encrypted, never returned: the response says stripeConfigured; null disconnects) and stripePrices maps customer plans to Stripe Price IDs.',
   })
   @ApiResponse({ status: 400, description: 'Private or loopback webhookUrl' })
+  @ApiResponse({
+    status: 503,
+    description: 'Stripe cannot be connected on this deployment',
+  })
   @Put('organisation')
   updateOrganisation(
     @Body() dto: UpdateOrganisationDto,

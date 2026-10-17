@@ -30,4 +30,18 @@ describe('envValidationSchema email settings', () => {
       validate({ RESEND_API_KEY: '', SENDGRID_API_KEY: '' }),
     ).toBeUndefined();
   });
+
+  it('allows the secrets and internal tokens to be unset, but not short', () => {
+    expect(
+      validate({ ORG_SECRETS_KEY: '', INTERNAL_API_TOKEN: '' }),
+    ).toBeUndefined();
+    expect(
+      validate({
+        ORG_SECRETS_KEY: 'k'.repeat(32),
+        INTERNAL_API_TOKEN: 't'.repeat(32),
+      }),
+    ).toBeUndefined();
+    expect(validate({ ORG_SECRETS_KEY: 'short' })).toBeDefined();
+    expect(validate({ INTERNAL_API_TOKEN: 'short' })).toBeDefined();
+  });
 });

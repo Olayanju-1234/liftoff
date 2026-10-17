@@ -404,6 +404,61 @@ describe('TenantsService', () => {
       });
     });
 
+    it('stores the Stripe ids on the tenant when billing created a subscription', async () => {
+      prisma.tenant.update.mockResolvedValueOnce({});
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await service.handleBillingActive({
+        ...saga,
+        stripeCustomerId: 'cus_1',
+        stripeSubscriptionId: 'sub_1',
+        subscriptionStatus: 'trialing',
+        trialEnd: null,
+      });
+
+      expect(prisma.tenant.update).toHaveBeenCalledWith({
+        where: { id: 't' },
+        data: {
+          billingStatus: StepStatus.SUCCESS,
+          stripeCustomerId: 'cus_1',
+          stripeSubscriptionId: 'sub_1',
+        },
+      });
+      expect(prisma.eventLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'tenant.billing.active',
+        }) as unknown,
+      });
+    });
+
+    it('records billing as SKIPPED with no Stripe ids when the company has not connected Stripe', async () => {
+      prisma.tenant.update.mockResolvedValueOnce({});
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await service.handleBillingActive({
+        ...saga,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+        subscriptionStatus: 'skipped',
+        trialEnd: null,
+        skipped: true,
+        skipReason: 'not-connected',
+      });
+
+      expect(prisma.tenant.update).toHaveBeenCalledWith({
+        where: { id: 't' },
+        data: { billingStatus: StepStatus.SKIPPED },
+      });
+      expect(prisma.eventLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'tenant.billing.skipped',
+          payload: expect.objectContaining({
+            skipReason: 'not-connected',
+          }) as unknown,
+        }) as unknown,
+      });
+    });
+
     it('records billing as SKIPPED, not SUCCESS, and still starts notification for a test tenant', async () => {
       await service.handleBillingActive({
         ...saga,

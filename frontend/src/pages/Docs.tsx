@@ -145,8 +145,8 @@ const STEP_NOTES: Record<string, { plain: string; honest?: string }> = {
         honest: 'The API does not return this key yet, so the dashboard shows it masked. Surfacing it to you, and rotating it, is on the roadmap.',
     },
     billingStatus: {
-        plain: 'Creates a billing customer and a subscription with a 14-day trial on the tenant’s plan, so billing exists before anyone on your team touches the account.',
-        honest: 'On the hosted service Stripe is not connected, so the step records the trial without charging anyone. Connecting your own Stripe account is on the Pro roadmap.',
+        plain: 'Creates a customer and a subscription with a 14-day trial in your own Stripe account, on the Price ID you mapped to the tenant’s plan (PUT /organisation { stripeSecretKey, stripePrices }, or Settings → Billing). The key is stored encrypted and never returned.',
+        honest: 'Until you connect Stripe the step is recorded as SKIPPED, not simulated: no customer, no subscription, and the dashboard says "Billing: not connected". A plan without a price fails the step with the reason in the event log.',
     },
     notificationStatus: {
         plain: 'Marks the end of the pipeline: the welcome is logged, provisioning.complete is published, and the tenant becomes ACTIVE.',
@@ -194,7 +194,7 @@ const ENDPOINTS: [string, string, string][] = [
     ['GET', '/events', 'Event log across all your tenants (latest 200)'],
     ['POST', '/tenants/:id/cancel', 'Cancel a tenant that is still provisioning'],
     ['DELETE', '/tenants/:id', 'Delete a tenant and its events'],
-    ['GET / PUT', '/organisation', 'Your company: name, base domain for tenant addresses, webhook URL (PUT returns the signing secret once)'],
+    ['GET / PUT', '/organisation', 'Your company: name, base domain, webhook URL (PUT returns the signing secret once), Stripe key (never returned) and plan → price map'],
     ['GET / PUT', '/settings', 'Your profile and notification preferences'],
     ['POST', '/api-keys', 'Create a company API key (returned once)'],
     ['GET', '/api-keys', 'List your API keys by name and prefix, never the key'],
@@ -325,7 +325,7 @@ export default function Docs() {
                     />
                     <p>
                         Step statuses are <Code>PENDING</Code>, <Code>IN_PROGRESS</Code>, <Code>SUCCESS</Code>, <Code>FAILED</Code>, <Code>CANCELLED</Code> or{' '}
-                        <Code>SKIPPED</Code> (billing on a test tenant). The dashboard
+                        <Code>SKIPPED</Code> (billing on a test tenant, or when your company has not connected Stripe). The dashboard
                         additionally shows a step as <em>stalled</em> when it has been IN_PROGRESS for more than {STALL_AFTER_MS / 1000} seconds; the API does not have that
                         state, so compute it from <Code>updatedAt</Code> if you need it.
                     </p>

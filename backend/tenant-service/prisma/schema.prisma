@@ -48,6 +48,11 @@ model Tenant {
   billingStatus     StepStatus @default(PENDING)
   notificationStatus StepStatus @default(PENDING)
   
+  // What billing created in the company's Stripe account, from tenant.billing.active.
+  // Null when billing was skipped (test tenant, or Stripe not connected).
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+
   // Cancellation fields
   cancelledAt  DateTime?
   cancelReason String?
@@ -79,6 +84,13 @@ model Organisation {
   // Stored raw, not hashed, because every delivery is signed with it. The API returns it once.
   webhookUrl    String?
   webhookSecret String?
+
+  // The company's own Stripe account. The key is AES-256-GCM encrypted with ORG_SECRETS_KEY
+  // and never returned; billing-service fetches it over the internal API when it subscribes
+  // a tenant. Null means Stripe is not connected and the billing step is SKIPPED.
+  stripeSecretKeyEncrypted String?
+  // { starter, pro, enterprise } → Stripe Price ID, any of them absent.
+  stripePrices             Json?
 
   users   User[]
   tenants Tenant[]
