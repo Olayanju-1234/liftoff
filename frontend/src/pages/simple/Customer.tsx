@@ -9,6 +9,7 @@ import { useNow, useResource } from '../../lib/hooks';
 import { useTenantActions } from '../../lib/useTenantActions';
 import {
     activeStage,
+    billingSkip,
     cancelReasonFrom,
     condition,
     eventErrorText,
@@ -139,7 +140,11 @@ export default function Customer() {
             )}
             <StatusNote tenant={tenant} cond={cond} events={events} now={now} />
 
-            <Panel title="Setup progress" meta={cond === 'active' ? (tenant.isTest ? 'four steps finished, billing skipped' : 'all five steps finished') : undefined} flush>
+            <Panel
+                title="Setup progress"
+                meta={cond === 'active' ? (billingSkip(tenant) ? 'four steps finished, billing skipped' : 'all five steps finished') : undefined}
+                flush
+            >
                 <ol className="divide-y divide-rule">
                     {SIMPLE_STEPS.map(({ stage }, i) => {
                         const state = stageState(tenant, stage, now);
@@ -155,7 +160,7 @@ export default function Customer() {
                                 </div>
                                 <div className="text-right">
                                     <p className={cn('text-[13.5px] font-medium', TONE_TEXT[meta.tone], state === 'PENDING' && 'text-ink-4')}>
-                                        {meta.label}
+                                        {stage.key === 'billingStatus' && billingSkip(tenant) === 'not-connected' ? 'Not connected' : meta.label}
                                     </p>
                                     {took && <p className="num font-mono text-[11px] text-ink-3">took {took}</p>}
                                 </div>
@@ -223,6 +228,7 @@ function StepMark({ state, index }: { state: ReturnType<typeof stageState>; inde
 
 function ReadyPanel({ tenant, events, tookMs }: { tenant: Tenant; events: EventLog[]; tookMs?: number }) {
     const trialEnd = trialEndsAt(tenant, events);
+    const skip = billingSkip(tenant);
     return (
         <Panel title="This customer is ready" meta={tookMs ? `set up in ${fmtDuration(tookMs)}` : undefined} className="mb-6 border-go/40">
             <dl className="grid gap-5 lg:grid-cols-3">
@@ -244,13 +250,25 @@ function ReadyPanel({ tenant, events, tookMs }: { tenant: Tenant; events: EventL
                     </dd>
                 </div>
                 <div className="min-w-0">
-                    <dt className="label mb-1.5">Trial</dt>
+                    <dt className="label mb-1.5">{skip === 'not-connected' ? 'Billing' : 'Trial'}</dt>
                     <dd>
                         <div className="flex h-10 items-center rounded border border-rule-strong bg-paper/60 px-3 text-[14px] text-ink">
-                            {tenant.isTest ? 'None: test customer' : `Ends ${fmtDate(trialEnd)}`}
+                            {skip === 'test' ? 'None: test customer' : skip === 'not-connected' ? 'Not connected' : `Ends ${fmtDate(trialEnd)}`}
                         </div>
                         <p className="mt-1.5 text-[13px] text-ink-3">
-                            {tenant.isTest ? 'Billing was skipped, so nothing starts and nothing is charged.' : `${TRIAL_DAYS}-day free trial on the ${planLabel(tenant)} plan.`}
+                            {skip === 'test' ? (
+                                'Billing was skipped, so nothing starts and nothing is charged.'
+                            ) : skip === 'not-connected' ? (
+                                <>
+                                    No subscription was created. Connect your Stripe account under{' '}
+                                    <Link to="/settings" className="font-medium text-blueprint hover:underline">
+                                        Settings → Billing
+                                    </Link>{' '}
+                                    to start trials for new customers.
+                                </>
+                            ) : (
+                                `${TRIAL_DAYS}-day free trial on the ${planLabel(tenant)} plan.`
+                            )}
                         </p>
                     </dd>
                 </div>

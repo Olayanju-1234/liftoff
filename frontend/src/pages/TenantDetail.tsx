@@ -14,6 +14,7 @@ import {
     STEP_TIMEOUT_MS,
     SWEEP_AFTER_MS,
     activeStage,
+    billingSkip,
     cancelReasonFrom,
     condition,
     eventErrorText,
@@ -204,7 +205,7 @@ function buildBoxes(tenant: Tenant, timeline: ReturnType<typeof stageTimings>, n
             case 'CANCELLED':
                 return { tone: 'cancel', badge: 'CANCELLED' };
             case 'SKIPPED':
-                return { tone: 'idle', badge: 'SKIPPED', meta: 'test tenant' };
+                return { tone: 'idle', badge: 'SKIPPED', meta: billingSkip(tenant) === 'test' ? 'test tenant' : 'Stripe not connected' };
             default:
                 return { tone: 'idle', badge: 'PENDING' };
         }
@@ -246,11 +247,18 @@ function TitleBlock({ tenant, now }: { tenant: Tenant; now: number }) {
         { k: 'Address', v: tenantHost(tenant), title: `${tenantHost(tenant)} (DNS is simulated; display only)` },
         { k: 'Schema', v: tenant.schemaName ?? schemaName(tenant.subdomain), title: tenant.schemaName ?? schemaName(tenant.subdomain) },
         { k: 'Plan', v: planLabel(tenant), title: `planId ${tenant.planId}` },
+        {
+            k: 'Billing',
+            v: tenant.stripeSubscriptionId ?? (billingSkip(tenant) === 'not-connected' ? 'not connected' : billingSkip(tenant) === 'test' ? 'skipped (test)' : '—'),
+            title: tenant.stripeSubscriptionId
+                ? `Stripe subscription ${tenant.stripeSubscriptionId} (customer ${tenant.stripeCustomerId ?? '?'})`
+                : 'No Stripe subscription for this tenant',
+        },
         { k: 'Created', v: fmtAgo(Date.parse(tenant.createdAt), now), title: fmtStamp(Date.parse(tenant.createdAt)) },
         { k: 'Last change', v: fmtAgo(Date.parse(tenant.updatedAt), now), title: fmtStamp(Date.parse(tenant.updatedAt)) },
     ];
     return (
-        <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-ink/70 bg-rule md:grid-cols-3 xl:grid-cols-6">
+        <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-ink/70 bg-rule md:grid-cols-4 xl:grid-cols-7">
             {cells.map((c) => (
                 <div key={c.k} className="min-w-0 bg-card px-4 py-3" title={c.title}>
                     <dt className="label mb-1">{c.k}</dt>

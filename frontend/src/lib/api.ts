@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Tenant, EventLog, Organisation, UserSettings } from './types';
+import type { Tenant, EventLog, Organisation, PlanId, UserSettings } from './types';
 
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_URL,
@@ -43,8 +43,14 @@ export const saveSettings = async (settings: Partial<UserSettings>): Promise<Use
 
 // Organisation APIs
 export const getOrganisation = () => api.get<Organisation>('/organisation').then((res) => res.data);
-export const updateOrganisation = (patch: { name?: string; baseDomain?: string | null }) =>
-    api.put<Organisation>('/organisation', patch).then((res) => res.data);
+export interface OrganisationPatch {
+    name?: string;
+    baseDomain?: string | null;
+    // The company's Stripe secret key; null disconnects. Never comes back in a response.
+    stripeSecretKey?: string | null;
+    stripePrices?: Partial<Record<PlanId, string | null>> | null;
+}
+export const updateOrganisation = (patch: OrganisationPatch) => api.put<Organisation>('/organisation', patch).then((res) => res.data);
 
 // Email verification and password reset
 export const verifyEmail = (token: string) =>
