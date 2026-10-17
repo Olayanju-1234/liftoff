@@ -20,7 +20,7 @@ export class OrganisationsController {
   @ApiOperation({
     summary: "Update the caller's company",
     description:
-      'Setting webhookUrl (or rotateWebhookSecret) returns webhookSecret once. Store it: tenant.active and tenant.failed deliveries are signed with it.',
+      'Setting webhookUrl (or rotateWebhookSecret) returns webhookSecret once. Store it: tenant.active and tenant.failed deliveries are signed with it. stripeSecretKey connects the company’s own Stripe account (stored encrypted, never returned; null disconnects) and stripePrices maps customer plans to Price IDs.',
   })
   update(
     @Body() dto: UpdateOrganisationDto,

@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = exports.VerifyEmailDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
+exports.INTERNAL_TOKEN_HEADER = exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.StripePricesDto = exports.STRIPE_PRICE_ID_PATTERN = exports.STRIPE_SECRET_KEY_MAX_LENGTH = exports.STRIPE_SECRET_KEY_PATTERN = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = exports.VerifyEmailDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
 const swagger_1 = require("@nestjs/swagger");
 const class_transformer_1 = require("class-transformer");
 const class_validator_1 = require("class-validator");
@@ -244,6 +244,42 @@ __decorate([
     (0, class_validator_1.MaxLength)(200),
     __metadata("design:type", String)
 ], ConfirmEmailChangeDto.prototype, "token", void 0);
+exports.STRIPE_SECRET_KEY_PATTERN = /^(sk|rk)_(test|live)_[A-Za-z0-9]{8,}$/;
+exports.STRIPE_SECRET_KEY_MAX_LENGTH = 200;
+exports.STRIPE_PRICE_ID_PATTERN = /^price_[A-Za-z0-9]{8,}$/;
+class StripePricesDto {
+}
+exports.StripePricesDto = StripePricesDto;
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 'price_1Q…', nullable: true }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((dto) => dto.starter !== null),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Matches)(exports.STRIPE_PRICE_ID_PATTERN, {
+        message: 'starter must be a Stripe Price ID (price_…)',
+    }),
+    __metadata("design:type", String)
+], StripePricesDto.prototype, "starter", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 'price_1Q…', nullable: true }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((dto) => dto.pro !== null),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Matches)(exports.STRIPE_PRICE_ID_PATTERN, {
+        message: 'pro must be a Stripe Price ID (price_…)',
+    }),
+    __metadata("design:type", String)
+], StripePricesDto.prototype, "pro", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 'price_1Q…', nullable: true }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((dto) => dto.enterprise !== null),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Matches)(exports.STRIPE_PRICE_ID_PATTERN, {
+        message: 'enterprise must be a Stripe Price ID (price_…)',
+    }),
+    __metadata("design:type", String)
+], StripePricesDto.prototype, "enterprise", void 0);
 class UpdateOrganisationDto {
 }
 exports.UpdateOrganisationDto = UpdateOrganisationDto;
@@ -293,6 +329,34 @@ __decorate([
     (0, class_validator_1.MaxLength)(253),
     __metadata("design:type", String)
 ], UpdateOrganisationDto.prototype, "baseDomain", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        example: 'sk_test_51…',
+        nullable: true,
+        description: "The company's own Stripe secret (or restricted) key. Stored encrypted and never returned: the response says stripeConfigured: true. null disconnects Stripe, after which the billing step is SKIPPED.",
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((dto) => dto.stripeSecretKey !== null),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.Matches)(exports.STRIPE_SECRET_KEY_PATTERN, {
+        message: 'stripeSecretKey must be a Stripe secret key (sk_… or rk_…)',
+    }),
+    (0, class_validator_1.MaxLength)(exports.STRIPE_SECRET_KEY_MAX_LENGTH),
+    __metadata("design:type", String)
+], UpdateOrganisationDto.prototype, "stripeSecretKey", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        type: () => StripePricesDto,
+        nullable: true,
+        description: 'Stripe Price IDs per customer plan, used when the billing step subscribes a new tenant. A plan without a price fails the billing step for tenants on it. null clears the map.',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((dto) => dto.stripePrices !== null),
+    (0, class_validator_1.IsObject)(),
+    (0, class_validator_1.ValidateNested)(),
+    (0, class_transformer_1.Type)(() => StripePricesDto),
+    __metadata("design:type", StripePricesDto)
+], UpdateOrganisationDto.prototype, "stripePrices", void 0);
 class CreateApiKeyDto {
 }
 exports.CreateApiKeyDto = CreateApiKeyDto;
@@ -312,4 +376,5 @@ exports.WEBHOOK_SIGNATURE_HEADER = 'x-liftoff-signature';
 exports.WEBHOOK_EVENT_HEADER = 'x-liftoff-event';
 exports.WEBHOOK_DELIVERY_HEADER = 'x-liftoff-delivery';
 exports.PLAN_IDS = ['starter', 'pro', 'enterprise'];
+exports.INTERNAL_TOKEN_HEADER = 'x-internal-token';
 //# sourceMappingURL=index.js.map

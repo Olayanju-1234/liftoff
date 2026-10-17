@@ -41,6 +41,12 @@ services:
       - key: JWT_REFRESH_SECRET
         # Auto-generated on first deploy; must be >=32 chars (enforced by Joi).
         generateValue: true
+      # Encrypts each company's Stripe key at rest.
+      - key: ORG_SECRETS_KEY
+        generateValue: true
+      # Shared with billing-service for GET /internal/*.
+      - key: INTERNAL_API_TOKEN
+        sync: false
 
   # ============================================================
   # DB Provisioner — creates isolated DB schemas per tenant
@@ -109,13 +115,11 @@ services:
         value: production
       - key: RABBITMQ_URL
         sync: false
-      - key: STRIPE_SECRET_KEY
+      # Each company connects its own Stripe account; billing fetches it from
+      # tenant-service's internal API.
+      - key: TENANT_SERVICE_URL
         sync: false
-      - key: STRIPE_PRICE_STARTER
-        sync: false
-      - key: STRIPE_PRICE_PRO
-        sync: false
-      - key: STRIPE_PRICE_ENTERPRISE
+      - key: INTERNAL_API_TOKEN
         sync: false
 
   # ============================================================

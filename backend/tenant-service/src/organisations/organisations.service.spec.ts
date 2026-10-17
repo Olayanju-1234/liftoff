@@ -2,11 +2,13 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import type { Prisma } from '.prisma/tenant-client';
+import { Prisma } from '.prisma/tenant-client';
 
-import { OrganisationsService } from './organisations.service';
+import { OrganisationsService, toStripePrices } from './organisations.service';
+import { OrgSecretsService } from './org-secrets.service';
 import { PrismaService } from '../prisma.service';
 
 type MockPrisma = {
@@ -26,15 +28,20 @@ const row = {
   webhookUrl: null as string | null,
   webhookSecret: null as string | null,
   baseDomain: null as string | null,
+  stripeSecretKeyEncrypted: null as string | null,
+  stripePrices: null as Prisma.JsonValue | null,
   maxActiveTenants: 10,
   maxProvisionsPerDay: 50,
   createdAt: new Date('2026-10-17T00:00:00Z'),
   updatedAt: new Date('2026-10-17T00:00:00Z'),
 };
 
+const noPrices = { starter: null, pro: null, enterprise: null };
+
 describe('OrganisationsService', () => {
   let service: OrganisationsService;
   let prisma: MockPrisma;
+  let secrets: { enabled: boolean; encrypt: jest.Mock; decrypt: jest.Mock };
 
   beforeEach(async () => {
     prisma = {
@@ -48,10 +55,16 @@ describe('OrganisationsService', () => {
         ),
       },
     };
+    secrets = {
+      enabled: true,
+      encrypt: jest.fn((plain: string) => `enc(${plain})`),
+      decrypt: jest.fn((blob: string) => blob.slice(4, -1)),
+    };
     const moduleRef = await Test.createTestingModule({
       providers: [
         OrganisationsService,
         { provide: PrismaService, useValue: prisma },
+        { provide: OrgSecretsService, useValue: secrets },
       ],
     }).compile();
     service = moduleRef.get(OrganisationsService);
@@ -74,11 +87,28 @@ describe('OrganisationsService', () => {
         webhookUrl: 'https://hooks.acme.com/liftoff',
         webhookConfigured: true,
         baseDomain: null,
+        stripeConfigured: false,
+        stripePrices: noPrices,
         limits: { maxActiveTenants: 10, maxProvisionsPerDay: 50 },
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       });
       expect(result).not.toHaveProperty('webhookSecret');
+    });
+
+    it('never returns the Stripe key, only stripeConfigured and the prices', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...row,
+        stripeSecretKeyEncrypted: 'enc(sk_test_x)',
+        stripePrices: { starter: 'price_a', bogus: 1 },
+      });
+
+      const result = await service.get('org-1');
+
+      expect(result.stripeConfigured).toBe(true);
+      expect(result.stripePrices).toEqual({ ...noPrices, starter: 'price_a' });
+      expect(JSON.stringify(result)).not.toContain('sk_test');
+      expect(result).not.toHaveProperty('stripeSecretKeyEncrypted');
     });
 
     it('404s when the organisation is gone', async () => {
@@ -219,6 +249,118 @@ describe('OrganisationsService', () => {
       await expect(service.assertHandleFree('acme')).rejects.toBeInstanceOf(
         ConflictException,
       );
+    });
+
+    it('stores the Stripe key encrypted, merges prices, and returns neither key nor ciphertext', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...row,
+        stripePrices: { starter: 'price_old', pro: 'price_pro' },
+      });
+
+      const result = await service.update('org-1', {
+        stripeSecretKey: 'sk_test_abcdefghijk',
+        stripePrices: { starter: 'price_new', enterprise: null },
+      });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(secrets.encrypt).toHaveBeenCalledWith('sk_test_abcdefghijk');
+      expect(data.stripeSecretKeyEncrypted).toBe('enc(sk_test_abcdefghijk)');
+      expect(data.stripePrices).toEqual({
+        starter: 'price_new',
+        pro: 'price_pro',
+      });
+      expect(result.stripeConfigured).toBe(true);
+      expect(result.stripePrices).toEqual({
+        starter: 'price_new',
+        pro: 'price_pro',
+        enterprise: null,
+      });
+      expect(JSON.stringify(result)).not.toContain('sk_test');
+    });
+
+    it('disconnects Stripe with null and leaves the prices for a reconnect', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...row,
+        stripeSecretKeyEncrypted: 'enc(sk_test_x)',
+        stripePrices: { starter: 'price_a' },
+      });
+
+      const result = await service.update('org-1', { stripeSecretKey: null });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data).toEqual({ stripeSecretKeyEncrypted: null });
+      expect(result.stripeConfigured).toBe(false);
+      expect(secrets.encrypt).not.toHaveBeenCalled();
+    });
+
+    it('clears the price map with null', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...row,
+        stripePrices: { starter: 'price_a' },
+      });
+
+      await service.update('org-1', { stripePrices: null });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data).toEqual({ stripePrices: Prisma.DbNull });
+    });
+
+    it('writes nothing when the key cannot be encrypted (ORG_SECRETS_KEY unset)', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(row);
+      secrets.encrypt.mockImplementationOnce(() => {
+        throw new ServiceUnavailableException('no key');
+      });
+
+      await expect(
+        service.update('org-1', { stripeSecretKey: 'sk_test_abcdefghijk' }),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+      expect(prisma.organisation.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('stripeCredentials', () => {
+    it('decrypts the key for the internal API', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        stripeSecretKeyEncrypted: 'enc(sk_live_abcdefghijk)',
+        stripePrices: { pro: 'price_pro' },
+      });
+
+      await expect(service.stripeCredentials('org-1')).resolves.toEqual({
+        configured: true,
+        stripeSecretKey: 'sk_live_abcdefghijk',
+        prices: { ...noPrices, pro: 'price_pro' },
+      });
+    });
+
+    it('reports not configured without touching the secrets service', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        stripeSecretKeyEncrypted: null,
+        stripePrices: null,
+      });
+
+      await expect(service.stripeCredentials('org-1')).resolves.toEqual({
+        configured: false,
+        stripeSecretKey: null,
+        prices: noPrices,
+      });
+      expect(secrets.decrypt).not.toHaveBeenCalled();
+    });
+
+    it('404s when the organisation is gone', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(null);
+      await expect(service.stripeCredentials('org-x')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('toStripePrices', () => {
+    it('keeps only known plans with string ids', () => {
+      expect(toStripePrices(null)).toEqual(noPrices);
+      expect(toStripePrices(['price_a'])).toEqual(noPrices);
+      expect(
+        toStripePrices({ starter: 'price_a', pro: 7, other: 'x' }),
+      ).toEqual({ ...noPrices, starter: 'price_a' });
     });
   });
 });

@@ -1,25 +1,30 @@
-Billing Service (Mock)
+# Billing Service
 
-This is the fourth worker in the provisioning saga. It's a "headless" service that listens for events.
+Fourth worker in the provisioning saga. Headless: it only listens for events.
 
-Note: This is a mock service. It simulates a 1-second API call to a billing provider like Stripe.
+## What it does
 
-Purpose
+Consumes `tenant.credentials.ready`. For a test tenant it publishes
+`tenant.billing.active` with `skipped: true, skipReason: "test"` and never
+touches Stripe. Otherwise it asks tenant-service for the company's Stripe
+configuration over the internal API (`GET /internal/tenants/:id/billing`,
+authenticated with `INTERNAL_API_TOKEN`):
 
-Type: Headless Worker
+- Not connected → `tenant.billing.active` with `skipped: true,
+  skipReason: "not-connected"`. tenant-service records the step as `SKIPPED`
+  and the dashboard says "Billing: not connected". Nothing is simulated.
+- Connected → creates a Stripe Customer and a Subscription with a 14-day
+  trial on the Price ID the company mapped to the tenant's plan, then
+  publishes `tenant.billing.active` with the real ids.
 
-Database: None.
+A missing price for the plan, a Stripe error or an unreachable tenant-service
+rejects the message without requeue, so it dead-letters as `billing.failed`
+and the tenant is marked `FAILED` at billing.
 
-Workflow
+## Environment
 
-Consumes: tenant.credentials.ready
+- `RABBITMQ_URL`
+- `TENANT_SERVICE_URL`, `INTERNAL_API_TOKEN` (the same token tenant-service has)
 
-Job:
-
-Receives the event (which includes the planId).
-
-"Mocks" an API call to Stripe by sleeping for 1 second.
-
-Publishes: tenant.billing.active
-
-Failure: If the job fails, it sends the message to the dlx.provisioning exchange (Dead Letter Queue).
+Stripe keys live per organisation, encrypted in tenant-service's database.
+There is no `STRIPE_SECRET_KEY` here.

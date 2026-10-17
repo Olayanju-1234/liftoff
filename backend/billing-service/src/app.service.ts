@@ -6,47 +6,22 @@ import {
 } from '@golevelup/nestjs-rabbitmq';
 import Stripe from 'stripe';
 import * as sharedTypes from '@liftoff/shared-types';
+import { InternalApiClient } from './internal-api.client';
 
 const TRIAL_DAYS = 14;
+const STRIPE_API_VERSION = '2025-02-24.acacia';
+
+const errorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
 @Injectable()
 export class AppService {
   private readonly logger = new Logger(AppService.name);
-  // Null when no Stripe key is set: billing is then simulated, like DNS provisioning
-  private readonly stripe: Stripe | null;
-  private readonly planPriceMap: Record<string, string>;
 
-  constructor(private readonly amqpConnection: AmqpConnection) {
-    if (!process.env.STRIPE_SECRET_KEY) {
-      this.logger.warn(
-        'STRIPE_SECRET_KEY is not set, so subscriptions are simulated and Stripe is never called',
-      );
-      this.stripe = null;
-      this.planPriceMap = Object.fromEntries(
-        sharedTypes.PLAN_IDS.map((plan) => [plan, `sim_price_${plan}`]),
-      );
-      return;
-    }
-
-    this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-      apiVersion: '2025-02-24.acacia',
-    });
-
-    const map: Record<sharedTypes.PlanId, string> = {
-      starter: process.env.STRIPE_PRICE_STARTER ?? '',
-      pro: process.env.STRIPE_PRICE_PRO ?? '',
-      enterprise: process.env.STRIPE_PRICE_ENTERPRISE ?? '',
-    };
-    const missing = Object.entries(map)
-      .filter(([, v]) => !v)
-      .map(([k]) => `STRIPE_PRICE_${k.toUpperCase()}`);
-    if (missing.length > 0) {
-      throw new Error(
-        `Missing Stripe Price ID env vars: ${missing.join(', ')}`,
-      );
-    }
-    this.planPriceMap = map;
-  }
+  constructor(
+    private readonly amqpConnection: AmqpConnection,
+    private readonly internalApi: InternalApiClient,
+  ) {}
 
   @RabbitSubscribe({
     exchange: 'provisioning.direct',
@@ -62,87 +37,89 @@ export class AppService {
     payload: sharedTypes.TenantCredentialsReadyPayload,
   ) {
     if (payload.test) {
-      return this.skipBilling(payload);
+      return this.skipBilling(payload, 'test');
     }
 
-    this.logger.log(
-      `Creating Stripe subscription for tenant ${payload.tenantId}, plan=${payload.planId}`,
-    );
-
     try {
-      if (!this.stripe) {
-        await this.publishSimulatedSubscription(payload);
-        return;
+      // The company's own Stripe account, or nothing: billing is never simulated.
+      const config = await this.internalApi.billingConfig(payload.tenantId);
+      if (!config.configured || !config.stripeSecretKey) {
+        return await this.skipBilling(payload, 'not-connected');
       }
 
-      const customer = await this.stripe.customers.create({
-        name: payload.tenantId,
-        description: `Tenant: ${payload.subdomain}`,
-        metadata: {
-          tenantId: payload.tenantId,
-          subdomain: payload.subdomain,
-          planId: payload.planId,
-        },
+      const plan = payload.planId?.toLowerCase() as sharedTypes.PlanId;
+      const priceId = config.prices[plan];
+      if (!priceId) {
+        throw new Error(
+          `No Stripe price configured for plan ${payload.planId}: set it under Settings → Billing`,
+        );
+      }
+
+      this.logger.log(
+        `Creating Stripe subscription for tenant ${payload.tenantId}, plan=${payload.planId}`,
+      );
+      const stripe = new Stripe(config.stripeSecretKey, {
+        apiVersion: STRIPE_API_VERSION,
       });
 
+      const metadata = {
+        tenantId: payload.tenantId,
+        subdomain: payload.subdomain,
+        planId: payload.planId,
+        liftoffOrganisationId: config.organisationId,
+      };
+      const customer = await stripe.customers.create({
+        name: payload.subdomain,
+        description: `Liftoff tenant ${payload.tenantId}`,
+        metadata,
+      });
       this.logger.log(
         `Stripe customer created: ${customer.id} for tenant ${payload.tenantId}`,
       );
 
-      const priceId = this.planPriceMap[payload.planId?.toLowerCase()];
-      if (!priceId) {
-        throw new Error(
-          `No Stripe Price ID configured for plan: ${payload.planId}`,
-        );
-      }
-
-      const subscription = await this.stripe.subscriptions.create({
+      const subscription = await stripe.subscriptions.create({
         customer: customer.id,
         items: [{ price: priceId }],
         trial_period_days: TRIAL_DAYS,
-        metadata: {
-          tenantId: payload.tenantId,
-          subdomain: payload.subdomain,
-          planId: payload.planId,
-        },
+        metadata,
         payment_settings: {
           save_default_payment_method: 'on_subscription',
         },
-        expand: ['latest_invoice.payment_intent'],
       });
-
       this.logger.log(
         `Stripe subscription created: ${subscription.id} (status=${subscription.status}) for tenant ${payload.tenantId}`,
       );
 
+      const active: sharedTypes.TenantBillingActivePayload = {
+        tenantId: payload.tenantId,
+        subdomain: payload.subdomain,
+        planId: payload.planId,
+        stripeCustomerId: customer.id,
+        stripeSubscriptionId: subscription.id,
+        subscriptionStatus: subscription.status,
+        trialEnd: subscription.trial_end
+          ? new Date(subscription.trial_end * 1000).toISOString()
+          : null,
+      };
       await this.amqpConnection.publish(
         'provisioning.direct',
         'tenant.billing.active',
-        {
-          tenantId: payload.tenantId,
-          subdomain: payload.subdomain,
-          planId: payload.planId,
-          stripeCustomerId: customer.id,
-          stripeSubscriptionId: subscription.id,
-          subscriptionStatus: subscription.status,
-          trialEnd: subscription.trial_end
-            ? new Date(subscription.trial_end * 1000).toISOString()
-            : null,
-        },
+        active,
       );
     } catch (error) {
-      const err = error instanceof Error ? error : undefined;
       this.logger.error(
-        `Failed to create Stripe subscription for tenant ${payload.tenantId}: ${err?.message ?? String(error)}`,
-        err?.stack,
+        `Failed to create Stripe subscription for tenant ${payload.tenantId}: ${errorMessage(error)}`,
+        error instanceof Error ? error.stack : undefined,
       );
       return new Nack(false);
     }
   }
 
-  // A test tenant is never billed, real Stripe key or not. The saga still moves on.
+  // No subscription is created, and the saga still moves on: tenant-service records the
+  // step as SKIPPED with this reason.
   private async skipBilling(
     payload: sharedTypes.TenantCredentialsReadyPayload,
+    skipReason: sharedTypes.BillingSkipReason,
   ): Promise<Nack | undefined> {
     const skipped: sharedTypes.TenantBillingActivePayload = {
       tenantId: payload.tenantId,
@@ -153,7 +130,8 @@ export class AppService {
       subscriptionStatus: 'skipped',
       trialEnd: null,
       skipped: true,
-      test: true,
+      skipReason,
+      ...(payload.test ? { test: true } : {}),
     };
     try {
       await this.amqpConnection.publish(
@@ -162,39 +140,14 @@ export class AppService {
         skipped,
       );
       this.logger.log(
-        `Billing skipped for test tenant ${payload.tenantId}, plan=${payload.planId}`,
+        `Billing skipped (${skipReason}) for tenant ${payload.tenantId}, plan=${payload.planId}`,
       );
       return undefined;
     } catch (error) {
       this.logger.error(
-        `Failed to publish the skipped billing for test tenant ${payload.tenantId}: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to publish the skipped billing for tenant ${payload.tenantId}: ${errorMessage(error)}`,
       );
       return new Nack(false);
     }
-  }
-
-  private async publishSimulatedSubscription(
-    payload: sharedTypes.TenantCredentialsReadyPayload,
-  ): Promise<void> {
-    if (!this.planPriceMap[payload.planId?.toLowerCase()]) {
-      throw new Error(`Unknown plan: ${payload.planId}`);
-    }
-    const trialEnd = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
-    await this.amqpConnection.publish(
-      'provisioning.direct',
-      'tenant.billing.active',
-      {
-        tenantId: payload.tenantId,
-        subdomain: payload.subdomain,
-        planId: payload.planId,
-        stripeCustomerId: `sim_cus_${payload.tenantId}`,
-        stripeSubscriptionId: `sim_sub_${payload.tenantId}`,
-        subscriptionStatus: 'trialing',
-        trialEnd: trialEnd.toISOString(),
-      },
-    );
-    this.logger.log(
-      `Simulated subscription started for tenant ${payload.tenantId}, plan=${payload.planId}`,
-    );
   }
 }

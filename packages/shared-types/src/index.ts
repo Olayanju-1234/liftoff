@@ -1,11 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsAlpha,
   IsBoolean,
   IsEmail,
   IsFQDN,
   IsNotEmpty,
+  IsObject,
   IsOptional,
   IsString,
   IsUrl,
@@ -13,6 +14,7 @@ import {
   MaxLength,
   MinLength,
   ValidateIf,
+  ValidateNested,
 } from 'class-validator';
 
 // ============================================================================
@@ -232,6 +234,41 @@ export class ConfirmEmailChangeDto {
 // Organisation DTOs
 // ============================================================================
 
+// Secret keys are sk_test_/sk_live_, restricted keys rk_test_/rk_live_.
+export const STRIPE_SECRET_KEY_PATTERN = /^(sk|rk)_(test|live)_[A-Za-z0-9]{8,}$/;
+export const STRIPE_SECRET_KEY_MAX_LENGTH = 200;
+export const STRIPE_PRICE_ID_PATTERN = /^price_[A-Za-z0-9]{8,}$/;
+
+// One Stripe Price ID per customer plan. Any plan may be left out.
+export class StripePricesDto {
+  @ApiPropertyOptional({ example: 'price_1Q…', nullable: true })
+  @IsOptional()
+  @ValidateIf((dto: StripePricesDto) => dto.starter !== null)
+  @IsString()
+  @Matches(STRIPE_PRICE_ID_PATTERN, {
+    message: 'starter must be a Stripe Price ID (price_…)',
+  })
+  starter?: string | null;
+
+  @ApiPropertyOptional({ example: 'price_1Q…', nullable: true })
+  @IsOptional()
+  @ValidateIf((dto: StripePricesDto) => dto.pro !== null)
+  @IsString()
+  @Matches(STRIPE_PRICE_ID_PATTERN, {
+    message: 'pro must be a Stripe Price ID (price_…)',
+  })
+  pro?: string | null;
+
+  @ApiPropertyOptional({ example: 'price_1Q…', nullable: true })
+  @IsOptional()
+  @ValidateIf((dto: StripePricesDto) => dto.enterprise !== null)
+  @IsString()
+  @Matches(STRIPE_PRICE_ID_PATTERN, {
+    message: 'enterprise must be a Stripe Price ID (price_…)',
+  })
+  enterprise?: string | null;
+}
+
 export class UpdateOrganisationDto {
   @ApiPropertyOptional({ example: 'Acme Corp', maxLength: 100 })
   @IsOptional()
@@ -279,7 +316,38 @@ export class UpdateOrganisationDto {
   @IsFQDN({ require_tld: true })
   @MaxLength(253)
   baseDomain?: string | null;
+
+  @ApiPropertyOptional({
+    example: 'sk_test_51…',
+    nullable: true,
+    description:
+      "The company's own Stripe secret (or restricted) key. Stored encrypted and never returned: the response says stripeConfigured: true. null disconnects Stripe, after which the billing step is SKIPPED.",
+  })
+  @IsOptional()
+  @ValidateIf((dto: UpdateOrganisationDto) => dto.stripeSecretKey !== null)
+  @IsString()
+  @Matches(STRIPE_SECRET_KEY_PATTERN, {
+    message: 'stripeSecretKey must be a Stripe secret key (sk_… or rk_…)',
+  })
+  @MaxLength(STRIPE_SECRET_KEY_MAX_LENGTH)
+  stripeSecretKey?: string | null;
+
+  @ApiPropertyOptional({
+    type: () => StripePricesDto,
+    nullable: true,
+    description:
+      'Stripe Price IDs per customer plan, used when the billing step subscribes a new tenant. A plan without a price fails the billing step for tenants on it. null clears the map.',
+  })
+  @IsOptional()
+  @ValidateIf((dto: UpdateOrganisationDto) => dto.stripePrices !== null)
+  @IsObject()
+  @ValidateNested()
+  @Type(() => StripePricesDto)
+  stripePrices?: StripePricesDto | null;
 }
+
+// What GET /organisation says about Stripe: whether a key is stored, and the prices.
+export type StripePrices = Record<PlanId, string | null>;
 
 export class CreateApiKeyDto {
   @ApiProperty({ example: 'Billing integration', maxLength: 100 })
@@ -363,20 +431,45 @@ export interface TenantCredentialsReadyPayload extends TestModeFlag {
   planId: string;
 }
 
+// Why billing created no subscription: a test tenant, or a company that has not
+// connected its Stripe account.
+export type BillingSkipReason = 'test' | 'not-connected';
+
 export interface TenantBillingActivePayload extends TestModeFlag {
   tenantId: string;
   subdomain: string;
   planId: string;
-  // Null when billing was skipped (test tenant).
+  // Null when billing was skipped.
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
   subscriptionStatus: string;
   trialEnd: string | null;
   // True when no subscription was created: the billing step is recorded as SKIPPED.
   skipped?: boolean;
+  skipReason?: BillingSkipReason;
 }
 
 export interface ProvisioningCompletePayload {
   tenantId: string;
   subdomain: string;
+}
+
+// ============================================================================
+// Internal API (tenant-service → workers)
+// ============================================================================
+
+// Workers fetch per-organisation configuration from tenant-service over HTTP
+// instead of carrying secrets through RabbitMQ. Every call sends this header,
+// set to INTERNAL_API_TOKEN, which both sides read from their environment.
+export const INTERNAL_TOKEN_HEADER = 'x-internal-token';
+
+// GET /internal/tenants/:id/billing. The key is decrypted for this response only.
+export interface InternalBillingConfig {
+  tenantId: string;
+  organisationId: string;
+  test: boolean;
+  // False until the company has stored a Stripe key; the billing step is then SKIPPED.
+  configured: boolean;
+  stripeSecretKey: string | null;
+  prices: StripePrices;
 }

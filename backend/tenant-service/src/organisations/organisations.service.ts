@@ -6,9 +6,11 @@ import {
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { Prisma } from '.prisma/tenant-client';
+import { PLAN_IDS, type StripePrices } from '@liftoff/shared-types';
 import { PrismaService } from '../prisma.service';
 import { parseWebhookUrl } from '../webhooks/destination';
 import { UpdateOrganisationDto } from './dto/update-organisation.dto';
+import { OrgSecretsService } from './org-secrets.service';
 
 export interface OrganisationResponse {
   id: string;
@@ -19,6 +21,9 @@ export interface OrganisationResponse {
   webhookConfigured: boolean;
   // Tenant addresses are <subdomain>.<baseDomain>; null means the platform domain is shown.
   baseDomain: string | null;
+  // True once a Stripe key is stored. The key itself is never in a response.
+  stripeConfigured: boolean;
+  stripePrices: StripePrices;
   // Quotas on POST /tenants. Raised by hand for a company that needs more.
   limits: { maxActiveTenants: number; maxProvisionsPerDay: number };
   createdAt: Date;
@@ -36,6 +41,8 @@ const publicFields = {
   webhookUrl: true,
   webhookSecret: true,
   baseDomain: true,
+  stripeSecretKeyEncrypted: true,
+  stripePrices: true,
   maxActiveTenants: true,
   maxProvisionsPerDay: true,
   createdAt: true,
@@ -49,11 +56,28 @@ type OrganisationRow = Prisma.OrganisationGetPayload<{
 export const newWebhookSecret = () =>
   `whsec_${randomBytes(32).toString('base64url')}`;
 
+// The stored JSON is whatever an earlier PUT wrote; only known plans with string ids count.
+export function toStripePrices(raw: Prisma.JsonValue | null): StripePrices {
+  const source =
+    raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+  return Object.fromEntries(
+    PLAN_IDS.map((plan) => {
+      const value = source[plan];
+      return [plan, typeof value === 'string' && value ? value : null];
+    }),
+  ) as StripePrices;
+}
+
 @Injectable()
 export class OrganisationsService {
   private readonly logger = new Logger(OrganisationsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly secrets: OrgSecretsService,
+  ) {}
 
   async get(organisationId: string): Promise<OrganisationResponse> {
     const organisation = await this.prisma.organisation.findUnique({
@@ -102,6 +126,27 @@ export class OrganisationsService {
       data.webhookSecret = secret;
     }
 
+    if (dto.stripeSecretKey === null) {
+      data.stripeSecretKeyEncrypted = null;
+    } else if (dto.stripeSecretKey !== undefined) {
+      // 503 here, before anything is written, when ORG_SECRETS_KEY is not set.
+      data.stripeSecretKeyEncrypted = this.secrets.encrypt(dto.stripeSecretKey);
+    }
+    if (dto.stripePrices === null) {
+      data.stripePrices = Prisma.DbNull;
+    } else if (dto.stripePrices !== undefined) {
+      const merged = { ...current.stripePrices };
+      for (const plan of PLAN_IDS) {
+        const value = dto.stripePrices[plan];
+        if (value !== undefined) {
+          merged[plan] = value;
+        }
+      }
+      data.stripePrices = Object.fromEntries(
+        Object.entries(merged).filter(([, v]) => v !== null),
+      );
+    }
+
     const updated = await this.prisma.organisation.update({
       where: { id: organisationId },
       data,
@@ -113,9 +158,42 @@ export class OrganisationsService {
         baseDomain: dto.baseDomain !== undefined,
         webhookUrl: dto.webhookUrl !== undefined,
         secretIssued: secret !== undefined,
+        stripeKey:
+          dto.stripeSecretKey === undefined
+            ? 'unchanged'
+            : dto.stripeSecretKey === null
+              ? 'removed'
+              : 'stored',
+        stripePrices: dto.stripePrices !== undefined,
       })}`,
     );
     return { ...this.toResponse(updated), webhookSecret: secret };
+  }
+
+  // For the internal API: the decrypted key and prices billing needs, or configured: false.
+  async stripeCredentials(organisationId: string): Promise<{
+    configured: boolean;
+    stripeSecretKey: string | null;
+    prices: StripePrices;
+  }> {
+    const organisation = await this.prisma.organisation.findUnique({
+      where: { id: organisationId },
+      select: { stripeSecretKeyEncrypted: true, stripePrices: true },
+    });
+    if (!organisation) {
+      throw new NotFoundException('Organisation not found');
+    }
+    const prices = toStripePrices(organisation.stripePrices);
+    if (!organisation.stripeSecretKeyEncrypted) {
+      return { configured: false, stripeSecretKey: null, prices };
+    }
+    return {
+      configured: true,
+      stripeSecretKey: this.secrets.decrypt(
+        organisation.stripeSecretKeyEncrypted,
+      ),
+      prices,
+    };
   }
 
   // Used by register. Handles are stored lowercase, so this is case-insensitive.
@@ -130,11 +208,19 @@ export class OrganisationsService {
   }
 
   private toResponse(row: OrganisationRow): OrganisationResponse {
-    const { webhookSecret, maxActiveTenants, maxProvisionsPerDay, ...rest } =
-      row;
+    const {
+      webhookSecret,
+      stripeSecretKeyEncrypted,
+      stripePrices,
+      maxActiveTenants,
+      maxProvisionsPerDay,
+      ...rest
+    } = row;
     return {
       ...rest,
       webhookConfigured: webhookSecret !== null,
+      stripeConfigured: stripeSecretKeyEncrypted !== null,
+      stripePrices: toStripePrices(stripePrices),
       limits: { maxActiveTenants, maxProvisionsPerDay },
     };
   }
