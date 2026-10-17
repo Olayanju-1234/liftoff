@@ -113,8 +113,8 @@ const STEP_NOTES: Record<string, { plain: string; honest?: string }> = {
         plain: 'Creates an empty PostgreSQL schema named tenant_<subdomain> in our database. Nothing else can see it, and nothing is written into it by us. If the schema already exists the step fails instead of reusing it.',
     },
     dnsStatus: {
-        plain: 'Records <subdomain> as the tenant’s address so your product has somewhere to send the customer immediately after sign-up.',
-        honest: 'Today the record lives in our table and no public DNS is changed; the dashboard shows the address as information. Using your own base domain is on the roadmap.',
+        plain: 'Records <subdomain> as the tenant’s address so your product has somewhere to send the customer immediately after sign-up. Every tenant response carries it as address: <subdomain>.<your base domain>, set in Settings, or <subdomain>.liftoff.ojusentinel.com until you set one.',
+        honest: 'Today the record lives in our table and no public DNS is changed; the address is informational and your product decides what to do with it. Subdomains are unique within your company, not across Liftoff.',
     },
     credentialsStatus: {
         plain: 'Generates an sk_live_ API key for the tenant and stores it in a separate credentials schema. A redelivered message republishes rather than issuing a second key.',
@@ -142,7 +142,7 @@ const ERRORS: [string, string, string][] = [
     ['400', 'Bad request', 'A body field failed validation (name ≤ 100 chars; subdomain letters only, ≤ 30; planId one of starter, pro, enterprise), or an :id is not a CUID.'],
     ['401', 'Unauthorized', 'No Authorization header, or the token is invalid or expired. Access tokens last 15 minutes; use POST /auth/refresh or sign in again.'],
     ['404', 'Not found', 'No tenant with that ID belongs to your account. Another account’s tenant also answers 404, never 403.'],
-    ['409', 'Conflict', 'The tenant name or subdomain is already taken, or at sign-up the email or subdomain is.'],
+    ['409', 'Conflict', 'The tenant name or subdomain is already used by another of your tenants (another company may use the same one), or at sign-up the email or handle is taken.'],
     ['429', 'Too many requests', 'You hit a rate limit (next section). Wait for the minute to roll over; the response is not retried for you.'],
     ['422', 'Unprocessable', 'An Idempotency-Key was reused with a different body. Use a new key for a new request.'],
     ['502 / 503', 'Upstream unavailable', 'The gateway could not reach the tenant service, usually during a deploy. Safe to retry after a few seconds; send the same Idempotency-Key on POST /tenants so the retry cannot create a second tenant.'],
@@ -161,6 +161,7 @@ const ENDPOINTS: [string, string, string][] = [
     ['GET', '/events', 'Event log across all your tenants (latest 200)'],
     ['POST', '/tenants/:id/cancel', 'Cancel a tenant that is still provisioning'],
     ['DELETE', '/tenants/:id', 'Delete a tenant and its events'],
+    ['GET / PUT', '/organisation', 'Your company: name, base domain for tenant addresses, webhook'],
     ['GET / PUT', '/settings', 'Your profile and notification preferences'],
 ];
 

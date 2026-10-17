@@ -216,8 +216,8 @@ function ReadyPanel({ tenant, events, tookMs }: { tenant: Tenant; events: EventL
                 <div className="min-w-0">
                     <dt className="label mb-1.5">Address</dt>
                     <dd>
-                        <CopyRow value={tenantUrl(tenant.subdomain)} display={tenantHost(tenant.subdomain)} />
-                        <p className="mt-1.5 text-[13px] text-ink-3">Where their team signs in.</p>
+                        <CopyRow value={tenantUrl(tenant)} display={tenantHost(tenant)} />
+                        <p className="mt-1.5 text-[13px] text-ink-3">Where their team signs in. Set your own domain in Settings.</p>
                     </dd>
                 </div>
                 <div className="min-w-0">

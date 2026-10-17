@@ -3,12 +3,14 @@ import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LogOut, MailCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getSettings, saveSettings } from '../lib/api';
+import { getOrganisation, getSettings, saveSettings, updateOrganisation } from '../lib/api';
 import { useResource } from '../lib/hooks';
 import { useAuth } from '../lib/auth-context';
 import { apiMessage } from '../lib/errors';
+import { previewHost } from '../lib/simple';
 import { inputClass } from '../lib/ui';
-import type { UserSettings } from '../lib/types';
+import { cn } from '../lib/cn';
+import type { Organisation, UserSettings } from '../lib/types';
 import PageHeader from '../components/ui/PageHeader';
 import Panel from '../components/ui/Panel';
 import Button from '../components/ui/Button';
@@ -83,7 +85,7 @@ export default function Settings() {
 
     return (
         <div className="max-w-4xl">
-            <PageHeader sheet="07" eyebrow="Settings" title="Settings" lede="Your profile, what we email you about, and this session." />
+            <PageHeader sheet="07" eyebrow="Settings" title="Settings" lede="Your profile, your company, what we email you about, and this session." />
 
             {settings.error !== null && !settings.data && (
                 <LoadError error={settings.error} what="settings" onRetry={settings.refresh} busy={settings.refreshing} />
@@ -134,7 +136,9 @@ export default function Settings() {
                 )}
             </Panel>
 
-            <Panel fig="7.2" title="Notifications" flush className="mb-6">
+            <CompanyPanel />
+
+            <Panel fig="7.3" title="Notifications" flush className="mb-6">
                 <ul className="divide-y divide-rule">
                     {NOTIFY.map((n) => (
                         <li key={n.key} className="flex items-center gap-4 px-4 py-4 sm:px-5">
@@ -153,12 +157,12 @@ export default function Settings() {
                 </ul>
             </Panel>
 
-            <Panel fig="7.3" title="Session" flush>
+            <Panel fig="7.4" title="Session" flush>
                 <dl className="grid gap-px bg-rule sm:grid-cols-2">
                     {[
                         ['Signed in as', user?.email ?? '—'],
                         ['Role', user?.role ?? '—'],
-                        ['Workspace tenant', user?.tenantId ?? '—'],
+                        ['Organisation ID', user?.organisationId ?? '—'],
                         ['User ID', user?.id ?? '—'],
                     ].map(([k, v]) => (
                         <div key={k} className="min-w-0 bg-card px-5 py-3">
@@ -177,5 +181,98 @@ export default function Settings() {
                 </div>
             </Panel>
         </div>
+    );
+}
+
+// The company's name and the domain its customers' addresses are shown under.
+function CompanyPanel() {
+    const organisation = useResource(getOrganisation);
+    const [saved, setSaved] = useState<Organisation | null>(null);
+    const [draft, setDraft] = useState<{ name: string; baseDomain: string } | null>(null);
+    const [saving, setSaving] = useState(false);
+
+    const current = saved ?? organisation.data;
+    const form = draft ?? (current ? { name: current.name, baseDomain: current.baseDomain ?? '' } : null);
+    const dirty = !!draft && !!current && (draft.name !== current.name || draft.baseDomain !== (current.baseDomain ?? ''));
+    const domainOk = !form?.baseDomain || /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(form.baseDomain.trim());
+
+    const edit = (patch: Partial<NonNullable<typeof form>>) => {
+        if (!form) return;
+        setDraft({ ...form, ...patch });
+    };
+
+    const handleSave = async (e: FormEvent) => {
+        e.preventDefault();
+        if (!form || !current) return;
+        setSaving(true);
+        try {
+            const baseDomain = form.baseDomain.trim().toLowerCase();
+            const next = await updateOrganisation({
+                ...(form.name.trim() !== current.name && { name: form.name.trim() }),
+                ...(baseDomain !== (current.baseDomain ?? '') && { baseDomain: baseDomain || null }),
+            });
+            setSaved(next);
+            setDraft(null);
+            toast.success('Company saved');
+        } catch (err) {
+            toast.error(apiMessage(err, 'Could not save the company.'));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <Panel fig="7.2" title="Company" className="mb-6">
+            {organisation.error !== null && !organisation.data && (
+                <LoadError error={organisation.error} what="your company" onRetry={organisation.refresh} busy={organisation.refreshing} />
+            )}
+            {!form ? (
+                <div className="grid gap-4 md:grid-cols-2">
+                    {[0, 1].map((i) => (
+                        <div key={i} className="h-[66px] animate-pulse rounded bg-paper-deep/60" />
+                    ))}
+                </div>
+            ) : (
+                <form onSubmit={handleSave}>
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <Field label="Company name" htmlFor="companyName">
+                            <input id="companyName" value={form.name} onChange={(e) => edit({ name: e.target.value })} className={inputClass} maxLength={100} />
+                        </Field>
+                        <Field label="Handle" htmlFor="companyHandle" hint="Fixed at sign-up. Prefixes your tenants' database schemas.">
+                            <input id="companyHandle" value={current?.handle ?? ''} readOnly className={cn(inputClass, 'font-mono text-[14px] opacity-70')} />
+                        </Field>
+                        <Field
+                            label="Base domain"
+                            htmlFor="baseDomain"
+                            className="md:col-span-2"
+                            aside="optional"
+                            error={domainOk ? undefined : 'A domain like acme.app, no protocol or path.'}
+                            hint={`Customer addresses are shown as ${previewHost('globex', form.baseDomain.trim() || null)}. Informational until DNS is real; it changes nothing on your domain.`}
+                        >
+                            <input
+                                id="baseDomain"
+                                value={form.baseDomain}
+                                onChange={(e) => edit({ baseDomain: e.target.value })}
+                                className={cn(inputClass, 'font-mono text-[14px]')}
+                                placeholder="acme.app"
+                                maxLength={253}
+                                spellCheck={false}
+                            />
+                        </Field>
+                    </div>
+                    <div className="mt-5 flex items-center justify-end gap-3 border-t border-rule pt-4">
+                        {dirty && <span className="font-mono text-[11.5px] text-hold">unsaved changes</span>}
+                        {dirty && (
+                            <Button variant="ghost" onClick={() => setDraft(null)}>
+                                Discard
+                            </Button>
+                        )}
+                        <Button type="submit" variant="primary" busy={saving} disabled={!dirty || !domainOk || !form.name.trim()}>
+                            Save company
+                        </Button>
+                    </div>
+                </form>
+            )}
+        </Panel>
     );
 }
