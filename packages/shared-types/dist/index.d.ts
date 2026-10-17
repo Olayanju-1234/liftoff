@@ -80,6 +80,22 @@ export interface TenantWebhookPayload<TTenant = unknown> {
 }
 export declare const PLAN_IDS: readonly ["starter", "pro", "enterprise"];
 export type PlanId = (typeof PLAN_IDS)[number];
+export declare const STATUS_TOKEN_PATTERN: RegExp;
+export type PublicTenantState = 'setting-up' | 'ready' | 'needs-attention' | 'stopped' | 'removed';
+export type PublicStepState = 'waiting' | 'in-progress' | 'done' | 'skipped' | 'failed' | 'stopped';
+export interface PublicTenantStatus {
+    company: string;
+    name: string;
+    state: PublicTenantState;
+    done: number;
+    total: number;
+    steps: {
+        name: string;
+        state: PublicStepState;
+    }[];
+    address: string | null;
+    updatedAt: string;
+}
 export declare const LIVE_TENANT_STATUSES: readonly ["PROVISIONING", "FAILED", "ACTIVE"];
 export type LiveTenantStatus = (typeof LIVE_TENANT_STATUSES)[number];
 export declare const isLiveTenant: (status: string) => status is LiveTenantStatus;

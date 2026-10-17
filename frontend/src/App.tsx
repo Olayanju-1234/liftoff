@@ -27,6 +27,7 @@ const Pricing = lazy(() => import('./pages/Pricing'));
 const Docs = lazy(() => import('./pages/Docs'));
 const Terms = lazy(() => import('./pages/Terms'));
 const Privacy = lazy(() => import('./pages/Privacy'));
+const Status = lazy(() => import('./pages/Status'));
 
 function App() {
     return (
@@ -46,6 +47,7 @@ function App() {
                         <Route path="/docs" element={<Docs />} />
                         <Route path="/terms" element={<Terms />} />
                         <Route path="/privacy" element={<Privacy />} />
+                        <Route path="/status/:token" element={<Status />} />
 
                         <Route path="/" element={<ProtectedRoute />}>
                             <Route index element={<Customers />} />

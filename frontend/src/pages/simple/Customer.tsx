@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { isAxiosError } from 'axios';
 import { formatDistanceStrict } from 'date-fns';
-import { ArrowLeft, ArrowRight, Ban, Check, Copy, KeyRound, RotateCcw, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Ban, Check, Copy, ExternalLink, KeyRound, RotateCcw, Share2, Trash2 } from 'lucide-react';
 import { getTenant, getTenantEvents } from '../../lib/api';
 import { useNow, useResource } from '../../lib/hooks';
 import { useTenantActions } from '../../lib/useTenantActions';
@@ -163,6 +163,7 @@ export default function Customer() {
                 <ReadyPanel tenant={tenant} events={events} tookMs={timeline.completeAt ? timeline.completeAt - timeline.t0 : undefined} />
             )}
             <StatusNote tenant={tenant} cond={cond} events={events} now={now} />
+            {tenant.statusUrl && tenant.status !== 'DELETED' && tenant.status !== 'DEPROVISIONING' && <SharePanel url={tenant.statusUrl} />}
 
             <Panel
                 title="Setup progress"
@@ -301,6 +302,28 @@ function ReadyPanel({ tenant, events, tookMs }: { tenant: Tenant; events: EventL
                     </dd>
                 </div>
             </dl>
+        </Panel>
+    );
+}
+
+// The public progress page for this customer: anyone with the link can watch, nobody can act.
+function SharePanel({ url }: { url: string }) {
+    const display = url.replace(/^https?:\/\//, '');
+    return (
+        <Panel title="Share with your customer" meta="no sign-in needed" className="mb-6">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-center">
+                <CopyRow value={url} display={display} />
+                <p className="flex items-start gap-2.5 text-[13.5px] text-ink-3">
+                    <Share2 size={15} className="mt-0.5 shrink-0" />
+                    <span>
+                        They see the five steps in plain words and when they're ready; nothing on it names your systems. The same link is in every
+                        webhook as <span className="font-mono text-ink-2">statusUrl</span>.{' '}
+                        <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-blueprint hover:underline">
+                            Preview <ExternalLink size={12} />
+                        </a>
+                    </span>
+                </p>
+            </div>
         </Panel>
     );
 }

@@ -12,6 +12,7 @@ import { errorMessage } from '../common/error-message';
 import { assertPublicDestination, parseWebhookUrl } from './destination';
 import { signWebhookBody } from './signature';
 import { withAddress } from '../tenants/address';
+import { StatusTokenService } from '../status/status-token.service';
 
 export const WEBHOOK_TIMEOUT_MS = 10_000;
 // Four attempts: now, then after 1 s, 5 s and 25 s.
@@ -29,7 +30,10 @@ export class WebhookService {
   fetchImpl: Fetch = fetch;
   sleep: Sleep = wait;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly statusTokens: StatusTokenService,
+  ) {}
 
   // Fire and forget: the saga handler that calls this never waits on a customer's server.
   notify(tenantId: string, event: TenantWebhookEvent): void {
@@ -59,9 +63,14 @@ export class WebhookService {
     }
 
     const url = parseWebhookUrl(organisation.webhookUrl);
+    // The same record the API returns, status page link included, so the company can
+    // hand it to its customer from the webhook alone.
     const payload: TenantWebhookPayload = {
       event,
-      tenant: withAddress(tenantRow, organisation.baseDomain),
+      tenant: {
+        ...withAddress(tenantRow, organisation.baseDomain),
+        statusUrl: this.statusTokens.urlFor(tenantRow.id),
+      },
     };
     const body = JSON.stringify(payload);
     const deliveryId = randomUUID();

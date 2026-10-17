@@ -10,6 +10,7 @@ import {
 import { signWebhookBody, verifyWebhookSignature } from './signature';
 import * as destination from './destination';
 import { PrismaService } from '../prisma.service';
+import { StatusTokenService } from '../status/status-token.service';
 
 const tenantRow = {
   id: 't1',
@@ -50,7 +51,16 @@ describe('WebhookService', () => {
       tenant: { findUnique: jest.fn().mockResolvedValue(withWebhook) },
     };
     const moduleRef = await Test.createTestingModule({
-      providers: [WebhookService, { provide: PrismaService, useValue: prisma }],
+      providers: [
+        WebhookService,
+        { provide: PrismaService, useValue: prisma },
+        {
+          provide: StatusTokenService,
+          useValue: {
+            urlFor: (id: string) => `https://app.test/status/tok(${id})`,
+          },
+        },
+      ],
     }).compile();
     service = moduleRef.get(WebhookService);
     fetchImpl = jest.fn().mockResolvedValue(response(200));
@@ -94,9 +104,14 @@ describe('WebhookService', () => {
       expect(init.signal).toBeInstanceOf(AbortSignal);
 
       const body = init.body as string;
+      // The record carries the public status link, so the company can pass it on from here.
       expect(JSON.parse(body)).toEqual({
         event: 'tenant.active',
-        tenant: { ...tenantRow, address: 'globex.acme.app' },
+        tenant: {
+          ...tenantRow,
+          address: 'globex.acme.app',
+          statusUrl: 'https://app.test/status/tok(t1)',
+        },
       });
       // The organisation (and its secret) never travels with the tenant.
       expect(body).not.toContain('whsec_test');

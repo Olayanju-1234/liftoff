@@ -15,6 +15,7 @@ const TOC = [
     { id: 'idempotency', label: 'Idempotency' },
     { id: 'test-mode', label: 'Test mode' },
     { id: 'webhooks', label: 'Webhooks and signatures' },
+    { id: 'status-page', label: 'Status page' },
     { id: 'errors', label: 'Errors' },
     { id: 'limits', label: 'Rate limits' },
     { id: 'reference', label: 'API reference' },
@@ -63,6 +64,7 @@ Content-Type: application/json
   "credentialsStatus": "PENDING",
   "billingStatus": "PENDING",
   "notificationStatus": "PENDING",
+  "statusUrl": "https://liftoff.ojusentinel.com/status/8qkM3v…",
   "createdAt": "2026-10-17T09:41:03.120Z",
   "updatedAt": "2026-10-17T09:41:03.120Z"
 }`;
@@ -88,6 +90,8 @@ x-liftoff-signature: sha256=9b2f6c0e1a4d7f3b8c5e2a1d9f0b4c7e6a3d2f1b0c9e8d7a6b5c
     "credentialsStatus": "SUCCESS",
     "billingStatus": "SUCCESS",
     "notificationStatus": "SUCCESS",
+    "address": "globex.acme.app",
+    "statusUrl": "https://liftoff.ojusentinel.com/status/8qkM3v…",
     "createdAt": "2026-10-17T09:41:03.120Z",
     "updatedAt": "2026-10-17T09:41:07.310Z"
   }
@@ -100,6 +104,25 @@ export function verifyLiftoff(rawBody: string, header: string | undefined, secre
   const expected = Buffer.from('sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex'));
   const given = Buffer.from(header ?? '');
   return expected.length === given.length && timingSafeEqual(expected, given);
+}`;
+
+const STATUS_PAGE = `curl ${API_BASE}/status/8qkM3v…   # no credentials
+
+{
+  "company": "Acme",
+  "name": "Globex",
+  "state": "setting-up",
+  "done": 3,
+  "total": 5,
+  "steps": [
+    { "name": "Creating your database", "state": "done" },
+    { "name": "Setting up your address", "state": "done" },
+    { "name": "Generating your API keys", "state": "done" },
+    { "name": "Starting your trial", "state": "in-progress" },
+    { "name": "Finishing up", "state": "waiting" }
+  ],
+  "address": null,
+  "updatedAt": "2026-10-17T09:41:05.880Z"
 }`;
 
 const LOGIN = `curl -X POST ${API_BASE}/auth/login \\
@@ -162,6 +185,7 @@ const LIMITS: [string, string, string][] = [
     ['POST /auth/verify-email', '10 / minute', 'per IP'],
     ['POST /auth/resend-verification', '5 / minute', 'per IP'],
     ['POST /settings/email/confirm', '10 / minute', 'per IP'],
+    ['GET /status/:token', '60 / minute', 'per IP, no credentials'],
     ['Every other route', '100 / minute', 'per IP, all routes combined'],
     ['GET /health', 'unlimited', ''],
 ];
@@ -200,6 +224,7 @@ const ENDPOINTS: [string, string, string][] = [
     ['POST', '/api-keys', 'Create a company API key (returned once)'],
     ['GET', '/api-keys', 'List your API keys by name and prefix, never the key'],
     ['DELETE', '/api-keys/:id', 'Revoke an API key'],
+    ['GET', '/status/:token', 'Public: a tenant’s setup progress in plain words for your customer; no credentials'],
 ];
 
 export default function Docs() {
@@ -401,7 +426,31 @@ export default function Docs() {
                     <CodeBlock code={VERIFY} title="Verify (Node)" lang="ts" />
                 </DocSection>
 
-                <DocSection id="errors" n="08" title="Errors">
+                <DocSection id="status-page" n="08" title="Status page">
+                    <p>
+                        Your customer has nothing to look at while their workspace is set up, so every tenant has a public progress page. The link is{' '}
+                        <Code>statusUrl</Code> on the <Code>POST /tenants</Code> response, on every tenant record and in every webhook; show it on your
+                        own “setting things up” screen, email it, or embed the page. Nobody needs an account to open it.
+                    </p>
+                    <ul className="list-disc space-y-1.5 pl-5">
+                        <li>
+                            It says only who is setting them up, their name, the overall state (<Code>setting-up</Code>, <Code>ready</Code>, <Code>needs-attention</Code>,{' '}
+                            <Code>stopped</Code>, <Code>removed</Code>), the five steps by plain name with <Code>waiting</Code> / <Code>in-progress</Code> /{' '}
+                            <Code>done</Code> / <Code>skipped</Code> / <Code>failed</Code> / <Code>stopped</Code>, a done count, and their address once ready. No ids, no
+                            step columns, nothing that names a system.
+                        </li>
+                        <li>
+                            The token at the end of the URL is a per-tenant secret; only its hash is stored, and it cannot be guessed from the tenant id. Anyone with the
+                            link can read the page and do nothing else. <Code>GET /status/:token</Code> is the same data as JSON, rate limited to 60 a minute per IP.
+                        </li>
+                        <li>
+                            The page polls every 5 seconds while setting up. A removed tenant’s page says so rather than disappearing.
+                        </li>
+                    </ul>
+                    <CodeBlock code={STATUS_PAGE} title="The same data as JSON" lang="curl" />
+                </DocSection>
+
+                <DocSection id="errors" n="09" title="Errors">
                     <p>Errors are JSON with the HTTP status repeated in the body. The gateway passes the tenant service’s status and message through unchanged.</p>
                     <CodeBlock code={ERROR_BODY} title="Shape" lang="json" />
                     <div className="overflow-hidden rounded-md border border-rule bg-card">
@@ -424,7 +473,7 @@ export default function Docs() {
                     </div>
                 </DocSection>
 
-                <DocSection id="limits" n="09" title="Rate limits and quotas">
+                <DocSection id="limits" n="10" title="Rate limits and quotas">
                     <p>
                         Two kinds. <strong className="font-medium text-ink">Quotas</strong> are per company: 10 active tenants (provisioning or ready) and 50 new tenants per
                         rolling 24 hours on the free tier. Over either, <Code>POST /tenants</Code> answers 429 with a message naming the limit and a{' '}
@@ -453,10 +502,10 @@ export default function Docs() {
                     </p>
                 </DocSection>
 
-                <DocSection id="reference" n="10" title="API reference">
+                <DocSection id="reference" n="11" title="API reference">
                     <p>
                         The full reference is generated from the code and lives in Swagger on the gateway. Every route except <Code>/health</Code>, <Code>/auth/register</Code>,{' '}
-                        <Code>/auth/login</Code> and <Code>/auth/refresh</Code> needs a bearer token; <Code>POST /tenants</Code> and <Code>GET /tenants/:id</Code> also take a company API key.
+                        <Code>/auth/login</Code>, <Code>/auth/refresh</Code> and <Code>/status/:token</Code> needs a bearer token; <Code>POST /tenants</Code> and <Code>GET /tenants/:id</Code> also take a company API key.
                     </p>
                     <div className="flex flex-wrap gap-2">
                         <a href={SWAGGER_URL} target="_blank" rel="noreferrer" className={buttonClass('primary', 'md')}>

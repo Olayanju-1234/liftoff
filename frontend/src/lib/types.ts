@@ -19,6 +19,8 @@ export interface Tenant {
     schemaName?: string | null;
     // Test mode: set up like a real tenant, billing SKIPPED, outside the quotas, deletable any time.
     isTest?: boolean;
+    // Public, tokenised progress page for the company's customer. No login; plain words only.
+    statusUrl?: string;
     // What billing created in the company's Stripe account; null when the step was skipped.
     stripeCustomerId?: string | null;
     stripeSubscriptionId?: string | null;
@@ -75,6 +77,20 @@ export const PLAN_IDS: PlanId[] = ['starter', 'pro', 'enterprise'];
 
 export type TenantStatus = 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'FAILED' | 'CANCELLED' | 'DEPROVISIONING' | 'DELETED';
 export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'SKIPPED';
+
+// GET /status/:token: what the company's customer sees while they wait. Plain words only.
+export type PublicTenantState = 'setting-up' | 'ready' | 'needs-attention' | 'stopped' | 'removed';
+export type PublicStepState = 'waiting' | 'in-progress' | 'done' | 'skipped' | 'failed' | 'stopped';
+export interface PublicTenantStatus {
+    company: string;
+    name: string;
+    state: PublicTenantState;
+    done: number;
+    total: number;
+    steps: { name: string; state: PublicStepState }[];
+    address: string | null;
+    updatedAt: string;
+}
 
 // Plan types
 export interface Plan {

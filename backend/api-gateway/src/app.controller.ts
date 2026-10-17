@@ -40,6 +40,7 @@ import {
 } from '@liftoff/shared-types';
 import { AppService } from './app.service';
 import { ParseCuidPipe } from './common/parse-cuid.pipe';
+import { ParseStatusTokenPipe } from './common/parse-status-token.pipe';
 
 @Controller()
 export class AppController {
@@ -59,6 +60,22 @@ export class AppController {
   @Get()
   getHello(): string {
     return this.appService.getHello();
+  }
+
+  // The company's customer follows this link without an account, so it is public and
+  // throttled on its own.
+  @ApiTags('Status')
+  @ApiOperation({
+    summary: "A tenant's setup progress in plain words, for the customer",
+    description:
+      'No credentials. The token is the last segment of the statusUrl returned by POST /tenants and carried on every tenant record and webhook. Says only the company and customer names, the overall state, and the five steps by plain name; never an id or anything that names a system. 60 requests per minute per IP.',
+  })
+  @ApiResponse({ status: 200, description: 'Progress in plain words' })
+  @ApiResponse({ status: 404, description: 'No tenant matches the token' })
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('status/:token')
+  getPublicStatus(@Param('token', ParseStatusTokenPipe) token: string) {
+    return this.appService.getPublicStatus(token);
   }
 
   // ============ AUTH ENDPOINTS ============
