@@ -9,6 +9,8 @@ export interface SessionUser {
     organisationId: string | null;
     // Legacy workspace tenant; null for accounts created since organisations.
     tenantId: string | null;
+    // Missing on sessions stored before verification shipped; a token refresh fills it in.
+    emailVerified?: boolean;
 }
 
 export interface Session {

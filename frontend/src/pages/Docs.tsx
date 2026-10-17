@@ -133,6 +133,10 @@ const STEP_NOTES: Record<string, { plain: string; honest?: string }> = {
 const LIMITS: [string, string, string][] = [
     ['POST /auth/register', '5 / minute', 'per IP'],
     ['POST /auth/login', '10 / minute', 'per IP'],
+    ['POST /auth/forgot-password', '5 / minute', 'per IP'],
+    ['POST /auth/reset-password', '10 / minute', 'per IP'],
+    ['POST /auth/verify-email', '10 / minute', 'per IP'],
+    ['POST /auth/resend-verification', '5 / minute', 'per IP'],
     ['POST /settings/email/confirm', '10 / minute', 'per IP'],
     ['Every other route', '100 / minute', 'per IP, all routes combined'],
     ['GET /health', 'unlimited', ''],
@@ -141,6 +145,7 @@ const LIMITS: [string, string, string][] = [
 const ERRORS: [string, string, string][] = [
     ['400', 'Bad request', 'A body field failed validation (name ≤ 100 chars; subdomain letters only, ≤ 30; planId one of starter, pro, enterprise), or an :id is not a CUID.'],
     ['401', 'Unauthorized', 'No Authorization header, or the token is invalid or expired. Access tokens last 15 minutes; use POST /auth/refresh or sign in again.'],
+    ['403', 'Forbidden', 'POST /api-keys before the signup email is verified. Open the link from the email, or resend it from the dashboard banner.'],
     ['404', 'Not found', 'No tenant with that ID belongs to your account. Another account’s tenant also answers 404, never 403.'],
     ['409', 'Conflict', 'The tenant name or subdomain is already used by another of your tenants (another company may use the same one), or at sign-up the email or handle is taken.'],
     ['429', 'Too many requests', 'You hit a rate limit or a quota (next section). Retry-After says how many seconds to wait; the message says which limit and what to do.'],
@@ -149,7 +154,11 @@ const ERRORS: [string, string, string][] = [
 ];
 
 const ENDPOINTS: [string, string, string][] = [
-    ['POST', '/auth/register', 'Create an account and its company workspace'],
+    ['POST', '/auth/register', 'Create an account and its company; emails a verification link'],
+    ['POST', '/auth/verify-email', 'Verify the signup email with the token from the link'],
+    ['POST', '/auth/resend-verification', 'Send the signed-in user a new verification link'],
+    ['POST', '/auth/forgot-password', 'Email a password reset link (always 200)'],
+    ['POST', '/auth/reset-password', 'Set a new password with the token from the link'],
     ['POST', '/auth/login', 'Exchange email and password for tokens'],
     ['POST', '/auth/refresh', 'Exchange a refresh token for a new access token'],
     ['POST', '/auth/logout', 'Invalidate the current refresh token'],

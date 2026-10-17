@@ -1,9 +1,10 @@
 import { Suspense, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { LogOut, Menu, X } from 'lucide-react';
+import { LogOut, MailWarning, Menu, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../lib/auth-context';
-import { checkHealth, getTenants } from '../lib/api';
+import { checkHealth, getTenants, resendVerification } from '../lib/api';
+import { apiMessage } from '../lib/errors';
 import { useNow, useResource } from '../lib/hooks';
 import { condition } from '../lib/pipeline';
 import { HOOD_HOME, isHoodPath } from '../lib/mode';
@@ -207,12 +208,50 @@ export default function Layout() {
 
                 <main className="drafting min-h-[calc(100vh-48px)]">
                     <div className="mx-auto max-w-[1240px] px-4 pb-16 pt-7 sm:px-6 lg:px-10 lg:pt-9">
+                        {user?.emailVerified === false && <VerifyBanner email={user.email} />}
                         <Suspense fallback={<div className="h-64 animate-pulse rounded-md border border-rule bg-card/50" />}>
                             <Outlet />
                         </Suspense>
                     </div>
                 </main>
             </div>
+        </div>
+    );
+}
+
+// Shown until the signup link is opened. API keys are refused until then.
+function VerifyBanner({ email }: { email: string }) {
+    const [sending, setSending] = useState(false);
+    const [sent, setSent] = useState(false);
+
+    const resend = async () => {
+        setSending(true);
+        try {
+            const { message } = await resendVerification();
+            setSent(true);
+            toast.success(message);
+        } catch (err) {
+            toast.error(apiMessage(err, 'Could not send the verification email.'));
+        } finally {
+            setSending(false);
+        }
+    };
+
+    return (
+        <div role="status" className="mb-6 flex flex-wrap items-center gap-3 rounded-md border border-hold/45 bg-hold/[0.06] px-4 py-3">
+            <MailWarning size={18} className="shrink-0 text-hold" />
+            <p className="min-w-0 flex-1 text-[14px] text-ink-2">
+                <span className="font-semibold text-ink">Verify your email.</span> We sent a link to{' '}
+                <span className="break-all font-medium text-ink">{email}</span>. Until you open it, your company can't create API keys.
+            </p>
+            <button
+                type="button"
+                onClick={resend}
+                disabled={sending || sent}
+                className="inline-flex h-8 items-center rounded-sm border border-hold/50 bg-card px-3 text-[13px] font-medium text-ink hover:border-hold disabled:opacity-60"
+            >
+                {sent ? 'Sent' : sending ? 'Sending…' : 'Resend link'}
+            </button>
         </div>
     );
 }

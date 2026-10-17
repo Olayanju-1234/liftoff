@@ -74,7 +74,7 @@ export default function Register() {
                 tenantName: form.tenantName,
                 subdomain: form.subdomain,
             });
-            toast.success('Account created');
+            toast.success(`Account created. Check ${form.email} for a verification link.`, { duration: 6000 });
             navigate('/', { replace: true });
         } catch (err) {
             setError(apiMessage(err, 'Registration failed.'));

@@ -71,7 +71,15 @@ export default function Login() {
                         required
                     />
                 </Field>
-                <Field label="Password" htmlFor="password">
+                <Field
+                    label="Password"
+                    htmlFor="password"
+                    aside={
+                        <Link to="/forgot-password" className="link">
+                            Forgot password?
+                        </Link>
+                    }
+                >
                     <input
                         id="password"
                         type="password"
