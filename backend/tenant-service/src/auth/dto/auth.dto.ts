@@ -1,1 +1,8 @@
-export { LoginDto, RefreshTokenDto, RegisterDto } from '@liftoff/shared-types';
+export {
+  ForgotPasswordDto,
+  LoginDto,
+  RefreshTokenDto,
+  RegisterDto,
+  ResetPasswordDto,
+  VerifyEmailDto,
+} from '@liftoff/shared-types';
