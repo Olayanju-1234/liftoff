@@ -317,7 +317,7 @@ Tenants are the organisation's customers. `POST /tenants` files the new tenant u
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/tenants` | List the organisation's tenants |
-| POST | `/tenants` | Create tenant and start provisioning (user token or API key; 10/min per IP) |
+| POST | `/tenants` | Create tenant and start provisioning (user token or API key; 10/min per IP). Send an `Idempotency-Key` header to make retries safe: the first response is stored per organisation for 24 h and replayed on a repeat (`Idempotent-Replayed: true`); the same key with a different body gets 422 |
 | GET | `/tenants/:id` | Get tenant with step statuses (user token or API key; 60/min per IP) |
 | DELETE | `/tenants/:id` | Delete tenant and clean up resources |
 | POST | `/tenants/:id/cancel` | Cancel in-progress provisioning |
@@ -359,8 +359,10 @@ Store `key`; it is not shown again. `GET /api-keys` lists prefixes only.
 curl -s -X POST https://api.liftoff.ojusentinel.com/tenants \
   -H "x-api-key: $LIFTOFF_API_KEY" \
   -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $SIGNUP_ID" \
   -d '{"name":"Globex","subdomain":"globex","planId":"starter"}'
 # 202 {"id":"cmv…","status":"PROVISIONING","dbStatus":"IN_PROGRESS",…}
+# Repeat the same request after a timeout: same 202 body back, with Idempotent-Replayed: true
 
 curl -s https://api.liftoff.ojusentinel.com/tenants/cmv… -H "x-api-key: $LIFTOFF_API_KEY"
 ```
