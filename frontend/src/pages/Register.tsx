@@ -193,6 +193,17 @@ export default function Register() {
                     {loading ? 'Creating account' : 'Create account'}
                     {!loading && <ArrowRight size={16} />}
                 </Button>
+                <p className="text-[12.5px] text-ink-3">
+                    By creating an account you agree to the{' '}
+                    <Link to="/terms" className="link">
+                        terms of service
+                    </Link>{' '}
+                    and{' '}
+                    <Link to="/privacy" className="link">
+                        privacy policy
+                    </Link>
+                    .
+                </p>
             </form>
             <p className="mt-5 border-t border-rule pt-4 text-[14px] text-ink-3">
                 Already have one?{' '}
