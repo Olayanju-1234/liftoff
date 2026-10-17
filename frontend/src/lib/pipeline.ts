@@ -21,6 +21,8 @@ export interface Stage {
 export const EXCHANGE = 'provisioning.direct';
 export const DLX = 'dlx.provisioning';
 export const STALL_AFTER_MS = 60_000;
+// tenant-service fails a step with no progress for this long; the 30-minute sweeper is the backstop.
+export const STEP_TIMEOUT_MS = 2 * 60_000;
 export const SWEEP_AFTER_MS = 30 * 60_000;
 
 export const STAGES: Stage[] = [
@@ -147,6 +149,14 @@ export function isStalled(t: Tenant, now: number) {
 
 export function sweepAt(t: Tenant) {
     return Date.parse(t.updatedAt) + SWEEP_AFTER_MS;
+}
+
+export function stepTimeoutAt(t: Tenant) {
+    return Date.parse(t.updatedAt) + STEP_TIMEOUT_MS;
+}
+
+export function isStepTimeout(error: string | undefined) {
+    return !!error && /timed out/i.test(error);
 }
 
 export function stageState(t: Tenant, stage: Stage, now: number): StageState {

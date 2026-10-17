@@ -13,11 +13,13 @@ import {
     condition,
     eventErrorText,
     failedStage,
+    isStepTimeout,
     isSweeperCancel,
     planLabel,
     quietFor,
     stageState,
     stageTimings,
+    stepTimeoutAt,
     sweepAt,
 } from '../../lib/pipeline';
 import type { Condition, Stage } from '../../lib/pipeline';
@@ -283,6 +285,8 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
     const stage = activeStage(tenant) ?? failedStage(tenant);
     const sweepIn = sweepAt(tenant) - now;
     const autoCancel = sweepIn > 0 ? `in about ${fmtDuration(sweepIn)}` : 'shortly';
+    const timeoutIn = stepTimeoutAt(tenant) - now;
+    const autoFail = timeoutIn > 0 ? `in about ${fmtDuration(timeoutIn)}` : 'shortly';
 
     switch (cond) {
         case 'running':
@@ -299,12 +303,12 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
             if (!stage) return null;
             tone = 'hold';
             head = `Setup is stuck while ${lower(stage)}.`;
-            body = `Nothing has changed for ${fmtDuration(quietFor(tenant, now))}. It will be cancelled automatically ${autoCancel} unless it resumes. You can cancel it now, or remove the customer and add them again.`;
+            body = `Nothing has changed for ${fmtDuration(quietFor(tenant, now))}. Unless it resumes, this step is marked failed ${autoFail} and you'll see what to do here. You can also cancel it now, or remove the customer and add them again.`;
             break;
         case 'failed': {
             tone = 'abort';
-            head = stage ? `${stepName(stage)} failed.` : 'Setup failed.';
             const detail = events.map(eventErrorText).find(Boolean);
+            head = stage ? (isStepTimeout(detail) ? `${stepName(stage)} took too long and was stopped.` : `${stepName(stage)} failed.`) : 'Setup failed.';
             body = (
                 <>
                     Setup can't continue from here, and the customer hasn't been told anything. Remove them and add them again to retry.

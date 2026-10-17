@@ -11,6 +11,7 @@ import { useTenantActions } from '../lib/useTenantActions';
 import {
     DLX,
     STAGES,
+    STEP_TIMEOUT_MS,
     SWEEP_AFTER_MS,
     activeStage,
     cancelReasonFrom,
@@ -18,6 +19,7 @@ import {
     eventErrorText,
     eventLabel,
     failedStage,
+    isStepTimeout,
     isSweeperCancel,
     planLabel,
     quietFor,
@@ -25,6 +27,7 @@ import {
     stageForEvent,
     stageState,
     stageTimings,
+    stepTimeoutAt,
     sweepAt,
 } from '../lib/pipeline';
 import type { Condition } from '../lib/pipeline';
@@ -257,6 +260,7 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
     let body: ReactNode = null;
     const stage = activeStage(tenant) ?? failedStage(tenant);
     const sweepIn = sweepAt(tenant) - now;
+    const timeoutIn = stepTimeoutAt(tenant) - now;
 
     switch (cond) {
         case 'stalled':
@@ -266,8 +270,9 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
             body = (
                 <>
                     The message was most likely rejected by <Mono>{stage.service}</Mono> and dead-lettered to <Mono>{DLX}</Mono> as{' '}
-                    <Mono>{stage.deadLetterKey}</Mono>. The sweeper cancels this tenant{' '}
-                    {sweepIn > 0 ? `in about ${fmtDuration(sweepIn)}` : 'on its next run'} unless something moves.
+                    <Mono>{stage.deadLetterKey}</Mono>. tenant-service fails the step {fmtDuration(STEP_TIMEOUT_MS)} after its last change
+                    ({timeoutIn > 0 ? `in about ${fmtDuration(timeoutIn)}` : 'on its next pass'}), which marks the tenant FAILED and sends{' '}
+                    <Mono>tenant.failed</Mono>, unless something moves first.
                 </>
             );
             break;
@@ -282,15 +287,15 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
                 </>
             );
             break;
-        case 'failed':
+        case 'failed': {
+            const detail = events.map(eventErrorText).find(Boolean);
             tone = 'abort';
-            head = stage ? `${stage.code} ${stage.name} failed.` : 'Provisioning failed.';
-            body = (
-                <>
-                    {events.map(eventErrorText).find(Boolean) ?? 'Check the event log below for the error payload.'}
-                </>
-            );
+            head = stage
+                ? `${stage.code} ${stage.name} ${isStepTimeout(detail) ? 'timed out' : 'failed'}.`
+                : 'Provisioning failed.';
+            body = <>{detail ?? 'Check the event log below for the error payload.'}</>;
             break;
+        }
         case 'cancelled': {
             const reason = cancelReasonFrom(tenant, events);
             tone = 'scrub';
