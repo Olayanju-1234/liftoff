@@ -8,9 +8,16 @@ import {
   Param,
   Post,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import type { User } from '.prisma/tenant-client';
 import { ParseCuidPipe } from '../common/parse-cuid.pipe';
 import { CurrentOrganisation } from '../auth/decorators/current-organisation.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ApiKeysService } from './api-keys.service';
 import { CreateApiKeyDto } from './dto/create-api-key.dto';
 
@@ -23,13 +30,18 @@ export class ApiKeysController {
   @Post()
   @ApiOperation({
     summary: 'Create a company API key',
-    description: 'The key is returned once, in this response only.',
+    description:
+      'The key is returned once, in this response only. Needs a verified email.',
   })
+  @ApiResponse({ status: 403, description: 'Email not verified yet' })
   create(
     @Body() dto: CreateApiKeyDto,
     @CurrentOrganisation() organisationId: string,
+    @CurrentUser() user: User,
   ) {
-    return this.apiKeys.create(organisationId, dto.name);
+    return this.apiKeys.create(organisationId, dto.name, {
+      emailVerified: user.emailVerified,
+    });
   }
 
   @Get()

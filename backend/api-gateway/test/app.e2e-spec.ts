@@ -120,6 +120,83 @@ describe('API Gateway (e2e)', () => {
     expect(http.post).not.toHaveBeenCalled();
   });
 
+  describe('email verification and password reset', () => {
+    it('POST /auth/forgot-password validates the email, then proxies without auth', async () => {
+      const bad = await app.inject({
+        method: 'POST',
+        url: '/auth/forgot-password',
+        payload: { email: 'nope' },
+      });
+      expect(bad.statusCode).toBe(400);
+      expect(http.post).not.toHaveBeenCalled();
+
+      http.post.mockReturnValueOnce(of({ data: { message: 'If…' } }));
+      const ok = await app.inject({
+        method: 'POST',
+        url: '/auth/forgot-password',
+        payload: { email: 'admin@acme.com' },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(http.post).toHaveBeenCalledWith(
+        '/auth/forgot-password',
+        { email: 'admin@acme.com' },
+        {},
+      );
+    });
+
+    it('POST /auth/reset-password enforces the password rules before proxying', async () => {
+      const short = await app.inject({
+        method: 'POST',
+        url: '/auth/reset-password',
+        payload: { token: 't', password: 'short' },
+      });
+      expect(short.statusCode).toBe(400);
+
+      http.post.mockReturnValueOnce(of({ data: { message: 'done' } }));
+      const ok = await app.inject({
+        method: 'POST',
+        url: '/auth/reset-password',
+        payload: { token: 'tok_123', password: 'CorrectHorse9!' },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(http.post).toHaveBeenCalledWith(
+        '/auth/reset-password',
+        { token: 'tok_123', password: 'CorrectHorse9!' },
+        {},
+      );
+    });
+
+    it('POST /auth/verify-email proxies the token and /auth/resend-verification the user token', async () => {
+      http.post
+        .mockReturnValueOnce(
+          of({ data: { id: 'u1', email: 'a@b.c', emailVerified: true } }),
+        )
+        .mockReturnValueOnce(of({ data: { message: 'sent' } }));
+
+      const verified = await app.inject({
+        method: 'POST',
+        url: '/auth/verify-email',
+        payload: { token: 'tok_123' },
+      });
+      const resent = await app.inject({
+        method: 'POST',
+        url: '/auth/resend-verification',
+        headers: { authorization: 'Bearer user.jwt.token' },
+      });
+
+      expect(verified.statusCode).toBe(200);
+      expect(verified.json<{ emailVerified: boolean }>().emailVerified).toBe(
+        true,
+      );
+      expect(resent.statusCode).toBe(200);
+      expect(http.post).toHaveBeenLastCalledWith(
+        '/auth/resend-verification',
+        {},
+        { headers: { Authorization: 'Bearer user.jwt.token' } },
+      );
+    });
+  });
+
   describe('tenant id routes', () => {
     // Real id from tenant-service's @default(cuid()).
     const tenantId = 'cmv9gs7040002vyzf6leznb2s';

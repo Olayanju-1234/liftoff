@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
+exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = exports.VerifyEmailDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
 const swagger_1 = require("@nestjs/swagger");
 const class_transformer_1 = require("class-transformer");
 const class_validator_1 = require("class-validator");
@@ -152,6 +152,43 @@ __decorate([
     (0, class_validator_1.IsNotEmpty)({ message: 'Refresh token is required' }),
     __metadata("design:type", String)
 ], RefreshTokenDto.prototype, "refreshToken", void 0);
+class VerifyEmailDto {
+}
+exports.VerifyEmailDto = VerifyEmailDto;
+__decorate([
+    (0, swagger_1.ApiProperty)({ description: 'Token from the verification link' }),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.MaxLength)(200),
+    __metadata("design:type", String)
+], VerifyEmailDto.prototype, "token", void 0);
+class ForgotPasswordDto {
+}
+exports.ForgotPasswordDto = ForgotPasswordDto;
+__decorate([
+    (0, swagger_1.ApiProperty)({ example: 'admin@acme.com' }),
+    (0, class_validator_1.IsEmail)({}, { message: 'Invalid email format' }),
+    (0, class_validator_1.IsNotEmpty)({ message: 'Email is required' }),
+    __metadata("design:type", String)
+], ForgotPasswordDto.prototype, "email", void 0);
+class ResetPasswordDto {
+}
+exports.ResetPasswordDto = ResetPasswordDto;
+__decorate([
+    (0, swagger_1.ApiProperty)({ description: 'Token from the reset link' }),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.MaxLength)(200),
+    __metadata("design:type", String)
+], ResetPasswordDto.prototype, "token", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({ minLength: 8, maxLength: 100, example: 'CorrectHorse9!' }),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)({ message: 'Password is required' }),
+    (0, class_validator_1.MinLength)(8, { message: 'Password must be at least 8 characters' }),
+    (0, class_validator_1.MaxLength)(100, { message: 'Password too long' }),
+    __metadata("design:type", String)
+], ResetPasswordDto.prototype, "password", void 0);
 class UpdateSettingsDto {
 }
 exports.UpdateSettingsDto = UpdateSettingsDto;

@@ -261,6 +261,7 @@ erDiagram
 - Company API keys: `lk_…`, 32 random bytes, stored as a SHA-256 hash, shown once
 - Webhooks signed with HMAC-SHA256; destinations resolved and checked against private, loopback, link-local and metadata ranges on every delivery
 - bcrypt password hashing
+- Email verification on signup and single-use, hashed, 1-hour password reset tokens; the forgot-password route answers the same whether or not the email exists
 - Single-use refresh token rotation
 - Rate limiting per IP at gateway level
 - CORS with configurable origin whitelist
@@ -294,7 +295,11 @@ validation.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/auth/register` | Sign a company up: creates the admin user and their organisation (`companyName`, `handle`). Provisions nothing |
+| POST | `/auth/register` | Sign a company up: creates the admin user and their organisation (`companyName`, `handle`), and emails a verification link (24 h). Provisions nothing |
+| POST | `/auth/verify-email` | Verify the signup email with the `token` from the link (single use). Until then `POST /api-keys` answers 403 |
+| POST | `/auth/resend-verification` | Send the signed-in user a new verification link |
+| POST | `/auth/forgot-password` | Email a password reset link, valid 1 hour. Always 200 with the same message, so it never reveals whether an email has an account |
+| POST | `/auth/reset-password` | Set a new password with the `token` from the link. Single use; signs every session out |
 | POST | `/auth/login` | Login and receive tokens |
 | POST | `/auth/refresh` | Refresh access token |
 | POST | `/auth/logout` | Invalidate refresh token |
@@ -308,7 +313,7 @@ The organisation is the company that signed up. Every user in it sees the same t
 |--------|----------|-------------|
 | GET | `/organisation` | Name, handle, `baseDomain`, `webhookUrl`, whether a signing secret exists, and `limits` (`maxActiveTenants`, `maxProvisionsPerDay`) |
 | PUT | `/organisation` | Update `name`, `baseDomain` or `webhookUrl`. `baseDomain` (e.g. `acme.app`) is what tenant addresses are shown under; `null` clears it. A new webhook URL (or `rotateWebhookSecret: true`) returns `webhookSecret` once; `webhookUrl: null` turns deliveries off. Private and loopback URLs get 400 |
-| POST | `/api-keys` | Create a key (`name`). The response is the only place the key appears |
+| POST | `/api-keys` | Create a key (`name`). The response is the only place the key appears. 403 until the caller's email is verified |
 | GET | `/api-keys` | List keys: id, name, prefix, last use. Never the key |
 | DELETE | `/api-keys/:id` | Revoke a key (204) |
 

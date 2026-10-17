@@ -46,6 +46,14 @@ export const getOrganisation = () => api.get<Organisation>('/organisation').then
 export const updateOrganisation = (patch: { name?: string; baseDomain?: string | null }) =>
     api.put<Organisation>('/organisation', patch).then((res) => res.data);
 
+// Email verification and password reset
+export const verifyEmail = (token: string) =>
+    api.post<{ id: string; email: string; emailVerified: true }>('/auth/verify-email', { token }).then((res) => res.data);
+export const resendVerification = () => api.post<{ message: string }>('/auth/resend-verification').then((res) => res.data);
+export const forgotPassword = (email: string) => api.post<{ message: string }>('/auth/forgot-password', { email }).then((res) => res.data);
+export const resetPassword = (token: string, password: string) =>
+    api.post<{ message: string }>('/auth/reset-password', { token, password }).then((res) => res.data);
+
 export const confirmEmailChange = (token: string) =>
     api.post<{ id: string; email: string }>('/settings/email/confirm', { token }).then((res) => res.data);
 

@@ -254,6 +254,20 @@ describe('EmailService', () => {
       },
     );
 
+    it('escapes the name in the verification email', async () => {
+      const service = new EmailService(
+        configWith({ RESEND_API_KEY: 're_test', EMAIL_FROM: FROM }),
+      );
+      mockResendSend.mockResolvedValueOnce({ data: { id: 'x' }, error: null });
+
+      await service.sendVerificationEmail(TO, TOKEN, '<img src=x onerror=1>');
+
+      const [[message]] = mockResendSend.mock.calls as [[{ html: string }]];
+      expect(message.html).not.toContain('<img');
+      expect(message.html).toContain('&lt;img src=x onerror=1&gt;');
+      expect(message.html).toContain(`/verify-email?token=${TOKEN}`);
+    });
+
     it('names the subject and the recipient in the skip line', async () => {
       const service = new EmailService(configWith({}));
 

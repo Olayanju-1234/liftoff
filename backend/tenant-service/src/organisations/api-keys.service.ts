@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -23,6 +24,14 @@ export interface CreatedApiKey extends ApiKeySummary {
   key: string;
 }
 
+// The user asking for a key. An unverified mailbox can't be trusted with one.
+export interface KeyRequester {
+  emailVerified: boolean;
+}
+
+export const VERIFY_EMAIL_FIRST =
+  'Verify your email address before creating API keys. Open the link we sent you, or resend it from the dashboard.';
+
 const summary = {
   id: true,
   name: true,
@@ -37,7 +46,14 @@ export class ApiKeysService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(organisationId: string, name: string): Promise<CreatedApiKey> {
+  async create(
+    organisationId: string,
+    name: string,
+    requester: KeyRequester,
+  ): Promise<CreatedApiKey> {
+    if (!requester.emailVerified) {
+      throw new ForbiddenException(VERIFY_EMAIL_FIRST);
+    }
     const { key, prefix, keyHash } = generateApiKey();
     const created = await this.prisma.apiKey.create({
       data: { organisationId, name, prefix, keyHash },

@@ -13,6 +13,15 @@ export interface EmailOptions {
 
 type EmailProvider = 'resend' | 'sendgrid' | 'log';
 
+// Names come from signup forms and go into HTML.
+export const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -89,25 +98,26 @@ export class EmailService {
     name?: string,
   ): Promise<boolean> {
     const verifyUrl = `${this.configService.get('FRONTEND_URL') || 'http://localhost:5173'}/verify-email?token=${token}`;
+    const greeting = name ? `, ${escapeHtml(name)}` : '';
 
     return this.sendEmail({
       to: email,
-      subject: 'Verify your TenantOps account',
+      subject: 'Verify your Liftoff email',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h1 style="color: #6366f1;">Welcome to TenantOps${name ? `, ${name}` : ''}!</h1>
-          <p>Thank you for registering. Please verify your email address by clicking the button below:</p>
+          <h1 style="color: #6366f1;">Welcome to Liftoff${greeting}</h1>
+          <p>Confirm this is your address so your company can create API keys and connect its signup flow:</p>
           <a href="${verifyUrl}" style="display: inline-block; background: linear-gradient(to right, #6366f1, #8b5cf6); color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin: 16px 0;">
-            Verify Email
+            Verify email
           </a>
           <p>Or copy and paste this link:</p>
           <p style="color: #6b7280; word-break: break-all;">${verifyUrl}</p>
           <p style="color: #9ca3af; font-size: 12px; margin-top: 32px;">
-            This link expires in 24 hours. If you didn't create an account, you can safely ignore this email.
+            This link expires in 24 hours. If you didn't create a Liftoff account, ignore this email.
           </p>
         </div>
       `,
-      text: `Welcome to TenantOps! Please verify your email by visiting: ${verifyUrl}`,
+      text: `Welcome to Liftoff. Verify your email by visiting: ${verifyUrl}\n\nThis link expires in 24 hours. If you didn't create a Liftoff account, ignore this email.`,
     });
   }
 
@@ -143,22 +153,22 @@ export class EmailService {
 
     return this.sendEmail({
       to: email,
-      subject: 'Reset your TenantOps password',
+      subject: 'Reset your Liftoff password',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h1 style="color: #6366f1;">Password Reset Request</h1>
-          <p>We received a request to reset your password. Click the button below to set a new password:</p>
+          <h1 style="color: #6366f1;">Reset your password</h1>
+          <p>Someone asked to reset the password for the Liftoff account at this address. Set a new one here:</p>
           <a href="${resetUrl}" style="display: inline-block; background: linear-gradient(to right, #6366f1, #8b5cf6); color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin: 16px 0;">
-            Reset Password
+            Choose a new password
           </a>
           <p>Or copy and paste this link:</p>
           <p style="color: #6b7280; word-break: break-all;">${resetUrl}</p>
           <p style="color: #9ca3af; font-size: 12px; margin-top: 32px;">
-            This link expires in 1 hour. If you didn't request a password reset, you can safely ignore this email.
+            This link expires in 1 hour and works once. If you didn't ask for this, ignore this email; your password stays as it is.
           </p>
         </div>
       `,
-      text: `Reset your password by visiting: ${resetUrl}`,
+      text: `Reset your Liftoff password by visiting: ${resetUrl}\n\nThis link expires in 1 hour and works once. If you didn't ask for this, ignore this email.`,
     });
   }
 

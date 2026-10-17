@@ -8,6 +8,9 @@ import Landing from './pages/Landing';
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
 const ConfirmEmail = lazy(() => import('./pages/ConfirmEmail'));
+const VerifyEmail = lazy(() => import('./pages/VerifyEmail'));
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const TenantManagement = lazy(() => import('./pages/TenantManagement'));
 const TenantDetail = lazy(() => import('./pages/TenantDetail'));
@@ -35,6 +38,9 @@ function App() {
                         <Route path="/login" element={<Login />} />
                         <Route path="/register" element={<Register />} />
                         <Route path="/confirm-email" element={<ConfirmEmail />} />
+                        <Route path="/verify-email" element={<VerifyEmail />} />
+                        <Route path="/forgot-password" element={<ForgotPassword />} />
+                        <Route path="/reset-password" element={<ResetPassword />} />
                         <Route path="/about" element={<Landing />} />
                         <Route path="/pricing" element={<Pricing />} />
                         <Route path="/docs" element={<Docs />} />

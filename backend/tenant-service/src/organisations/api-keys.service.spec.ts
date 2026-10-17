@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Logger,
   NotFoundException,
   UnauthorizedException,
@@ -72,7 +73,9 @@ describe('ApiKeysService', () => {
         }),
       );
 
-      const created = await service.create('org-1', 'Billing');
+      const created = await service.create('org-1', 'Billing', {
+        emailVerified: true,
+      });
 
       const [[{ data }]] = prisma.apiKey.create.mock.calls;
       expect(data).toEqual({
@@ -83,6 +86,15 @@ describe('ApiKeysService', () => {
       });
       expect(data).not.toHaveProperty('key');
       expect(created).toMatchObject({ id: 'key-1', name: 'Billing' });
+    });
+  });
+
+  describe('create (unverified)', () => {
+    it('refuses with 403 until the email is verified, creating nothing', async () => {
+      await expect(
+        service.create('org-1', 'Billing', { emailVerified: false }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.apiKey.create).not.toHaveBeenCalled();
     });
   });
 

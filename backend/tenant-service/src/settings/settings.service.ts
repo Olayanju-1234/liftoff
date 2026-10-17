@@ -6,10 +6,10 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { createHash, randomBytes } from 'crypto';
 import { Prisma, type Settings } from '.prisma/tenant-client';
 import { PrismaService } from '../prisma.service';
 import { EmailService } from '../email/email.service';
+import { hashToken, newToken } from '../common/tokens';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
 
 export interface SettingsResponse {
@@ -38,10 +38,6 @@ const NO_PENDING_EMAIL = {
 const INVALID_LINK =
   'This confirmation link is invalid or has already been used.';
 const EMAIL_TAKEN = 'This email is already in use.';
-
-// Only the hash is stored, so a database read can't be turned into a working link.
-const hashToken = (token: string) =>
-  createHash('sha256').update(token).digest('hex');
 
 @Injectable()
 export class SettingsService {
@@ -76,7 +72,7 @@ export class SettingsService {
     const user = await this.findUser(userId);
     const change =
       dto.email !== undefined && dto.email !== user.email
-        ? { email: dto.email, token: randomBytes(32).toString('base64url') }
+        ? { email: dto.email, token: newToken() }
         : undefined;
     if (change) {
       await this.assertEmailFree(change.email);

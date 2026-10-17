@@ -146,6 +146,36 @@ export class RefreshTokenDto {
   refreshToken: string;
 }
 
+export class VerifyEmailDto {
+  @ApiProperty({ description: 'Token from the verification link' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  token: string;
+}
+
+export class ForgotPasswordDto {
+  @ApiProperty({ example: 'admin@acme.com' })
+  @IsEmail({}, { message: 'Invalid email format' })
+  @IsNotEmpty({ message: 'Email is required' })
+  email: string;
+}
+
+export class ResetPasswordDto {
+  @ApiProperty({ description: 'Token from the reset link' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(200)
+  token: string;
+
+  @ApiProperty({ minLength: 8, maxLength: 100, example: 'CorrectHorse9!' })
+  @IsString()
+  @IsNotEmpty({ message: 'Password is required' })
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
+  @MaxLength(100, { message: 'Password too long' })
+  password: string;
+}
+
 // ============================================================================
 // Settings DTOs
 // ============================================================================
