@@ -79,6 +79,9 @@ export interface TenantWebhookPayload<TTenant = unknown> {
 }
 export declare const PLAN_IDS: readonly ["starter", "pro", "enterprise"];
 export type PlanId = (typeof PLAN_IDS)[number];
+export declare const LIVE_TENANT_STATUSES: readonly ["PROVISIONING", "FAILED", "ACTIVE"];
+export type LiveTenantStatus = (typeof LIVE_TENANT_STATUSES)[number];
+export declare const isLiveTenant: (status: string) => status is LiveTenantStatus;
 export interface TestModeFlag {
     test?: boolean;
 }

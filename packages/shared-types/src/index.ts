@@ -400,6 +400,19 @@ export const PLAN_IDS = ['starter', 'pro', 'enterprise'] as const;
 export type PlanId = (typeof PLAN_IDS)[number];
 
 // ============================================================================
+// Tenant status
+// ============================================================================
+
+// Statuses in which a worker's step result still counts. ACTIVE is included because
+// provisioning.complete can be handled before a step's own result. A tenant that was
+// cancelled, is being removed or is removed ignores late messages: no step change, no
+// email, no webhook. A worker that was mid-step when the tenant went away still reports in.
+export const LIVE_TENANT_STATUSES = ['PROVISIONING', 'FAILED', 'ACTIVE'] as const;
+export type LiveTenantStatus = (typeof LIVE_TENANT_STATUSES)[number];
+export const isLiveTenant = (status: string): status is LiveTenantStatus =>
+  (LIVE_TENANT_STATUSES as readonly string[]).includes(status);
+
+// ============================================================================
 // Event Payloads (RabbitMQ)
 // ============================================================================
 
