@@ -2,7 +2,7 @@ export const REPO = 'https://github.com/Olayanju-1234/liftoff';
 export const API_BASE = 'https://api.liftoff.ojusentinel.com';
 export const SWAGGER_URL = `${API_BASE}/api/docs`;
 export const SITE_HOST = 'liftoff.ojusentinel.com';
-export const SUPPORT_EMAIL = 'josepholayanju2003@gmail.com';
+export const SUPPORT_EMAIL = 'horlarhyanjuhjoseph@gmail.com';
 export const OPERATOR = 'Joseph Olayanju';
 export const LEGAL_EFFECTIVE = '17 October 2026';
 
