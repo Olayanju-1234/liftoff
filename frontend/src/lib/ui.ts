@@ -66,6 +66,8 @@ export const CONDITION_META: Record<Condition, { label: string; tone: Tone; live
     failed: { label: 'Failed', tone: 'abort' },
     cancelled: { label: 'Cancelled', tone: 'scrub' },
     suspended: { label: 'Suspended', tone: 'scrub' },
+    removing: { label: 'Removing', tone: 'scrub', live: true },
+    removed: { label: 'Removed', tone: 'scrub' },
 };
 
 export const STAGE_STATE_META: Record<StageState, { label: string; tone: Tone }> = {

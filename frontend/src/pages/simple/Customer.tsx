@@ -3,11 +3,13 @@ import type { ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { isAxiosError } from 'axios';
 import { formatDistanceStrict } from 'date-fns';
-import { ArrowLeft, ArrowRight, Ban, Check, Copy, KeyRound, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Ban, Check, Copy, KeyRound, RotateCcw, Trash2 } from 'lucide-react';
 import { getTenant, getTenantEvents } from '../../lib/api';
 import { useNow, useResource } from '../../lib/hooks';
 import { useTenantActions } from '../../lib/useTenantActions';
 import {
+    TEARDOWN,
+    TEARDOWN_SLOW_MS,
     activeStage,
     billingSkip,
     cancelReasonFrom,
@@ -22,6 +24,8 @@ import {
     stageTimings,
     stepTimeoutAt,
     sweepAt,
+    teardownFailed,
+    teardownStuck,
 } from '../../lib/pipeline';
 import type { Condition, Stage } from '../../lib/pipeline';
 import {
@@ -57,7 +61,7 @@ export default function Customer() {
     const tenantRes = useResource(
         async () => {
             const t = await getTenant(id);
-            setLive(t.status === 'PROVISIONING');
+            setLive(t.status === 'PROVISIONING' || t.status === 'DEPROVISIONING');
             return t;
         },
         { interval, key: id },
@@ -128,9 +132,19 @@ export default function Customer() {
                                 <Ban size={14} /> Cancel setup
                             </Button>
                         )}
-                        <Button variant="danger" onClick={() => actions.requestDelete(tenant)}>
-                            <Trash2 size={14} /> Remove
-                        </Button>
+                        {tenant.status === 'DEPROVISIONING' ? (
+                            teardownStuck(tenant, now) && (
+                                <Button onClick={() => actions.requestDelete(tenant)}>
+                                    <RotateCcw size={14} /> Retry removal
+                                </Button>
+                            )
+                        ) : (
+                            tenant.status !== 'DELETED' && (
+                                <Button variant="danger" onClick={() => actions.requestDelete(tenant)}>
+                                    <Trash2 size={14} /> Remove
+                                </Button>
+                            )
+                        )}
                     </>
                 }
             />
@@ -311,6 +325,30 @@ function CopyRow({ value, display }: { value: string; display: string }) {
 
 const lower = (stage: Stage) => stepName(stage).charAt(0).toLowerCase() + stepName(stage).slice(1);
 
+const TEARDOWN_STATE: Record<string, { label: string; tone: Tone }> = {
+    IN_PROGRESS: { label: 'In progress', tone: 'ignite' },
+    SUCCESS: { label: 'Done', tone: 'go' },
+    SKIPPED: { label: 'Nothing to remove', tone: 'scrub' },
+    FAILED: { label: 'Failed', tone: 'abort' },
+};
+
+function TeardownList({ tenant }: { tenant: Tenant }) {
+    return (
+        <span className="mt-2 grid gap-1 text-[13.5px]">
+            {TEARDOWN.map((part) => {
+                const state = TEARDOWN_STATE[tenant[part.key] ?? ''] ?? { label: 'Waiting', tone: 'scrub' as Tone };
+                return (
+                    <span key={part.key} className="flex items-center gap-2">
+                        <Swatch tone={state.tone} live={state.tone === 'ignite'} />
+                        <span className="text-ink-2">{part.plain}</span>
+                        <span className={cn('ml-auto font-medium', TONE_TEXT[state.tone])}>{state.label}</span>
+                    </span>
+                );
+            })}
+        </span>
+    );
+}
+
 function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condition; events: EventLog[]; now: number }) {
     let tone: Tone = 'ink';
     let head = '';
@@ -359,9 +397,34 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
             const reason = cancelReasonFrom(tenant, events);
             tone = 'scrub';
             head = isSweeperCancel(reason) ? 'Setup was cancelled automatically because it was stuck for too long.' : 'Setup was cancelled.';
-            body = 'Finished steps were kept and nothing else will happen. Remove this customer to take them off the list.';
+            body = 'Finished steps were kept and nothing else will happen. Remove this customer to delete what was set up and take them off the list.';
             break;
         }
+        case 'removing': {
+            const failed = teardownFailed(tenant);
+            const slow = now - Date.parse(tenant.updatedAt) > TEARDOWN_SLOW_MS;
+            tone = failed || slow ? 'hold' : 'scrub';
+            head = failed ? 'Removing this customer got stuck.' : 'Removing this customer.';
+            body = (
+                <>
+                    {failed || slow
+                        ? 'Use Retry removal to try the unfinished part again.'
+                        : "Their database, API key and subscription are being removed. They'll leave your list when it's done."}
+                    <TeardownList tenant={tenant} />
+                </>
+            );
+            break;
+        }
+        case 'removed':
+            tone = 'scrub';
+            head = 'This customer was removed.';
+            body = (
+                <>
+                    Their database, API key and subscription are gone; this page and their history are kept for your records.
+                    <TeardownList tenant={tenant} />
+                </>
+            );
+            break;
         default:
             return null;
     }

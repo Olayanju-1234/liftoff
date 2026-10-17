@@ -20,7 +20,7 @@ import { Tag } from '../../components/ui/Tag';
 import CreateTenantModal from '../../components/CreateTenantModal';
 import LoadError from '../../components/LoadError';
 
-const ORDER: SimpleStatus[] = ['attention', 'setting-up', 'ready', 'cancelled'];
+const ORDER: SimpleStatus[] = ['attention', 'setting-up', 'ready', 'cancelled', 'removing', 'removed'];
 const COLS = 'md:grid-cols-[minmax(0,1.3fr)_150px_minmax(0,1.3fr)_110px_140px_24px]';
 
 export default function Customers() {

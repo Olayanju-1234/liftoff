@@ -95,7 +95,9 @@ Single entry point for all client requests. Applies rate limiting (100 req/min p
 
 Core orchestration service. Manages the provisioning state machine and subscribes to all pipeline events to keep per-step status accurate. It also consumes the dead-letter exchange: a rejected step marks that step and the tenant `FAILED`. A step that stays `IN_PROGRESS` with no change for 2 minutes is failed the same way (every minute; reason "Step timed out: …", `tenant.failed` webhook), and a sweeper every 5 minutes cancels any pipeline still `PROVISIONING` after 30 minutes as the backstop.
 
-Provisioning states: `PROVISIONING → ACTIVE | FAILED | CANCELLED`
+Provisioning states: `PROVISIONING → ACTIVE | FAILED | CANCELLED`, then `→ DEPROVISIONING → DELETED` on removal
+
+Removal (`DELETE /tenants/:id`, or `POST /tenants/:id/cancel` from `ACTIVE`/`FAILED`) is a second, smaller saga. tenant-service sets the tenant `DEPROVISIONING`, stops any provisioning step still open, and publishes `tenant.deprovision`. db-provisioner drops the schema (`DROP SCHEMA IF EXISTS … CASCADE`, only names matching `tenant_*`, and never a schema another live tenant shares), credentials-service deletes the tenant's key, and billing-service cancels the Stripe subscription in the company's account when there is one. Each answers `tenant.deprovision.done`; tenant-service records it in `teardownDbStatus` / `teardownCredentialsStatus` / `teardownBillingStatus`, and whichever result lands last moves the tenant to `DELETED` (soft: `deletedAt` is set, the row and its events stay, it leaves `GET /tenants`) and sends the `tenant.deleted` webhook. A test tenant reads `DELETED` at once and is cleaned up in the background. Every teardown is idempotent, so a replayed message or a second `DELETE` is safe; a teardown that dead-letters reads `FAILED` and `DELETE` again retries it. A deleted tenant gives its name and subdomain back once its schema is gone (`Tenant.live` becomes null, which the per-organisation unique indexes ignore).
 
 Step statuses: `PENDING → IN_PROGRESS → SUCCESS | FAILED | CANCELLED | SKIPPED` (`SKIPPED` is billing on a test tenant)
 
@@ -345,8 +347,8 @@ Quotas: an organisation may have 10 active tenants (`PROVISIONING` or `ACTIVE`) 
 | GET | `/tenants` | List the organisation's tenants |
 | POST | `/tenants` | Create tenant and start provisioning (user token or API key; 10/min per IP). Send an `Idempotency-Key` header to make retries safe: the first response is stored per organisation for 24 h and replayed on a repeat (`Idempotent-Replayed: true`); the same key with a different body gets 422 |
 | GET | `/tenants/:id` | Get tenant with step statuses (user token or API key; 60/min per IP) |
-| DELETE | `/tenants/:id` | Delete tenant and clean up resources |
-| POST | `/tenants/:id/cancel` | Cancel in-progress provisioning |
+| DELETE | `/tenants/:id` | Remove a tenant: drop its schema, revoke its key, cancel its Stripe subscription; `DEPROVISIONING`, then `DELETED` (soft) and the `tenant.deleted` webhook. Again on a stuck removal retries it |
+| POST | `/tenants/:id/cancel` | From `PROVISIONING`: stop the pipeline (`CANCELLED`). From `ACTIVE`/`FAILED`: remove it like `DELETE`, recording the reason |
 | GET | `/tenants/:id/events` | Get event log for tenant |
 | GET | `/events` | Event log across the organisation's tenants |
 
@@ -403,11 +405,11 @@ curl -s -X PUT https://api.liftoff.ojusentinel.com/organisation \
 # {…,"webhookUrl":"https://api.globex-saas.com/liftoff/webhook","webhookConfigured":true,"webhookSecret":"whsec_…"}
 ```
 
-When a tenant reaches `ACTIVE` or `FAILED`, tenant-service POSTs JSON with these headers:
+When a tenant reaches `ACTIVE`, `FAILED` or (after a removal) `DELETED`, tenant-service POSTs JSON with these headers:
 
 | Header | Value |
 |---|---|
-| `x-liftoff-event` | `tenant.active` or `tenant.failed` |
+| `x-liftoff-event` | `tenant.active`, `tenant.failed` or `tenant.deleted` |
 | `x-liftoff-delivery` | UUID, the same on every retry of one delivery |
 | `x-liftoff-signature` | `sha256=` + hex HMAC-SHA256 of the raw body, keyed with your secret |
 

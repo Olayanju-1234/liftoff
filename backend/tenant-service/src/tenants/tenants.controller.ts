@@ -143,7 +143,15 @@ export class TenantsController {
 
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Cancel an in-progress provisioning pipeline' })
+  @ApiOperation({
+    summary: 'Cancel a tenant',
+    description:
+      'From PROVISIONING: stops the pipeline (CANCELLED); finished steps are kept. From ACTIVE or FAILED: deprovisions it like DELETE, recording the reason.',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Tenant is CANCELLED, being removed or removed',
+  })
   cancel(
     @Param('id', ParseCuidPipe) id: string,
     @Body() cancelDto: CancelTenantDto,
@@ -153,7 +161,12 @@ export class TenantsController {
   }
 
   @Delete(':id')
-  @ApiOperation({ summary: 'Delete tenant and emit tenant.deleted' })
+  @ApiOperation({
+    summary:
+      'Remove a tenant: drop its schema, revoke its key, cancel its subscription',
+    description:
+      'Publishes tenant.deprovision and answers with the tenant in DEPROVISIONING; it becomes DELETED (soft: readable by id, hidden from lists) once every part is torn down, and tenant.deleted is sent to the webhook. A test tenant reads DELETED at once. Calling it again resumes a teardown that failed and is a no-op once DELETED.',
+  })
   delete(
     @Param('id', ParseCuidPipe) id: string,
     @CurrentOrganisation() organisationId: string,

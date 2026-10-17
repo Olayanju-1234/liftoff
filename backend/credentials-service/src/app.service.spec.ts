@@ -3,7 +3,10 @@ import {
   Nack,
   RABBIT_HANDLER,
 } from '@golevelup/nestjs-rabbitmq';
-import type { TenantDnsReadyPayload } from '@liftoff/shared-types';
+import type {
+  TenantDeprovisionPayload,
+  TenantDnsReadyPayload,
+} from '@liftoff/shared-types';
 import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { Prisma } from '.prisma/credentials-client';
@@ -17,6 +20,10 @@ describe('AppService', () => {
   let prisma: {
     credential: {
       create: jest.Mock<Promise<unknown>, [Prisma.CredentialCreateArgs]>;
+      deleteMany: jest.Mock<
+        Promise<{ count: number }>,
+        [Prisma.CredentialDeleteManyArgs]
+      >;
     };
   };
 
@@ -42,6 +49,9 @@ describe('AppService', () => {
         create: jest
           .fn<Promise<unknown>, [Prisma.CredentialCreateArgs]>()
           .mockResolvedValue({}),
+        deleteMany: jest
+          .fn<Promise<{ count: number }>, [Prisma.CredentialDeleteManyArgs]>()
+          .mockResolvedValue({ count: 1 }),
       },
     };
 
@@ -140,5 +150,73 @@ describe('AppService', () => {
 
     expect(result).toBeInstanceOf(Nack);
     expect((result as Nack).requeue).toBe(false);
+  });
+
+  describe('tenant.deprovision', () => {
+    const deprovision: TenantDeprovisionPayload = {
+      tenantId: 'tenant-1',
+      subdomain: 'acme',
+      schemaName: 'tenant_acme',
+      stripeSubscriptionId: null,
+      reason: 'Deleted by user',
+    };
+
+    it('subscribes on its own queue with its own dead-letter key', () => {
+      const handler: unknown = Object.getOwnPropertyDescriptor(
+        AppService.prototype,
+        'handleTenantDeprovision',
+      )?.value;
+      expect(
+        Reflect.getMetadata(RABBIT_HANDLER, handler as object),
+      ).toMatchObject({
+        routingKey: 'tenant.deprovision',
+        queue: 'credentials-deprovision-queue',
+        queueOptions: {
+          deadLetterExchange: 'dlx.provisioning',
+          deadLetterRoutingKey: 'credentials.deprovision.failed',
+        },
+      });
+    });
+
+    it("deletes the tenant's key and reports it", async () => {
+      await expect(
+        service.handleTenantDeprovision(deprovision),
+      ).resolves.toBeUndefined();
+
+      expect(prisma.credential.deleteMany).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-1' },
+      });
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision.done',
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          part: 'credentials',
+          skipped: false,
+        }),
+      );
+    });
+
+    it('reports skipped on a replay, when the key is already gone', async () => {
+      prisma.credential.deleteMany.mockResolvedValueOnce({ count: 0 });
+
+      await service.handleTenantDeprovision(deprovision);
+
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision.done',
+        expect.objectContaining({ part: 'credentials', skipped: true }),
+      );
+    });
+
+    it('nacks without requeue when the delete fails', async () => {
+      prisma.credential.deleteMany.mockRejectedValueOnce(new Error('db down'));
+
+      const result = await service.handleTenantDeprovision(deprovision);
+
+      expect(result).toBeInstanceOf(Nack);
+      expect((result as Nack).requeue).toBe(false);
+      expect(amqp.publish).not.toHaveBeenCalled();
+    });
   });
 });

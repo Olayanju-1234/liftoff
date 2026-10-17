@@ -22,6 +22,11 @@ export interface Tenant {
     // What billing created in the company's Stripe account; null when the step was skipped.
     stripeCustomerId?: string | null;
     stripeSubscriptionId?: string | null;
+    // Teardown after DELETE (or cancel from ACTIVE/FAILED); null until then.
+    teardownDbStatus?: StepStatus | null;
+    teardownCredentialsStatus?: StepStatus | null;
+    teardownBillingStatus?: StepStatus | null;
+    deletedAt?: string | null;
     createdAt: string;
     updatedAt: string;
 }
@@ -46,7 +51,7 @@ export interface Organisation {
 export type PlanId = 'starter' | 'pro' | 'enterprise';
 export const PLAN_IDS: PlanId[] = ['starter', 'pro', 'enterprise'];
 
-export type TenantStatus = 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'FAILED' | 'CANCELLED';
+export type TenantStatus = 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'FAILED' | 'CANCELLED' | 'DEPROVISIONING' | 'DELETED';
 export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'SKIPPED';
 
 // Plan types

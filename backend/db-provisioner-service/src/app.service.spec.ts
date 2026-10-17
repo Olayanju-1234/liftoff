@@ -3,7 +3,10 @@ import {
   Nack,
   RABBIT_HANDLER,
 } from '@golevelup/nestjs-rabbitmq';
-import type { TenantRequestedPayload } from '@liftoff/shared-types';
+import type {
+  TenantDeprovisionPayload,
+  TenantRequestedPayload,
+} from '@liftoff/shared-types';
 import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 
@@ -143,5 +146,93 @@ describe('AppService', () => {
 
     expect(result).toBeInstanceOf(Nack);
     expect((result as Nack).requeue).toBe(false);
+  });
+
+  describe('tenant.deprovision', () => {
+    const deprovision: TenantDeprovisionPayload = {
+      tenantId: 'tenant-1',
+      subdomain: 'acme',
+      schemaName: 'tenant_acme_corp_acme',
+      stripeSubscriptionId: null,
+      reason: 'Deleted by user',
+    };
+
+    it('subscribes on its own queue with its own dead-letter key', () => {
+      const handler: unknown = Object.getOwnPropertyDescriptor(
+        AppService.prototype,
+        'handleTenantDeprovision',
+      )?.value;
+      expect(
+        Reflect.getMetadata(RABBIT_HANDLER, handler as object),
+      ).toMatchObject({
+        exchange: 'provisioning.direct',
+        routingKey: 'tenant.deprovision',
+        queue: 'db-provisioner-deprovision-queue',
+        queueOptions: {
+          deadLetterExchange: 'dlx.provisioning',
+          deadLetterRoutingKey: 'db-provisioner.deprovision.failed',
+        },
+      });
+    });
+
+    it('drops the schema idempotently and reports it', async () => {
+      await expect(
+        service.handleTenantDeprovision(deprovision),
+      ).resolves.toBeUndefined();
+
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        'DROP SCHEMA IF EXISTS "tenant_acme_corp_acme" CASCADE;',
+      );
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision.done',
+        {
+          tenantId: 'tenant-1',
+          part: 'db',
+          skipped: false,
+          detail: 'tenant_acme_corp_acme',
+        },
+      );
+    });
+
+    it('reports skipped without touching Postgres when there is no schema to drop', async () => {
+      await service.handleTenantDeprovision({
+        ...deprovision,
+        schemaName: null,
+      });
+
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision.done',
+        expect.objectContaining({ part: 'db', skipped: true }),
+      );
+    });
+
+    it.each([
+      'public',
+      'credentials',
+      'tenant_x"; DROP SCHEMA public; --',
+      'tenant_',
+    ])('refuses to drop %p and dead-letters instead', async (schemaName) => {
+      const result = await service.handleTenantDeprovision({
+        ...deprovision,
+        schemaName,
+      });
+
+      expect(result).toBeInstanceOf(Nack);
+      expect((result as Nack).requeue).toBe(false);
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+      expect(amqp.publish).not.toHaveBeenCalled();
+    });
+
+    it('nacks without requeue when Postgres fails', async () => {
+      prisma.$executeRawUnsafe.mockRejectedValueOnce(new Error('lock timeout'));
+
+      const result = await service.handleTenantDeprovision(deprovision);
+
+      expect(result).toBeInstanceOf(Nack);
+      expect(amqp.publish).not.toHaveBeenCalled();
+    });
   });
 });

@@ -72,7 +72,7 @@ export declare const IDEMPOTENT_REPLAYED_HEADER = "idempotent-replayed";
 export declare const WEBHOOK_SIGNATURE_HEADER = "x-liftoff-signature";
 export declare const WEBHOOK_EVENT_HEADER = "x-liftoff-event";
 export declare const WEBHOOK_DELIVERY_HEADER = "x-liftoff-delivery";
-export type TenantWebhookEvent = 'tenant.active' | 'tenant.failed';
+export type TenantWebhookEvent = 'tenant.active' | 'tenant.failed' | 'tenant.deleted';
 export interface TenantWebhookPayload<TTenant = unknown> {
     event: TenantWebhookEvent;
     tenant: TTenant;
@@ -126,6 +126,22 @@ export interface ProvisioningCompletePayload {
     subdomain: string;
     notification?: NotificationOutcome;
 }
+export interface TenantDeprovisionPayload extends TestModeFlag {
+    tenantId: string;
+    subdomain: string;
+    schemaName: string | null;
+    stripeSubscriptionId: string | null;
+    reason: string;
+}
+export declare const DEPROVISION_PARTS: readonly ["db", "credentials", "billing"];
+export type DeprovisionPart = (typeof DEPROVISION_PARTS)[number];
+export interface TenantDeprovisionDonePayload {
+    tenantId: string;
+    part: DeprovisionPart;
+    skipped: boolean;
+    detail?: string;
+    warning?: string;
+}
 export interface TenantFailedPayload {
     tenantId: string;
     step: string;
@@ -136,6 +152,7 @@ export interface InternalBillingConfig {
     tenantId: string;
     organisationId: string;
     test: boolean;
+    stripeSubscriptionId: string | null;
     configured: boolean;
     stripeSecretKey: string | null;
     prices: StripePrices;

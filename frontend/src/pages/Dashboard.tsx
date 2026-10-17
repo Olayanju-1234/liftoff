@@ -46,7 +46,7 @@ export default function Dashboard() {
         { label: 'In flight', value: count('running', 'waiting'), tone: 'ignite' },
         { label: 'Stalled', value: count('stalled'), tone: 'hold' },
         { label: 'Failed', value: count('failed'), tone: 'abort' },
-        { label: 'Cancelled', value: count('cancelled', 'suspended'), tone: 'scrub' },
+        { label: 'Cancelled', value: count('cancelled', 'suspended', 'removing'), tone: 'scrub' },
     ];
 
     const boxes: BoxView[] = STAGES.map((stage) => {

@@ -56,13 +56,23 @@ model Tenant {
   // Cancellation fields
   cancelledAt  DateTime?
   cancelReason String?
-  
-  deletedAt DateTime? // Soft delete
+
+  // Deprovisioning: each worker's teardown, null until DELETE (or cancel from ACTIVE/FAILED).
+  // The tenant becomes DELETED once all three are SUCCESS or SKIPPED.
+  teardownDbStatus          StepStatus?
+  teardownCredentialsStatus StepStatus?
+  teardownBillingStatus     StepStatus?
+  // true while the tenant holds its name and subdomain; null once it is DELETED and its
+  // schema is dropped. Postgres treats NULLs as distinct, so a removed customer can be
+  // added again under the same name.
+  live Boolean? @default(true)
+
+  deletedAt DateTime? // Soft delete: set with status DELETED; the row and its events stay
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([organisationId, subdomain])
-  @@unique([organisationId, name])
+  @@unique([organisationId, subdomain, live])
+  @@unique([organisationId, name, live])
   @@index([ownerId])
   @@index([organisationId])
 }
@@ -226,6 +236,10 @@ enum TenantStatus {
   SUSPENDED
   FAILED
   CANCELLED
+  // Teardown in flight: schema, API key and subscription are being removed.
+  DEPROVISIONING
+  // Torn down. Soft-deleted: hidden from lists, still readable by id with its events.
+  DELETED
 }
 
 enum UserRole {

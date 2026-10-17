@@ -16,13 +16,15 @@ export const stepName = (stage: Stage) => STEP_NAMES[stage.key];
 
 export const SIMPLE_STEPS = STAGES.map((stage) => ({ stage, name: STEP_NAMES[stage.key] }));
 
-export type SimpleStatus = 'setting-up' | 'ready' | 'attention' | 'cancelled';
+export type SimpleStatus = 'setting-up' | 'ready' | 'attention' | 'cancelled' | 'removing' | 'removed';
 
 export const SIMPLE_STATUS: Record<SimpleStatus, { label: string; tone: Tone; live?: boolean }> = {
     'setting-up': { label: 'Setting up', tone: 'ignite', live: true },
     ready: { label: 'Ready', tone: 'go' },
     attention: { label: 'Needs attention', tone: 'abort' },
     cancelled: { label: 'Cancelled', tone: 'scrub' },
+    removing: { label: 'Removing', tone: 'scrub', live: true },
+    removed: { label: 'Removed', tone: 'scrub' },
 };
 
 export function simpleStatus(c: Condition): SimpleStatus {
@@ -35,6 +37,10 @@ export function simpleStatus(c: Condition): SimpleStatus {
         case 'cancelled':
         case 'suspended':
             return 'cancelled';
+        case 'removing':
+            return 'removing';
+        case 'removed':
+            return 'removed';
         default:
             return 'setting-up';
     }

@@ -26,6 +26,7 @@ describe('InternalService', () => {
       id: 't',
       organisationId: 'org-1',
       isTest: false,
+      stripeSubscriptionId: 'sub_1',
     });
     organisations.stripeCredentials.mockResolvedValueOnce({
       configured: true,
@@ -37,6 +38,7 @@ describe('InternalService', () => {
       tenantId: 't',
       organisationId: 'org-1',
       test: false,
+      stripeSubscriptionId: 'sub_1',
       configured: true,
       stripeSecretKey: 'sk_test_abcdefghijk',
       prices: { starter: 'price_a', pro: null, enterprise: null },
@@ -49,6 +51,7 @@ describe('InternalService', () => {
       id: 't',
       organisationId: null,
       isTest: true,
+      stripeSubscriptionId: null,
     });
 
     await expect(service.billingConfig('t')).resolves.toMatchObject({

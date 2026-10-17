@@ -26,8 +26,8 @@ export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDe
                 toast.success(simple ? `Setup cancelled for ${tenant.name}` : `Provisioning cancelled for ${tenant.name}`);
                 opts.onCancelled?.(tenant);
             } else {
-                await deleteTenant(tenant.id);
-                toast.success(`${tenant.name} deleted`);
+                const removed = await deleteTenant(tenant.id);
+                toast.success(removed?.status === 'DELETED' ? `${tenant.name} removed` : `Removing ${tenant.name}`);
                 opts.onDeleted?.(tenant);
             }
             setPending(null);
@@ -42,18 +42,31 @@ export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDe
     const dialog = (
         <ConfirmDialog
             isOpen={!!pending}
-            title={pending?.kind === 'delete' ? `Delete ${name}?` : simple ? `Cancel setup for ${name}?` : `Cancel provisioning for ${name}?`}
+            title={
+                pending?.kind === 'delete'
+                    ? simple
+                        ? `Remove ${name}?`
+                        : `Delete ${name}?`
+                    : simple
+                      ? `Cancel setup for ${name}?`
+                      : `Cancel provisioning for ${name}?`
+            }
             message={
                 simple ? (
                     pending?.kind === 'delete' ? (
-                        <>This removes {name} and their history. It can't be undone.</>
+                        <>
+                            We delete {name}'s database, revoke their API key and cancel their Stripe subscription if they have one. Their history stays
+                            in Liftoff. It can't be undone.
+                        </>
                     ) : (
                         <>Setup stops where it is. Steps that already finished are kept, and your team won't get the ready email.</>
                     )
                 ) : pending?.kind === 'delete' ? (
                     <>
-                        tenant-service publishes <code className="font-mono text-[13px] text-ink">tenant.deleted</code>, then removes
-                        the tenant and its event history. This can't be undone.
+                        tenant-service publishes <code className="font-mono text-[13px] text-ink">tenant.deprovision</code>: db-provisioner
+                        drops the schema, credentials revokes the key, billing cancels the subscription. The tenant reads DEPROVISIONING, then
+                        DELETED (soft; its events are kept) and <code className="font-mono text-[13px] text-ink">tenant.deleted</code> is sent.
+                        This can't be undone.
                     </>
                 ) : (
                     <>
@@ -62,7 +75,7 @@ export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDe
                     </>
                 )
             }
-            confirmLabel={pending?.kind === 'delete' ? 'Delete tenant' : simple ? 'Cancel setup' : 'Cancel provisioning'}
+            confirmLabel={pending?.kind === 'delete' ? (simple ? 'Remove customer' : 'Delete tenant') : simple ? 'Cancel setup' : 'Cancel provisioning'}
             loading={busy}
             onConfirm={confirm}
             onCancel={() => setPending(null)}
