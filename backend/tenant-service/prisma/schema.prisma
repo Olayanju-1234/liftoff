@@ -102,6 +102,10 @@ model Organisation {
   // { starter, pro, enterprise } → Stripe Price ID, any of them absent.
   stripePrices             Json?
 
+  // Set when someone dismissed the finished onboarding checklist on the Simple home;
+  // it is never shown to the company again.
+  onboardingDismissedAt DateTime?
+
   users   User[]
   tenants Tenant[]
   apiKeys ApiKey[]

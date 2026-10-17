@@ -344,6 +344,14 @@ export class UpdateOrganisationDto {
   @ValidateNested()
   @Type(() => StripePricesDto)
   stripePrices?: StripePricesDto | null;
+
+  @ApiPropertyOptional({
+    description:
+      'true hides the finished onboarding checklist on the dashboard for good (onboardingDismissedAt is set once and kept).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  dismissOnboarding?: boolean;
 }
 
 // What GET /organisation says about Stripe: whether a key is stored, and the prices.

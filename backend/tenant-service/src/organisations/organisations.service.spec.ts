@@ -32,6 +32,7 @@ const row = {
   stripePrices: null as Prisma.JsonValue | null,
   maxActiveTenants: 10,
   maxProvisionsPerDay: 50,
+  onboardingDismissedAt: null as Date | null,
   createdAt: new Date('2026-10-17T00:00:00Z'),
   updatedAt: new Date('2026-10-17T00:00:00Z'),
 };
@@ -90,6 +91,7 @@ describe('OrganisationsService', () => {
         stripeConfigured: false,
         stripePrices: noPrices,
         limits: { maxActiveTenants: 10, maxProvisionsPerDay: 50 },
+        onboardingDismissedAt: null,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       });
@@ -239,6 +241,60 @@ describe('OrganisationsService', () => {
         service.update('org-1', { webhookUrl }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.organisation.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onboarding checklist', () => {
+    it('reads as not dismissed until someone dismisses it', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(row);
+
+      const result = await service.get('org-1');
+
+      expect(result.onboardingDismissedAt).toBeNull();
+    });
+
+    it('dismissing sets onboardingDismissedAt once and returns it', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(row);
+
+      const result = await service.update('org-1', {
+        dismissOnboarding: true,
+      });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data.onboardingDismissedAt).toBeInstanceOf(Date);
+      expect(result.onboardingDismissedAt).toBeInstanceOf(Date);
+    });
+
+    it('keeps the first dismissal time when dismissed again', async () => {
+      const dismissedAt = new Date('2026-10-16T12:00:00Z');
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...row,
+        onboardingDismissedAt: dismissedAt,
+      });
+      prisma.organisation.update.mockImplementationOnce(({ data }) =>
+        Promise.resolve({
+          ...row,
+          onboardingDismissedAt: dismissedAt,
+          ...data,
+        }),
+      );
+
+      const result = await service.update('org-1', {
+        dismissOnboarding: true,
+      });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data).not.toHaveProperty('onboardingDismissedAt');
+      expect(result.onboardingDismissedAt).toEqual(dismissedAt);
+    });
+
+    it('ignores dismissOnboarding: false', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(row);
+
+      await service.update('org-1', { dismissOnboarding: false, name: 'A' });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data).toEqual({ name: 'A' });
     });
   });
 

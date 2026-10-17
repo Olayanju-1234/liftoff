@@ -44,8 +44,30 @@ export interface Organisation {
     stripePrices: Record<PlanId, string | null>;
     // Quotas on adding customers; test customers don't count. Raised by support on request.
     limits: { maxActiveTenants: number; maxProvisionsPerDay: number };
+    // Set once the finished onboarding checklist was dismissed; it never shows again after.
+    onboardingDismissedAt: string | null;
     createdAt: string;
     updatedAt: string;
+}
+
+// PUT /organisation answers with the organisation, plus the webhook signing secret the one
+// time it is issued.
+export interface UpdatedOrganisation extends Organisation {
+    webhookSecret?: string;
+}
+
+// A company API key as listed: never the key itself, only enough to recognise it.
+export interface ApiKey {
+    id: string;
+    name: string;
+    prefix: string;
+    lastUsedAt: string | null;
+    createdAt: string;
+}
+
+// POST /api-keys: the only response that ever carries the full key.
+export interface CreatedApiKey extends ApiKey {
+    key: string;
 }
 
 export type PlanId = 'starter' | 'pro' | 'enterprise';

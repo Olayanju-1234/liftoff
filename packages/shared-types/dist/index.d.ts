@@ -59,6 +59,7 @@ export declare class UpdateOrganisationDto {
     baseDomain?: string | null;
     stripeSecretKey?: string | null;
     stripePrices?: StripePricesDto | null;
+    dismissOnboarding?: boolean;
 }
 export type StripePrices = Record<PlanId, string | null>;
 export declare class CreateApiKeyDto {

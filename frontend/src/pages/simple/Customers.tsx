@@ -19,6 +19,7 @@ import Empty from '../../components/ui/Empty';
 import { Tag } from '../../components/ui/Tag';
 import CreateTenantModal from '../../components/CreateTenantModal';
 import LoadError from '../../components/LoadError';
+import OnboardingChecklist from '../../components/OnboardingChecklist';
 
 const ORDER: SimpleStatus[] = ['attention', 'setting-up', 'ready', 'cancelled', 'removing', 'removed'];
 const COLS = 'md:grid-cols-[minmax(0,1.3fr)_150px_minmax(0,1.3fr)_110px_140px_24px]';
@@ -28,7 +29,17 @@ export default function Customers() {
     const now = useNow();
     const { user } = useAuth();
     const [createOpen, setCreateOpen] = useState(false);
+    const [createTest, setCreateTest] = useState(false);
     const tenants = useResource(getTenants, { interval: 10_000 });
+
+    const openCreate = (test = false) => {
+        setCreateTest(test);
+        setCreateOpen(true);
+    };
+    const closeCreate = () => {
+        setCreateOpen(false);
+        setCreateTest(false);
+    };
 
     // Signing up gives the company a workspace tenant of its own; this list is for its customers only.
     const list = (tenants.data ?? []).filter((t) => t.id !== user?.tenantId);
@@ -52,9 +63,10 @@ export default function Customers() {
         <>
             <CreateTenantModal
                 isOpen={createOpen}
-                onClose={() => setCreateOpen(false)}
+                initialTest={createTest}
+                onClose={closeCreate}
                 onCreated={(t) => {
-                    setCreateOpen(false);
+                    closeCreate();
                     toast.success(`Setting up ${t.name}`);
                     navigate(`/customers/${t.id}`);
                 }}
@@ -70,7 +82,7 @@ export default function Customers() {
                             {!tenants.refreshing && <RotateCcw size={14} />}
                             Refresh
                         </Button>
-                        <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                        <Button variant="primary" onClick={() => openCreate()}>
                             <Plus size={15} /> Add customer
                         </Button>
                     </>
@@ -80,6 +92,8 @@ export default function Customers() {
             {tenants.error !== null && !tenants.data && (
                 <LoadError error={tenants.error} what="your customers" onRetry={tenants.refresh} busy={tenants.refreshing} />
             )}
+
+            {tenants.data && <OnboardingChecklist tenants={list} onAddTestCustomer={() => openCreate(true)} />}
 
             <Panel flush>
                 <div className={`hidden items-end gap-4 border-b border-ink/70 bg-paper-deep/50 px-5 pb-2 pt-2.5 md:grid ${COLS}`}>
@@ -102,7 +116,7 @@ export default function Customers() {
                         title="No customers yet"
                         action={
                             <div className="flex flex-col items-center gap-3">
-                                <Button variant="primary" onClick={() => setCreateOpen(true)}>
+                                <Button variant="primary" onClick={() => openCreate()}>
                                     <Plus size={15} /> Add your first customer
                                 </Button>
                                 <Link to={HOOD_HOME} className="inline-flex items-center gap-1 text-[13px] font-medium text-blueprint hover:underline">

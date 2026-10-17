@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { createTenant, getOrganisation } from '../lib/api';
@@ -18,11 +18,13 @@ interface CreateTenantModalProps {
     isOpen: boolean;
     onClose: () => void;
     onCreated: (tenant: Tenant) => void;
+    // Opens with the test-mode box ticked (the onboarding checklist's "Add a test customer").
+    initialTest?: boolean;
 }
 
 type PlanId = (typeof PLANS)[number]['id'];
 
-export default function CreateTenantModal({ isOpen, onClose, onCreated }: CreateTenantModalProps) {
+export default function CreateTenantModal({ isOpen, onClose, onCreated, initialTest = false }: CreateTenantModalProps) {
     const [name, setName] = useState('');
     const [subdomain, setSubdomain] = useState('');
     const [touched, setTouched] = useState(false);
@@ -36,6 +38,10 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
     // For the address preview only; the API computes the real address.
     const organisation = useResource(getOrganisation);
     const host = (sub: string) => previewHost(sub || 'globex', organisation.data?.baseDomain);
+
+    useEffect(() => {
+        if (isOpen && initialTest) setTest(true);
+    }, [isOpen, initialTest]);
 
     const reset = () => {
         setName('');
