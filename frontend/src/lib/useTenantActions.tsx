@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import { cancelTenant, deleteTenant } from './api';
 import { apiMessage } from './errors';
 import type { Tenant } from './types';
+import { useIsSimple } from './viewMode';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 interface Pending {
@@ -13,6 +14,7 @@ interface Pending {
 export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDeleted?: (t: Tenant) => void } = {}) {
     const [pending, setPending] = useState<Pending | null>(null);
     const [busy, setBusy] = useState(false);
+    const simple = useIsSimple();
 
     const confirm = async () => {
         if (!pending) return;
@@ -21,7 +23,7 @@ export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDe
         try {
             if (kind === 'cancel') {
                 await cancelTenant(tenant.id, 'Cancelled by operator');
-                toast.success(`Provisioning cancelled for ${tenant.name}`);
+                toast.success(simple ? `Setup cancelled for ${tenant.name}` : `Provisioning cancelled for ${tenant.name}`);
                 opts.onCancelled?.(tenant);
             } else {
                 await deleteTenant(tenant.id);
@@ -30,7 +32,7 @@ export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDe
             }
             setPending(null);
         } catch (err) {
-            toast.error(apiMessage(err, kind === 'cancel' ? 'Could not cancel provisioning.' : 'Could not delete the tenant.'));
+            toast.error(apiMessage(err, kind === 'cancel' ? (simple ? 'Could not cancel setup.' : 'Could not cancel provisioning.') : 'Could not delete the tenant.'));
         } finally {
             setBusy(false);
         }
@@ -40,9 +42,15 @@ export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDe
     const dialog = (
         <ConfirmDialog
             isOpen={!!pending}
-            title={pending?.kind === 'delete' ? `Delete ${name}?` : `Cancel provisioning for ${name}?`}
+            title={pending?.kind === 'delete' ? `Delete ${name}?` : simple ? `Cancel setup for ${name}?` : `Cancel provisioning for ${name}?`}
             message={
-                pending?.kind === 'delete' ? (
+                simple ? (
+                    pending?.kind === 'delete' ? (
+                        <>This removes {name} and its history. It can't be undone.</>
+                    ) : (
+                        <>Setup stops where it is. Steps that already finished are kept.</>
+                    )
+                ) : pending?.kind === 'delete' ? (
                     <>
                         tenant-service publishes <code className="font-mono text-[13px] text-ink">tenant.deleted</code>, then removes
                         the tenant and its event history. This can't be undone.
@@ -54,7 +62,7 @@ export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDe
                     </>
                 )
             }
-            confirmLabel={pending?.kind === 'delete' ? 'Delete tenant' : 'Cancel provisioning'}
+            confirmLabel={pending?.kind === 'delete' ? 'Delete tenant' : simple ? 'Cancel setup' : 'Cancel provisioning'}
             loading={busy}
             onConfirm={confirm}
             onCancel={() => setPending(null)}

@@ -1,9 +1,11 @@
 import { Suspense, lazy } from 'react';
+import type { ReactNode } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './lib/auth';
 import ProtectedRoute from './components/ProtectedRoute';
 import Toaster from './components/Toaster';
 import Landing from './pages/Landing';
+import { useViewMode } from './lib/viewMode';
 
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
@@ -18,6 +20,13 @@ const FailedJobs = lazy(() => import('./pages/FailedJobs'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Support = lazy(() => import('./pages/Support'));
 const NotFound = lazy(() => import('./pages/NotFound'));
+const SimpleOverview = lazy(() => import('./pages/simple/SimpleOverview'));
+const SimpleTenant = lazy(() => import('./pages/simple/SimpleTenant'));
+
+// Same route, different surface: the header toggle picks which one renders.
+function ByView({ engineering, simple }: { engineering: ReactNode; simple: ReactNode }) {
+    return <>{useViewMode() === 'simple' ? simple : engineering}</>;
+}
 
 function App() {
     return (
@@ -32,9 +41,9 @@ function App() {
                         <Route path="/about" element={<Landing />} />
 
                         <Route path="/" element={<ProtectedRoute />}>
-                            <Route index element={<Dashboard />} />
-                            <Route path="tenants" element={<TenantManagement />} />
-                            <Route path="tenants/:id" element={<TenantDetail />} />
+                            <Route index element={<ByView engineering={<Dashboard />} simple={<SimpleOverview />} />} />
+                            <Route path="tenants" element={<ByView engineering={<TenantManagement />} simple={<SimpleOverview />} />} />
+                            <Route path="tenants/:id" element={<ByView engineering={<TenantDetail />} simple={<SimpleTenant />} />} />
                             <Route path="events" element={<EventLogs />} />
                             <Route path="pipeline" element={<Pipeline />} />
                             <Route path="health" element={<Health />} />

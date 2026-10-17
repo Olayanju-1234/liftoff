@@ -7,8 +7,10 @@ import { checkHealth, getTenants } from '../lib/api';
 import { useNow, useResource } from '../lib/hooks';
 import { condition } from '../lib/pipeline';
 import { cn } from '../lib/cn';
+import { useIsSimple } from '../lib/viewMode';
 import { Wordmark } from './ui/Brand';
 import { Swatch } from './ui/Tag';
+import ViewToggle from './ViewToggle';
 
 interface NavItem {
     to: string;
@@ -44,6 +46,21 @@ const NAV: { group: string; items: NavItem[] }[] = [
     },
 ];
 
+// The Simple view keeps the same routes but only links the pages a non-technical user needs.
+const SIMPLE_NAV: { group: string; items: NavItem[] }[] = [
+    {
+        group: 'Workspace',
+        items: [{ to: '/', label: 'Overview', n: '01', end: true, badge: 'attention' }],
+    },
+    {
+        group: 'Account',
+        items: [
+            { to: '/settings', label: 'Settings', n: '02' },
+            { to: '/support', label: 'Help', n: '03' },
+        ],
+    },
+];
+
 const CRUMBS: Record<string, string> = {
     '': 'Overview',
     tenants: 'Tenants',
@@ -66,6 +83,7 @@ const API_HOST = (() => {
 export default function Layout() {
     const [menuOpen, setMenuOpen] = useState(false);
     const location = useLocation();
+    const simple = useIsSimple();
     const now = useNow();
     const health = useResource(checkHealth, { interval: 30_000 });
     const tenants = useResource(getTenants, { interval: 30_000 });
@@ -78,13 +96,13 @@ export default function Layout() {
     };
 
     const [first, second] = location.pathname.split('/').filter(Boolean);
-    const crumbs = [CRUMBS[first ?? ''] ?? 'Not found', second ? `${second.slice(0, 10)}…` : null].filter(Boolean);
+    const crumbs = [CRUMBS[first ?? ''] ?? 'Not found', second ? (simple ? 'Tenant' : `${second.slice(0, 10)}…`) : null].filter(Boolean);
 
     const gw = health.data;
     const utc = new Date(now).toISOString().slice(11, 19);
 
     const rail = (
-        <RailContent counts={counts} onNavigate={() => setMenuOpen(false)} />
+        <RailContent counts={counts} simple={simple} onNavigate={() => setMenuOpen(false)} />
     );
 
     return (
@@ -134,28 +152,49 @@ export default function Layout() {
                             </span>
                         ))}
                     </nav>
-                    <div className="ml-auto flex items-center gap-4 font-mono text-[11px] uppercase tracking-[0.08em]">
-                        <span className="num hidden text-ink-3 sm:inline" title="Coordinated Universal Time">
-                            {utc} UTC
-                        </span>
-                        <Link
-                            to="/health"
-                            className="flex items-center gap-2 rounded-sm border border-rule-strong bg-card px-2 py-1 text-ink-2 transition-colors hover:border-ink-3"
-                            title={`Gateway at ${API_HOST}`}
-                        >
-                            <span className="hidden text-ink-3 md:inline">Gateway</span>
-                            {gw ? (
-                                <>
-                                    <Swatch tone={gw.status === 'Operational' ? 'go' : 'abort'} />
-                                    <span className={gw.status === 'Operational' ? 'text-go' : 'text-abort'}>
-                                        {gw.status === 'Operational' ? 'Go' : 'No-go'}
-                                    </span>
-                                    <span className="num text-ink-3">{gw.latency} ms</span>
-                                </>
-                            ) : (
-                                <span className="text-ink-3">Polling…</span>
-                            )}
-                        </Link>
+                    <div className="ml-auto flex items-center gap-3 font-mono text-[11px] uppercase tracking-[0.08em] sm:gap-4">
+                        {!simple && (
+                            <span className="num hidden text-ink-3 sm:inline" title="Coordinated Universal Time">
+                                {utc} UTC
+                            </span>
+                        )}
+                        <ViewToggle />
+                        {simple ? (
+                            <span
+                                className="hidden items-center gap-2 rounded-sm border border-rule-strong bg-card px-2 py-1 text-ink-2 sm:flex"
+                                title="Connection to the Liftoff server"
+                            >
+                                {gw ? (
+                                    <>
+                                        <Swatch tone={gw.status === 'Operational' ? 'go' : 'abort'} />
+                                        <span className={gw.status === 'Operational' ? 'text-go' : 'text-abort'}>
+                                            {gw.status === 'Operational' ? 'Connected' : 'Connection problem'}
+                                        </span>
+                                    </>
+                                ) : (
+                                    <span className="text-ink-3">Connecting…</span>
+                                )}
+                            </span>
+                        ) : (
+                            <Link
+                                to="/health"
+                                className="flex items-center gap-2 rounded-sm border border-rule-strong bg-card px-2 py-1 text-ink-2 transition-colors hover:border-ink-3"
+                                title={`Gateway at ${API_HOST}`}
+                            >
+                                <span className="hidden text-ink-3 md:inline">Gateway</span>
+                                {gw ? (
+                                    <>
+                                        <Swatch tone={gw.status === 'Operational' ? 'go' : 'abort'} />
+                                        <span className={gw.status === 'Operational' ? 'text-go' : 'text-abort'}>
+                                            {gw.status === 'Operational' ? 'Go' : 'No-go'}
+                                        </span>
+                                        <span className="num text-ink-3">{gw.latency} ms</span>
+                                    </>
+                                ) : (
+                                    <span className="text-ink-3">Polling…</span>
+                                )}
+                            </Link>
+                        )}
                     </div>
                 </div>
 
@@ -173,9 +212,11 @@ export default function Layout() {
 
 function RailContent({
     counts,
+    simple,
     onNavigate,
 }: {
     counts: Record<'tenants' | 'inflight' | 'attention', number>;
+    simple: boolean;
     onNavigate: () => void;
 }) {
     const { user, logout } = useAuth();
@@ -202,7 +243,7 @@ function RailContent({
                 </Link>
             </div>
             <nav className="scrollbar-thin flex-1 overflow-y-auto px-3" aria-label="Main">
-                {NAV.map((group) => (
+                {(simple ? SIMPLE_NAV : NAV).map((group) => (
                     <div key={group.group} className="mb-5">
                         <p className="label mb-1.5 px-2 text-ink-4">{group.group}</p>
                         <ul className="space-y-0.5">
@@ -274,9 +315,11 @@ function RailContent({
                         <LogOut size={15} />
                     </button>
                 </div>
-                <p className="mt-2 truncate px-2 font-mono text-[10px] text-ink-4" title="API gateway">
-                    api · {API_HOST}
-                </p>
+                {!simple && (
+                    <p className="mt-2 truncate px-2 font-mono text-[10px] text-ink-4" title="API gateway">
+                        api · {API_HOST}
+                    </p>
+                )}
             </div>
         </>
     );
