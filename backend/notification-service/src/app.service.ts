@@ -5,12 +5,13 @@ import {
   AmqpConnection,
   Nack,
 } from '@golevelup/nestjs-rabbitmq';
-import type {
-  NotificationOutcome,
-  NotificationSkipReason,
-  ProvisioningCompletePayload,
-  TenantBillingActivePayload,
-  TenantFailedPayload,
+import {
+  isLiveTenant,
+  type NotificationOutcome,
+  type NotificationSkipReason,
+  type ProvisioningCompletePayload,
+  type TenantBillingActivePayload,
+  type TenantFailedPayload,
 } from '@liftoff/shared-types';
 import { EmailService } from './email.service';
 import { InternalApiClient } from './internal-api.client';
@@ -48,7 +49,7 @@ export class AppService {
     },
   })
   public async handleTenantBillingActive(payload: TenantBillingActivePayload) {
-    let outcome: NotificationOutcome;
+    let outcome: NotificationOutcome | null;
     try {
       outcome = await this.notifyReady(payload.tenantId);
     } catch (error) {
@@ -57,6 +58,10 @@ export class AppService {
         `Could not tell the company that tenant ${payload.tenantId} is ready: ${errorMessage(error)}`,
       );
       return new Nack(false);
+    }
+    if (outcome === null) {
+      // The tenant was cancelled or removed while billing ran: nothing to say, nothing to finish.
+      return;
     }
 
     const complete: ProvisioningCompletePayload = {
@@ -98,6 +103,10 @@ export class AppService {
       const details = await this.internalApi.notificationDetails(
         payload.tenantId,
       );
+      if (!isLiveTenant(details.tenant.status)) {
+        this.logStale(payload.tenantId, details.tenant.status);
+        return;
+      }
       const to = details.recipients.attention;
       if (to.length === 0) {
         this.logger.warn(
@@ -125,13 +134,20 @@ export class AppService {
     }
   }
 
-  private async notifyReady(tenantId: string): Promise<NotificationOutcome> {
+  // Null when the tenant is no longer being set up, so no email goes out for it.
+  private async notifyReady(
+    tenantId: string,
+  ): Promise<NotificationOutcome | null> {
     const skip = this.skipReason();
     if (skip) {
       this.logger.warn(`Notification for tenant ${tenantId} skipped: ${skip}`);
       return { sent: false, recipients: 0, skipReason: skip };
     }
     const details = await this.internalApi.notificationDetails(tenantId);
+    if (!isLiveTenant(details.tenant.status)) {
+      this.logStale(tenantId, details.tenant.status);
+      return null;
+    }
     const to = details.recipients.ready;
     if (to.length === 0) {
       this.logger.warn(
@@ -144,6 +160,12 @@ export class AppService {
       `Emailed ${to.length} recipient(s): ${details.tenant.name} is ready`,
     );
     return { sent: true, recipients: to.length };
+  }
+
+  private logStale(tenantId: string, status: string): void {
+    this.logger.debug(
+      `Not emailing the company about tenant ${tenantId}: it is ${status}, no longer being set up`,
+    );
   }
 
   private skipReason(): NotificationSkipReason | undefined {

@@ -152,6 +152,44 @@ describe('AppService', () => {
       );
     });
 
+    it.each(['CANCELLED', 'DEPROVISIONING', 'DELETED'])(
+      'sends nothing and publishes nothing when the tenant is %s by the time billing finishes',
+      async (status) => {
+        const debug = jest
+          .spyOn(Logger.prototype, 'debug')
+          .mockImplementation(() => undefined);
+        internalApi.notificationDetails.mockResolvedValueOnce({
+          ...details,
+          tenant: { ...details.tenant, status },
+        });
+
+        await expect(
+          service.handleTenantBillingActive(payload),
+        ).resolves.toBeUndefined();
+
+        expect(email.send).not.toHaveBeenCalled();
+        expect(amqp.publish).not.toHaveBeenCalled();
+        expect(debug).toHaveBeenCalledWith(
+          expect.stringContaining(`tenant tenant-1: it is ${status}`),
+        );
+      },
+    );
+
+    it.each(['FAILED', 'ACTIVE'])(
+      'still emails a %s tenant (a replayed step, or a result handled late)',
+      async (status) => {
+        internalApi.notificationDetails.mockResolvedValueOnce({
+          ...details,
+          tenant: { ...details.tenant, status },
+        });
+
+        await service.handleTenantBillingActive(payload);
+
+        expect(email.send).toHaveBeenCalledTimes(1);
+        expect(amqp.publish).toHaveBeenCalledTimes(1);
+      },
+    );
+
     it('completes the saga as not sent (no-provider) without asking tenant-service when no email provider is set', async () => {
       email.enabled = false;
 
@@ -270,6 +308,16 @@ describe('AppService', () => {
       internalApi.notificationDetails.mockResolvedValueOnce({
         ...details,
         recipients: { ready: ['ops@acme.com'], attention: [] },
+      });
+
+      await expect(service.handleTenantFailed(failed)).resolves.toBeUndefined();
+      expect(email.send).not.toHaveBeenCalled();
+    });
+
+    it('sends nothing when the tenant was removed between failing and this message', async () => {
+      internalApi.notificationDetails.mockResolvedValueOnce({
+        ...details,
+        tenant: { ...details.tenant, status: 'DELETED' },
       });
 
       await expect(service.handleTenantFailed(failed)).resolves.toBeUndefined();
