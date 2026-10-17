@@ -36,7 +36,10 @@ export class AppService {
     );
 
     try {
-      const schemaName = `tenant_${payload.subdomain.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      // tenant-service names the schema; messages from before that carried only the subdomain.
+      const schemaName =
+        payload.schemaName ??
+        `tenant_${payload.subdomain.replace(/[^a-zA-Z0-9]/g, '_')}`;
 
       await this.prisma.$executeRawUnsafe(
         `CREATE SCHEMA IF NOT EXISTS "${schemaName}";`,
