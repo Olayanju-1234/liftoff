@@ -43,6 +43,9 @@ export declare class CreateApiKeyDto {
 }
 export declare const API_KEY_HEADER = "x-api-key";
 export declare const API_KEY_PREFIX = "lk_";
+export declare const IDEMPOTENCY_KEY_HEADER = "idempotency-key";
+export declare const IDEMPOTENCY_KEY_MAX_LENGTH = 255;
+export declare const IDEMPOTENT_REPLAYED_HEADER = "idempotent-replayed";
 export declare const WEBHOOK_SIGNATURE_HEADER = "x-liftoff-signature";
 export declare const WEBHOOK_EVENT_HEADER = "x-liftoff-event";
 export declare const WEBHOOK_DELIVERY_HEADER = "x-liftoff-delivery";

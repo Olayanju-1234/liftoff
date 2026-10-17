@@ -238,6 +238,17 @@ export const API_KEY_HEADER = 'x-api-key';
 export const API_KEY_PREFIX = 'lk_';
 
 // ============================================================================
+// Idempotency
+// ============================================================================
+
+// Sent on POST /tenants. The first response for a key is stored per organisation for
+// 24 h and replayed on a repeat; a repeat with a different body gets 422.
+export const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
+export const IDEMPOTENCY_KEY_MAX_LENGTH = 255;
+// Set to "true" on a response that was replayed rather than produced by this request.
+export const IDEMPOTENT_REPLAYED_HEADER = 'idempotent-replayed';
+
+// ============================================================================
 // Webhooks
 // ============================================================================
 
