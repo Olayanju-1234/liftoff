@@ -17,4 +17,9 @@ export class InternalController {
   billingConfig(@Param('id', ParseCuidPipe) id: string) {
     return this.internal.billingConfig(id);
   }
+
+  @Get('tenants/:id/notification')
+  notificationDetails(@Param('id', ParseCuidPipe) id: string) {
+    return this.internal.notificationDetails(id);
+  }
 }

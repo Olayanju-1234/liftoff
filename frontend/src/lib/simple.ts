@@ -9,7 +9,7 @@ export const STEP_NAMES: Record<StepKey, string> = {
     dnsStatus: 'Setting up their address',
     credentialsStatus: 'Generating their API keys',
     billingStatus: 'Starting their trial',
-    notificationStatus: 'Sending their welcome email',
+    notificationStatus: 'Letting your team know',
 };
 
 export const stepName = (stage: Stage) => STEP_NAMES[stage.key];

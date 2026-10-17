@@ -149,8 +149,8 @@ const STEP_NOTES: Record<string, { plain: string; honest?: string }> = {
         honest: 'Until you connect Stripe the step is recorded as SKIPPED, not simulated: no customer, no subscription, and the dashboard says "Billing: not connected". A plan without a price fails the step with the reason in the event log.',
     },
     notificationStatus: {
-        plain: 'Marks the end of the pipeline: the welcome is logged, provisioning.complete is published, and the tenant becomes ACTIVE.',
-        honest: 'The welcome is logged rather than emailed today; the tenant.active webhook is delivered. Emailing your team ships with the next release.',
+        plain: 'Emails your team "<Customer> is ready" (address, plan, a link to the customer), publishes provisioning.complete, and the tenant becomes ACTIVE. If a step fails you get "<Customer> needs attention" with the reason. Recipients are your users with a verified email and the matching toggle on under Settings → Notifications.',
+        honest: 'Nothing is sent to your customer: their welcome is yours to send from the tenant.active webhook, in your own voice. The step reads SKIPPED when nobody in your company could be emailed.',
     },
 };
 
@@ -325,7 +325,7 @@ export default function Docs() {
                     />
                     <p>
                         Step statuses are <Code>PENDING</Code>, <Code>IN_PROGRESS</Code>, <Code>SUCCESS</Code>, <Code>FAILED</Code>, <Code>CANCELLED</Code> or{' '}
-                        <Code>SKIPPED</Code> (billing on a test tenant, or when your company has not connected Stripe). The dashboard
+                        <Code>SKIPPED</Code> (billing on a test tenant or when your company has not connected Stripe; notification when nobody could be emailed). The dashboard
                         additionally shows a step as <em>stalled</em> when it has been IN_PROGRESS for more than {STALL_AFTER_MS / 1000} seconds; the API does not have that
                         state, so compute it from <Code>updatedAt</Code> if you need it.
                     </p>

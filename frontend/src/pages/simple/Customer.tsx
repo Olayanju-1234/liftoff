@@ -160,7 +160,11 @@ export default function Customer() {
                                 </div>
                                 <div className="text-right">
                                     <p className={cn('text-[13.5px] font-medium', TONE_TEXT[meta.tone], state === 'PENDING' && 'text-ink-4')}>
-                                        {stage.key === 'billingStatus' && billingSkip(tenant) === 'not-connected' ? 'Not connected' : meta.label}
+                                        {stage.key === 'billingStatus' && billingSkip(tenant) === 'not-connected'
+                                            ? 'Not connected'
+                                            : stage.key === 'notificationStatus' && state === 'SKIPPED'
+                                              ? 'Not emailed'
+                                              : meta.label}
                                     </p>
                                     {took && <p className="num font-mono text-[11px] text-ink-3">took {took}</p>}
                                 </div>
@@ -321,7 +325,7 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
         case 'running':
             tone = 'ignite';
             head = stage ? `${stepName(stage)}.` : 'Setting this customer up.';
-            body = 'This usually takes less than a minute. They get a welcome email once everything is ready.';
+            body = "This usually takes less than a minute. You'll get an email when they're ready; welcoming the customer is yours to do from the tenant.active webhook.";
             break;
         case 'waiting':
             tone = 'scrub';

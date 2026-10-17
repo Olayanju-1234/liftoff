@@ -115,9 +115,21 @@ export interface TenantBillingActivePayload extends TestModeFlag {
     skipped?: boolean;
     skipReason?: BillingSkipReason;
 }
+export type NotificationSkipReason = 'no-provider' | 'no-recipient' | 'not-configured';
+export interface NotificationOutcome {
+    sent: boolean;
+    recipients: number;
+    skipReason?: NotificationSkipReason;
+}
 export interface ProvisioningCompletePayload {
     tenantId: string;
     subdomain: string;
+    notification?: NotificationOutcome;
+}
+export interface TenantFailedPayload {
+    tenantId: string;
+    step: string;
+    error: string;
 }
 export declare const INTERNAL_TOKEN_HEADER = "x-internal-token";
 export interface InternalBillingConfig {
@@ -127,4 +139,23 @@ export interface InternalBillingConfig {
     configured: boolean;
     stripeSecretKey: string | null;
     prices: StripePrices;
+}
+export interface InternalTenantNotification {
+    tenant: {
+        id: string;
+        name: string;
+        subdomain: string;
+        address: string;
+        planId: string;
+        status: string;
+        isTest: boolean;
+    };
+    organisation: {
+        id: string;
+        name: string;
+    };
+    recipients: {
+        ready: string[];
+        attention: string[];
+    };
 }

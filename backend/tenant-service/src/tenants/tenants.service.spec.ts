@@ -315,6 +315,34 @@ describe('TenantsService', () => {
       expect(updateCall.data.notificationStatus).toBe(StepStatus.SUCCESS);
     });
 
+    it('records notification as SKIPPED when notification-service sent nothing', async () => {
+      prisma.tenant.update.mockResolvedValueOnce({});
+
+      await service.handleProvisioningComplete({
+        tenantId: 't',
+        subdomain: 's',
+        notification: { sent: false, recipients: 0, skipReason: 'no-provider' },
+      });
+
+      const [[updateCall]] = prisma.tenant.update.mock.calls;
+      expect(updateCall.data.status).toBe(TenantStatus.ACTIVE);
+      expect(updateCall.data.notificationStatus).toBe(StepStatus.SKIPPED);
+      expect(webhooks.notify).toHaveBeenCalledWith('t', 'tenant.active');
+    });
+
+    it('records notification as SUCCESS when the company was emailed', async () => {
+      prisma.tenant.update.mockResolvedValueOnce({});
+
+      await service.handleProvisioningComplete({
+        tenantId: 't',
+        subdomain: 's',
+        notification: { sent: true, recipients: 1 },
+      });
+
+      const [[updateCall]] = prisma.tenant.update.mock.calls;
+      expect(updateCall.data.notificationStatus).toBe(StepStatus.SUCCESS);
+    });
+
     it('notifies the company webhook once the tenant is ACTIVE', async () => {
       prisma.tenant.update.mockResolvedValueOnce({});
 
@@ -573,6 +601,24 @@ describe('TenantsService', () => {
         },
       });
       expect(webhooks.notify).toHaveBeenCalledWith('t', 'tenant.failed');
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.failed',
+        {
+          tenantId: 't',
+          step: 'billingStatus',
+          error: 'billing-queue rejected',
+        },
+        { timeout: 5_000 },
+      );
+    });
+
+    it('still fails the step when tenant.failed cannot be published', async () => {
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+      amqp.publish.mockRejectedValueOnce(new Error('broker down'));
+
+      await expect(service.failStep('t', 'dbStatus', 'x')).resolves.toBe(true);
+      expect(webhooks.notify).toHaveBeenCalledWith('t', 'tenant.failed');
     });
 
     it('leaves a tenant that is gone, active or cancelled alone', async () => {
@@ -581,6 +627,7 @@ describe('TenantsService', () => {
       await expect(service.failStep('t', 'dbStatus', 'x')).resolves.toBe(false);
       expect(prisma.eventLog.create).not.toHaveBeenCalled();
       expect(webhooks.notify).not.toHaveBeenCalled();
+      expect(amqp.publish).not.toHaveBeenCalled();
     });
   });
 

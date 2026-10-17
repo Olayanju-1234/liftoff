@@ -85,7 +85,7 @@ graph LR
 | credentials-service | 3003 | Generates and stores API keys per tenant |
 | dns-provisioner-service | 3004 | Registers subdomain DNS records |
 | billing-service | 3005 | Subscribes the tenant in the company's own Stripe account (14-day trial), or records the step as SKIPPED |
-| notification-service | 3006 | Sends welcome email and publishes provisioning.complete |
+| notification-service | 3006 | Emails the company "<Customer> is ready" / "needs attention" and publishes provisioning.complete |
 
 ### API Gateway
 
@@ -104,6 +104,12 @@ Steps never move backwards. Each worker consumes its event in parallel with tena
 ### Billing Service
 
 Subscribes to `tenant.credentials.ready`. Billing is never simulated. The company connects its own Stripe account with `PUT /organisation {"stripeSecretKey": "sk_…", "stripePrices": {"starter": "price_…", …}}` (Settings → Billing in the dashboard); the key is stored AES-256-GCM encrypted with `ORG_SECRETS_KEY` and never returned (`stripeConfigured: true` instead). For each tenant, billing-service fetches that configuration from tenant-service's internal API (`GET /internal/tenants/:id/billing`, authenticated with the shared `INTERNAL_API_TOKEN`, so the key never travels through RabbitMQ), creates a Stripe Customer and a Subscription with a 14-day trial on the price mapped to the tenant's plan, and publishes `tenant.billing.active` with the real ids, which tenant-service stores on the tenant. With no Stripe connected, or for a test tenant, it publishes `skipped: true` with a `skipReason` and the step is recorded as `SKIPPED`: the dashboard then says "Billing: not connected".
+
+### Notification Service
+
+Subscribes to `tenant.billing.active` and emails **the company**, not the customer: "<Customer> is ready", with the address and plan and a link to the customer page. Recipients are the organisation's users with a verified email and *Email notifications* on. It then publishes `tenant.provisioning.complete` with `notification: { sent, recipients, skipReason? }`; tenant-service records the step as `SUCCESS` or, when nothing was sent (no provider, nobody to send to), `SKIPPED`, and the tenant goes `ACTIVE` either way. It also subscribes to `tenant.failed`, which tenant-service publishes whenever a step is marked `FAILED`, and emails "<Customer> needs attention" with the step and the error to the users with *Failed provisioning alerts* on.
+
+The customer-facing welcome is the company's job: the `tenant.active` webhook carries the tenant, its address and plan, so the company's own product sends the welcome in its own voice.
 
 ---
 
@@ -141,7 +147,7 @@ sequenceDiagram
     Billing->>RabbitMQ: publish tenant.billing.active
 
     RabbitMQ->>Notify: consume tenant.billing.active
-    Notify->>Admin: Send welcome email
+    Notify->>Admin: Email the company: "<Customer> is ready"
     Notify->>RabbitMQ: publish tenant.provisioning.complete
 ```
 
@@ -168,7 +174,11 @@ interface TenantBillingActivePayload {
   subscriptionStatus; trialEnd: string | null;
   skipped?: boolean; skipReason?: 'test' | 'not-connected';
 }
-interface ProvisioningCompletePayload { tenantId; subdomain }
+interface ProvisioningCompletePayload {
+  tenantId; subdomain;
+  notification?: { sent: boolean; recipients: number; skipReason?: 'no-provider' | 'no-recipient' | 'not-configured' };
+}
+interface TenantFailedPayload { tenantId; step; error }   // tenant-service → notification-service, "<Customer> needs attention"
 ```
 
 ---
@@ -501,7 +511,9 @@ migration steps are written up in
 - `RESEND_API_KEY` (preferred), else `SENDGRID_API_KEY`, plus `EMAIL_FROM` (`noreply@…` or `Name <noreply@…>`). With neither key nothing is sent, and the log records only the recipient and subject, never the body or its links.
 
 **Notification Service:**
-- No extra variables; its welcome-email step is a mock
+- `RESEND_API_KEY` (preferred) or `SENDGRID_API_KEY`, plus `EMAIL_FROM`: the same values as tenant-service. Without a provider the company is not emailed and the step is `SKIPPED`.
+- `FRONTEND_URL`: for the "Open in Liftoff" links.
+- `TENANT_SERVICE_URL`, `INTERNAL_API_TOKEN`: to look up the tenant and the company's recipients.
 
 ---
 

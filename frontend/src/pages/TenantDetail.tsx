@@ -205,7 +205,11 @@ function buildBoxes(tenant: Tenant, timeline: ReturnType<typeof stageTimings>, n
             case 'CANCELLED':
                 return { tone: 'cancel', badge: 'CANCELLED' };
             case 'SKIPPED':
-                return { tone: 'idle', badge: 'SKIPPED', meta: billingSkip(tenant) === 'test' ? 'test tenant' : 'Stripe not connected' };
+                return {
+                    tone: 'idle',
+                    badge: 'SKIPPED',
+                    meta: stage.key === 'notificationStatus' ? 'nothing sent' : billingSkip(tenant) === 'test' ? 'test tenant' : 'Stripe not connected',
+                };
             default:
                 return { tone: 'idle', badge: 'PENDING' };
         }
