@@ -27,6 +27,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
     const [subdomain, setSubdomain] = useState('');
     const [touched, setTouched] = useState(false);
     const [plan, setPlan] = useState<PlanId>('pro');
+    const [test, setTest] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     // One key per form fill: resubmitting after a timeout replays the first result instead of creating twice.
@@ -41,6 +42,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
         setSubdomain('');
         setTouched(false);
         setPlan('pro');
+        setTest(false);
         setError('');
         setIdempotencyKey(crypto.randomUUID());
     };
@@ -56,7 +58,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
         setLoading(true);
         setError('');
         try {
-            const tenant = await createTenant({ name: name.trim(), subdomain, planId: plan }, idempotencyKey);
+            const tenant = await createTenant({ name: name.trim(), subdomain, planId: plan, ...(test && { test: true }) }, idempotencyKey);
             reset();
             onCreated(tenant);
         } catch (err) {
@@ -165,6 +167,18 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
                         {simple ? 'Every plan starts with a 14-day free trial.' : 'Billing maps the plan to a Stripe price and starts a 14-day trial.'}
                     </p>
                 </fieldset>
+
+                <label className="flex cursor-pointer items-start gap-3 rounded border border-rule-strong bg-card px-3 py-2.5 hover:border-ink-3">
+                    <input type="checkbox" checked={test} onChange={(e) => setTest(e.target.checked)} className="mt-1 h-4 w-4 accent-ink" />
+                    <span className="min-w-0">
+                        <span className="block text-[14.5px] font-medium text-ink">{simple ? 'Test customer' : 'Test mode'}</span>
+                        <span className="block text-[13px] text-ink-3">
+                            {simple
+                                ? "Set up exactly like a real customer, but never billed and not counted towards your limits. Remove it whenever you're done."
+                                : 'Provisions normally; the billing step is recorded as SKIPPED and no Stripe calls are made. Excluded from the quotas.'}
+                        </span>
+                    </span>
+                </label>
 
                 <div className="rounded border border-dashed border-rule-strong bg-paper/60 px-4 py-3">
                     <p className="label mb-2">What happens next</p>

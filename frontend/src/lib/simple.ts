@@ -47,6 +47,7 @@ export const SIMPLE_STEP_STATE: Record<StageState, { label: string; tone: Tone }
     SUCCESS: { label: 'Done', tone: 'go' },
     FAILED: { label: 'Failed', tone: 'abort' },
     CANCELLED: { label: 'Cancelled', tone: 'scrub' },
+    SKIPPED: { label: 'Skipped', tone: 'scrub' },
 };
 
 export const PLAN_BLURBS: Record<string, string> = {

@@ -9,7 +9,7 @@ const api = axios.create({
 export const getTenants = () => api.get<Tenant[]>('/tenants').then(res => res.data);
 export const getTenant = (id: string) => api.get<Tenant>(`/tenants/${id}`).then(res => res.data);
 // Each attempt from the dashboard carries a key, so a retried click cannot create two tenants.
-export const createTenant = (data: { name: string; subdomain: string; planId: string }, idempotencyKey?: string) =>
+export const createTenant = (data: { name: string; subdomain: string; planId: string; test?: boolean }, idempotencyKey?: string) =>
     api.post<Tenant>('/tenants', data, idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : undefined).then(res => res.data);
 export const deleteTenant = (id: string) => api.delete(`/tenants/${id}`).then(res => res.data);
 export const cancelTenant = (id: string, reason?: string) =>

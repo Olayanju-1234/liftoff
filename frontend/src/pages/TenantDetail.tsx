@@ -41,7 +41,7 @@ import PageHeader from '../components/ui/PageHeader';
 import Panel from '../components/ui/Panel';
 import Button from '../components/ui/Button';
 import Empty from '../components/ui/Empty';
-import { ConditionTag, Swatch } from '../components/ui/Tag';
+import { ConditionTag, Swatch, Tag } from '../components/ui/Tag';
 import Schematic from '../components/pipeline/Schematic';
 import type { BoxView, CoreView } from '../components/pipeline/Schematic';
 import StageTimeline from '../components/pipeline/StageTimeline';
@@ -117,6 +117,11 @@ export default function TenantDetail() {
                 aside={
                     <div className="flex flex-wrap items-center gap-3">
                         <ConditionTag condition={cond} />
+                        {tenant.isTest && (
+                            <Tag tone="blueprint" title="Test tenant: billing SKIPPED, outside the quotas, deletable any time.">
+                                Test
+                            </Tag>
+                        )}
                         <SequenceTrack tenant={tenant} now={now} size="md" labels />
                         {live && (
                             <span className="font-mono text-[11px] text-ink-3">
@@ -198,6 +203,8 @@ function buildBoxes(tenant: Tenant, timeline: ReturnType<typeof stageTimings>, n
                 return { tone: 'fail', badge: 'FAILED', dlq: true };
             case 'CANCELLED':
                 return { tone: 'cancel', badge: 'CANCELLED' };
+            case 'SKIPPED':
+                return { tone: 'idle', badge: 'SKIPPED', meta: 'test tenant' };
             default:
                 return { tone: 'idle', badge: 'PENDING' };
         }

@@ -17,6 +17,8 @@ export interface Tenant {
     address?: string;
     // The Postgres schema db-provisioner created for it.
     schemaName?: string | null;
+    // Test mode: set up like a real tenant, billing SKIPPED, outside the quotas, deletable any time.
+    isTest?: boolean;
     createdAt: string;
     updatedAt: string;
 }
@@ -36,7 +38,7 @@ export interface Organisation {
 }
 
 export type TenantStatus = 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'FAILED' | 'CANCELLED';
-export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'SUCCESS' | 'FAILED' | 'CANCELLED';
+export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'SKIPPED';
 
 // Plan types
 export interface Plan {

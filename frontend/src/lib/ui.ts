@@ -75,6 +75,7 @@ export const STAGE_STATE_META: Record<StageState, { label: string; tone: Tone }>
     SUCCESS: { label: 'Done', tone: 'ink' },
     FAILED: { label: 'Failed', tone: 'abort' },
     CANCELLED: { label: 'Cancelled', tone: 'scrub' },
+    SKIPPED: { label: 'Skipped', tone: 'scrub' },
 };
 
 export const EVENT_TONE: Record<string, Tone> = {

@@ -13,13 +13,13 @@ const FAQ: [string, React.ReactNode][] = [
     [
         'What happens when I reach 10 active tenants on Free?',
         <>
-            Nothing stops you today; the limit is enforced from the next release. After that, <Code>POST /tenants</Code> answers 429 with a plain message until you delete
-            a tenant or upgrade. Existing tenants keep running either way.
+            <Code>POST /tenants</Code> answers 429 with a plain message and a Retry-After until you delete or cancel a tenant, or ask us to raise the limit. Existing
+            tenants keep running either way, and test tenants never count.
         </>,
     ],
     [
         'Do test tenants count?',
-        'Test mode is coming soon. A test tenant will provision exactly like a real one, never bill, never count towards the limit, and can be deleted instantly.',
+        'No. Send test: true on POST /tenants (or tick “Test customer” in the dashboard): a test tenant provisions exactly like a real one, its billing step is skipped, it never counts towards the limit, and you can delete it any time.',
     ],
     [
         'Whose Stripe account is used for the customer trial?',

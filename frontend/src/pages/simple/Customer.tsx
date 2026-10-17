@@ -110,6 +110,11 @@ export default function Customer() {
                         <Tag tone={status.tone} live={status.live}>
                             {status.label}
                         </Tag>
+                        {tenant.isTest && (
+                            <Tag tone="blueprint" title="A test customer: set up like a real one, never billed, not counted towards your limits.">
+                                Test
+                            </Tag>
+                        )}
                         <span>{planLabel(tenant)} plan</span>
                         <span title={fmtStamp(created)}>Added {formatDistanceStrict(created, now, { addSuffix: true })}</span>
                         {live && <span>Updates every 3 seconds</span>}
@@ -134,7 +139,7 @@ export default function Customer() {
             )}
             <StatusNote tenant={tenant} cond={cond} events={events} now={now} />
 
-            <Panel title="Setup progress" meta={cond === 'active' ? 'all five steps finished' : undefined} flush>
+            <Panel title="Setup progress" meta={cond === 'active' ? (tenant.isTest ? 'four steps finished, billing skipped' : 'all five steps finished') : undefined} flush>
                 <ol className="divide-y divide-rule">
                     {SIMPLE_STEPS.map(({ stage }, i) => {
                         const state = stageState(tenant, stage, now);
@@ -205,6 +210,12 @@ function StepMark({ state, index }: { state: ReturnType<typeof stageState>; inde
             );
         case 'CANCELLED':
             return <span className={cn(base, 'hatch border-scrub/60 text-transparent')} aria-label="Cancelled" />;
+        case 'SKIPPED':
+            return (
+                <span className={cn(base, 'border-dashed border-ink/50 text-ink-3')} aria-label="Skipped">
+                    –
+                </span>
+            );
         default:
             return <span className={cn(base, 'border-rule-strong bg-card text-ink-4')}>{index + 1}</span>;
     }
@@ -236,10 +247,10 @@ function ReadyPanel({ tenant, events, tookMs }: { tenant: Tenant; events: EventL
                     <dt className="label mb-1.5">Trial</dt>
                     <dd>
                         <div className="flex h-10 items-center rounded border border-rule-strong bg-paper/60 px-3 text-[14px] text-ink">
-                            Ends {fmtDate(trialEnd)}
+                            {tenant.isTest ? 'None: test customer' : `Ends ${fmtDate(trialEnd)}`}
                         </div>
                         <p className="mt-1.5 text-[13px] text-ink-3">
-                            {TRIAL_DAYS}-day free trial on the {planLabel(tenant)} plan.
+                            {tenant.isTest ? 'Billing was skipped, so nothing starts and nothing is charged.' : `${TRIAL_DAYS}-day free trial on the ${planLabel(tenant)} plan.`}
                         </p>
                     </dd>
                 </div>
