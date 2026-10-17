@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { ArrowUpRight } from 'lucide-react';
-import SiteShell, { Code, Soon } from '../components/site/SiteShell';
+import SiteShell, { Code } from '../components/site/SiteShell';
 import DocShell, { DefList, DocSection } from '../components/site/DocShell';
 import CodeBlock from '../components/site/CodeBlock';
 import { API_BASE, REPO, SWAGGER_URL } from '../components/site/site';
@@ -9,7 +9,7 @@ import { buttonClass } from '../lib/ui';
 
 const TOC = [
     { id: 'quickstart', label: 'Quickstart' },
-    { id: 'auth-today', label: 'Authentication today' },
+    { id: 'auth', label: 'Authentication' },
     { id: 'steps', label: 'The five steps' },
     { id: 'status', label: 'Status and polling' },
     { id: 'idempotency', label: 'Idempotency' },
@@ -107,7 +107,23 @@ const LOGIN = `curl -X POST ${API_BASE}/auth/login \\
   -d '{ "email": "you@company.com", "password": "********" }'
 
 # { "accessToken": "eyJ…", "refreshToken": "…", "user": { "id": "…", "email": "…" } }
-export LIFTOFF_KEY="eyJ…"   # the accessToken, valid for 15 minutes`;
+export LIFTOFF_TOKEN="eyJ…"   # the accessToken, valid for 15 minutes`;
+
+const CREATE_KEY = `curl -X POST ${API_BASE}/api-keys \\
+  -H "Authorization: Bearer $LIFTOFF_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "name": "signup service" }'
+
+# { "id": "…", "name": "signup service", "prefix": "lk_8f3kQ2wZx", "key": "lk_…", "lastUsedAt": null, "createdAt": "…" }
+export LIFTOFF_KEY="lk_…"   # shown once; store it in your signup service's secrets`;
+
+const SET_WEBHOOK = `curl -X PUT ${API_BASE}/organisation \\
+  -H "Authorization: Bearer $LIFTOFF_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "webhookUrl": "https://api.globex.com/liftoff/webhook" }'
+
+# { "id": "…", "name": "Globex", "handle": "globex", "baseDomain": null, "webhookUrl": "https://api.globex.com/liftoff/webhook", "webhookConfigured": true, "webhookSecret": "whsec_…" }
+# webhookSecret is in this response only; send { "rotateWebhookSecret": true } to get a new one`;
 
 const POLL = `curl ${API_BASE}/tenants/cm2k7x1q90000abcd1234efgh \\
   -H "Authorization: Bearer $LIFTOFF_KEY"
@@ -134,7 +150,7 @@ const STEP_NOTES: Record<string, { plain: string; honest?: string }> = {
     },
     notificationStatus: {
         plain: 'Marks the end of the pipeline: the welcome is logged, provisioning.complete is published, and the tenant becomes ACTIVE.',
-        honest: 'The welcome is logged rather than emailed today. Emailing your team, and the ready webhook, ship with the next release.',
+        honest: 'The welcome is logged rather than emailed today; the tenant.active webhook is delivered. Emailing your team ships with the next release.',
     },
 };
 
@@ -152,7 +168,7 @@ const LIMITS: [string, string, string][] = [
 
 const ERRORS: [string, string, string][] = [
     ['400', 'Bad request', 'A body field failed validation (name ≤ 100 chars; subdomain letters only, ≤ 30; planId one of starter, pro, enterprise), or an :id is not a CUID.'],
-    ['401', 'Unauthorized', 'No Authorization header, or the token is invalid or expired. Access tokens last 15 minutes; use POST /auth/refresh or sign in again.'],
+    ['401', 'Unauthorized', 'No Authorization or x-api-key header, the API key was revoked, or the token is invalid or expired. Access tokens last 15 minutes; use POST /auth/refresh or sign in again. An API key on a route that needs a signed-in user also answers 401.'],
     ['403', 'Forbidden', 'POST /api-keys before the signup email is verified. Open the link from the email, or resend it from the dashboard banner.'],
     ['404', 'Not found', 'No tenant with that ID belongs to your account. Another account’s tenant also answers 404, never 403.'],
     ['409', 'Conflict', 'The tenant name or subdomain is already used by another of your tenants (another company may use the same one), or at sign-up the email or handle is taken.'],
@@ -178,8 +194,11 @@ const ENDPOINTS: [string, string, string][] = [
     ['GET', '/events', 'Event log across all your tenants (latest 200)'],
     ['POST', '/tenants/:id/cancel', 'Cancel a tenant that is still provisioning'],
     ['DELETE', '/tenants/:id', 'Delete a tenant and its events'],
-    ['GET / PUT', '/organisation', 'Your company: name, base domain for tenant addresses, webhook'],
+    ['GET / PUT', '/organisation', 'Your company: name, base domain for tenant addresses, webhook URL (PUT returns the signing secret once)'],
     ['GET / PUT', '/settings', 'Your profile and notification preferences'],
+    ['POST', '/api-keys', 'Create a company API key (returned once)'],
+    ['GET', '/api-keys', 'List your API keys by name and prefix, never the key'],
+    ['DELETE', '/api-keys/:id', 'Revoke an API key'],
 ];
 
 export default function Docs() {
@@ -204,14 +223,19 @@ export default function Docs() {
                 toc={TOC}
             >
                 <DocSection id="quickstart" n="01" title="Quickstart">
-                    <p>Three steps. The first and third are part of company accounts, which are in review now and land in the next release; today’s equivalent is in the next section.</p>
+                    <p>Three steps: a key for your signup service, one request per new customer, and a webhook when the tenant is ready.</p>
 
-                    <QuickStep n="1" title="Create an API key" soon>
+                    <QuickStep n="1" title="Create an API key">
                         <p>
-                            In <strong className="font-medium text-ink">Settings → API keys</strong>, create a key for your signup service. Keys start with <Code>lk_</Code>, are shown once, and are
-                            sent either as <Code>Authorization: Bearer lk_…</Code> or in an <Code>x-api-key</Code> header. A key acts for your whole company; revoke it from the same
-                            page.
+                            Sign in once and <Code>POST /api-keys</Code> with a name for your signup service. Keys start with <Code>lk_</Code>, are shown once, and are sent either as{' '}
+                            <Code>Authorization: Bearer lk_…</Code> or in an <Code>x-api-key</Code> header. A key acts for your whole company; revoke it with{' '}
+                            <Code>DELETE /api-keys/:id</Code>. See{' '}
+                            <a href="#auth" className="link">
+                                Authentication
+                            </a>{' '}
+                            for the sign-in step.
                         </p>
+                        <CodeBlock code={CREATE_KEY} title="Create a key" lang="curl" />
                     </QuickStep>
 
                     <QuickStep n="2" title="Create a tenant from your signup flow">
@@ -224,10 +248,10 @@ export default function Docs() {
                         <CodeBlock code={CREATE_RESPONSE} title="Response" lang="http" />
                     </QuickStep>
 
-                    <QuickStep n="3" title="Receive the webhook" soon>
+                    <QuickStep n="3" title="Receive the webhook">
                         <p>
-                            Set a webhook URL in Settings and Liftoff POSTs <Code>tenant.active</Code> when all five steps succeed, or <Code>tenant.failed</Code> when one fails
-                            for good. The body is the same tenant object you got in step 2, with final statuses. Verify the signature before trusting it; see{' '}
+                            Set a webhook URL with <Code>PUT /organisation</Code> and Liftoff POSTs <Code>tenant.active</Code> when all five steps succeed, or{' '}
+                            <Code>tenant.failed</Code> when one fails for good. The body is the same tenant object you got in step 2, with final statuses. Verify the signature before trusting it; see{' '}
                             <a href="#webhooks" className="link">
                                 Webhooks and signatures
                             </a>
@@ -237,15 +261,20 @@ export default function Docs() {
                     </QuickStep>
                 </DocSection>
 
-                <DocSection id="auth-today" n="02" title="Authentication today">
+                <DocSection id="auth" n="02" title="Authentication">
                     <p>
-                        Until company keys ship, the API accepts the same token the dashboard uses. Sign in, take <Code>accessToken</Code>, and send it as a bearer token. It expires
-                        after 15 minutes; <Code>POST /auth/refresh</Code> with the <Code>refreshToken</Code> (valid 7 days, rotated on use) gives you a new one.
+                        Services authenticate with a company API key. Keys start with <Code>lk_</Code>, are created with <Code>POST /api-keys</Code> while signed in, and are shown
+                        once. Send one as <Code>Authorization: Bearer lk_…</Code> or in an <Code>x-api-key</Code> header. A key acts for your whole company, never expires, and is
+                        accepted on <Code>POST /tenants</Code> and <Code>GET /tenants/:id</Code>; every other route needs a signed-in user and answers 401 to a key.{' '}
+                        <Code>GET /api-keys</Code> lists your keys by name and prefix, <Code>DELETE /api-keys/:id</Code> revokes one at once.
+                    </p>
+                    <p>
+                        For trying things from a terminal, the API also accepts the same token the dashboard uses. Sign in, take <Code>accessToken</Code>, and send it as a bearer
+                        token. It expires after 15 minutes; <Code>POST /auth/refresh</Code> with the <Code>refreshToken</Code> (valid 7 days, rotated on use) gives you a new one.
                     </p>
                     <CodeBlock code={LOGIN} title="Sign in" lang="curl" />
                     <p>
-                        This is fine for trying things from a terminal. For a service, wait for keys: a login token is tied to a person, and{' '}
-                        <Code>POST /auth/login</Code> is rate limited to 10 a minute.
+                        Use a key for anything that runs unattended: a login token is tied to a person, and <Code>POST /auth/login</Code> is rate limited to 10 a minute.
                     </p>
                 </DocSection>
 
@@ -281,7 +310,7 @@ export default function Docs() {
 
                 <DocSection id="status" n="04" title="Status and polling">
                     <p>
-                        Until webhooks land, poll <Code>GET /tenants/:id</Code> every couple of seconds. The overall <Code>status</Code> is the one to branch on; the five step
+                        If you would rather not receive webhooks, poll <Code>GET /tenants/:id</Code> every couple of seconds. The overall <Code>status</Code> is the one to branch on; the five step
                         statuses tell your support team where it is.
                     </p>
                     <CodeBlock code={POLL} title="Poll" lang="curl" />
@@ -336,10 +365,11 @@ export default function Docs() {
                 </DocSection>
 
                 <DocSection id="webhooks" n="07" title="Webhooks and signatures">
-                    <p className="flex flex-wrap items-center gap-2">
-                        <Soon>Next release</Soon>
-                        <span>The behaviour below is what the company-accounts release ships; header names are final.</span>
+                    <p>
+                        Set the URL with <Code>PUT /organisation</Code>. The response carries <Code>webhookSecret</Code> once; store it, it signs every delivery. Send{' '}
+                        <Code>webhookUrl: null</Code> to stop deliveries.
                     </p>
+                    <CodeBlock code={SET_WEBHOOK} title="Set the URL" lang="curl" />
                     <ul className="list-disc space-y-1.5 pl-5">
                         <li>
                             Events: <Code>tenant.active</Code> and <Code>tenant.failed</Code>. Body: <Code>{'{ "event", "tenant" }'}</Code>, where tenant is the full record.
@@ -350,7 +380,7 @@ export default function Docs() {
                         </li>
                         <li>
                             Signature: <Code>sha256=</Code> followed by the hex HMAC-SHA256 of the raw request body, keyed with the signing secret you were shown when you set the
-                            URL. Setting a new URL or asking for rotation issues a new secret; the old one stops working at once.
+                            URL. Setting a new URL or sending <Code>rotateWebhookSecret: true</Code> issues a new secret; the old one stops working at once.
                         </li>
                         <li>
                             Delivery: a 2xx within the timeout counts as received. A 4xx is not retried. 5xx, timeouts and connection errors are retried with backoff, then
@@ -415,7 +445,7 @@ export default function Docs() {
                 <DocSection id="reference" n="10" title="API reference">
                     <p>
                         The full reference is generated from the code and lives in Swagger on the gateway. Every route except <Code>/health</Code>, <Code>/auth/register</Code>,{' '}
-                        <Code>/auth/login</Code> and <Code>/auth/refresh</Code> needs a bearer token.
+                        <Code>/auth/login</Code> and <Code>/auth/refresh</Code> needs a bearer token; <Code>POST /tenants</Code> and <Code>GET /tenants/:id</Code> also take a company API key.
                     </p>
                     <div className="flex flex-wrap gap-2">
                         <a href={SWAGGER_URL} target="_blank" rel="noreferrer" className={buttonClass('primary', 'md')}>
@@ -437,7 +467,7 @@ export default function Docs() {
                         </ul>
                     </div>
                     <p className="text-[13.5px] text-ink-3">
-                        Company API keys, webhooks and the organisation endpoints are not listed because they are not deployed yet. Questions go to the{' '}
+                        Questions go to the{' '}
                         <Link to="/support" className="link">
                             support page
                         </Link>{' '}
@@ -449,13 +479,12 @@ export default function Docs() {
     );
 }
 
-function QuickStep({ n, title, soon = false, children }: { n: string; title: string; soon?: boolean; children: React.ReactNode }) {
+function QuickStep({ n, title, children }: { n: string; title: string; children: React.ReactNode }) {
     return (
         <article className="rounded-md border border-rule bg-card p-5 shadow-sheet">
             <div className="mb-3 flex flex-wrap items-center gap-3">
                 <span className="inline-flex h-8 w-8 items-center justify-center rounded-sm border-[1.5px] border-ink font-mark text-[11px]">{n}</span>
                 <h3 className="font-cond text-[24px] font-semibold leading-tight text-ink">{title}</h3>
-                {soon && <Soon>Next release</Soon>}
             </div>
             <div className="space-y-3 text-[14.5px] leading-relaxed text-ink-2">{children}</div>
         </article>
