@@ -8,9 +8,16 @@ import {
   Param,
   Post,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiSecurity,
+  ApiTags,
+} from '@nestjs/swagger';
 import { ParseCuidPipe } from '../common/parse-cuid.pipe';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { CurrentOrganisation } from '../auth/decorators/current-organisation.decorator';
+import { AllowApiKey } from '../auth/decorators/allow-api-key.decorator';
 import { TenantsService } from './tenants.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { CancelTenantDto } from './dto/cancel-tenant.dto';
@@ -22,45 +29,59 @@ export class TenantsController {
   constructor(private readonly tenantsService: TenantsService) {}
 
   @Post()
+  @AllowApiKey()
+  @ApiSecurity('api-key')
   @HttpCode(HttpStatus.ACCEPTED)
-  @ApiOperation({ summary: 'Create tenant and emit tenant.requested' })
+  @ApiOperation({
+    summary: 'Create a customer tenant and emit tenant.requested',
+    description: 'Accepts a user token or a company API key.',
+  })
   create(
     @Body() createTenantDto: CreateTenantDto,
-    @CurrentUser('id') userId: string,
+    @CurrentOrganisation() organisationId: string,
+    @CurrentUser('id') userId: string | undefined,
   ) {
-    return this.tenantsService.create(createTenantDto, userId);
+    return this.tenantsService.create(createTenantDto, {
+      organisationId,
+      ownerId: userId ?? null,
+    });
   }
 
   @Get()
-  @ApiOperation({ summary: "List the caller's tenants" })
-  findAll(@CurrentUser('id') userId: string) {
-    return this.tenantsService.findAll(userId);
+  @ApiOperation({ summary: "List the company's tenants" })
+  findAll(@CurrentOrganisation() organisationId: string) {
+    return this.tenantsService.findAll(organisationId);
   }
 
   @Get('events')
   @ApiOperation({
-    summary: "Event log across the caller's tenants (most recent 200)",
+    summary: "Event log across the company's tenants (most recent 200)",
   })
-  findAllEvents(@CurrentUser('id') userId: string) {
-    return this.tenantsService.findAllEvents(userId);
+  findAllEvents(@CurrentOrganisation() organisationId: string) {
+    return this.tenantsService.findAllEvents(organisationId);
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get tenant with plan and last 100 events' })
+  @AllowApiKey()
+  @ApiSecurity('api-key')
+  @ApiOperation({
+    summary: 'Get tenant with plan and last 100 events',
+    description: 'Accepts a user token or a company API key.',
+  })
   findOne(
     @Param('id', ParseCuidPipe) id: string,
-    @CurrentUser('id') userId: string,
+    @CurrentOrganisation() organisationId: string,
   ) {
-    return this.tenantsService.findOne(id, userId);
+    return this.tenantsService.findOne(id, organisationId);
   }
 
   @Get(':id/events')
   @ApiOperation({ summary: 'Event log for a single tenant (most recent 200)' })
   findEvents(
     @Param('id', ParseCuidPipe) id: string,
-    @CurrentUser('id') userId: string,
+    @CurrentOrganisation() organisationId: string,
   ) {
-    return this.tenantsService.findEvents(id, userId);
+    return this.tenantsService.findEvents(id, organisationId);
   }
 
   @Post(':id/cancel')
@@ -69,17 +90,17 @@ export class TenantsController {
   cancel(
     @Param('id', ParseCuidPipe) id: string,
     @Body() cancelDto: CancelTenantDto,
-    @CurrentUser('id') userId: string,
+    @CurrentOrganisation() organisationId: string,
   ) {
-    return this.tenantsService.cancel(id, userId, cancelDto.reason);
+    return this.tenantsService.cancel(id, organisationId, cancelDto.reason);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete tenant and emit tenant.deleted' })
   delete(
     @Param('id', ParseCuidPipe) id: string,
-    @CurrentUser('id') userId: string,
+    @CurrentOrganisation() organisationId: string,
   ) {
-    return this.tenantsService.delete(id, userId);
+    return this.tenantsService.delete(id, organisationId);
   }
 }

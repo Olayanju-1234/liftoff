@@ -8,7 +8,7 @@ Type: Web Server (Internal)
 
 Listens On: http://localhost:3001 (Only on 127.0.0.1 for security)
 
-Database: Owns the Tenant, User, Plan, EventLog and Settings tables in the public schema of the PostgreSQL database.
+Database: Owns the Organisation, ApiKey, Tenant, User, Plan, EventLog and Settings tables in the public schema of the PostgreSQL database.
 
 Workflow
 

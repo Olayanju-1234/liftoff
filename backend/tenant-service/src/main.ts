@@ -30,7 +30,7 @@ async function bootstrap() {
     origin: process.env.FRONTEND_URL || 'http://localhost:5173',
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
   });
 
   // OpenAPI / Swagger — internal-facing for engineering use.
@@ -45,7 +45,19 @@ async function bootstrap() {
       { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
       'bearer',
     )
+    .addApiKey(
+      {
+        type: 'apiKey',
+        in: 'header',
+        name: 'x-api-key',
+        description:
+          'A company API key from POST /api-keys. Also accepted as a bearer token.',
+      },
+      'api-key',
+    )
     .addTag('Auth')
+    .addTag('Organisation')
+    .addTag('API keys')
     .addTag('Tenants')
     .addTag('Settings')
     .build();

@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { User } from '.prisma/tenant-client';
-import { AuthService, TokenResponse } from './auth.service';
+import { AuthService, TokenResponse, toSessionUser } from './auth.service';
 import { RegisterDto, LoginDto, RefreshTokenDto } from './dto/auth.dto';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -23,7 +23,9 @@ export class AuthController {
   @Public()
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Register a new tenant + admin user' })
+  @ApiOperation({
+    summary: 'Sign a company up: creates its admin user and organisation',
+  })
   async register(@Body() dto: RegisterDto): Promise<TokenResponse> {
     return this.authService.register(dto);
   }
@@ -61,12 +63,6 @@ export class AuthController {
   @Get('me')
   @ApiOperation({ summary: 'Get authenticated user profile' })
   getProfile(@CurrentUser() user: User) {
-    return {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      tenantId: user.tenantId,
-    };
+    return toSessionUser(user);
   }
 }

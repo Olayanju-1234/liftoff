@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TenantsModule } from './tenants/tenants.module';
 import { SettingsModule } from './settings/settings.module';
+import { OrganisationsModule } from './organisations/organisations.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { EmailModule } from './email/email.module';
@@ -39,6 +40,7 @@ import { envValidationSchema } from './config/env.validation';
     }),
     AuthModule,
     TenantsModule,
+    OrganisationsModule,
     SettingsModule,
     EmailModule,
     SentryModule,

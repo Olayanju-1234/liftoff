@@ -7,11 +7,11 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PrismaService } from '../prisma.service';
-import { TenantsModule } from '../tenants/tenants.module';
+import { OrganisationsModule } from '../organisations/organisations.module';
 
 @Module({
   imports: [
-    TenantsModule,
+    OrganisationsModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],

@@ -31,8 +31,23 @@ import {
   type DeadLetterMessage,
   type ProvisioningStep,
 } from './dead-letters';
+import { WebhookService } from '../webhooks/webhook.service';
 
 const PUBLISH_TIMEOUT_MS = 5_000;
+
+// Who a tenant is created for: the company, and the user who clicked (none for an API key).
+export interface TenantCreator {
+  organisationId: string;
+  ownerId: string | null;
+}
+
+// Tenants are the company's customers; its own legacy workspace tenant is not one.
+const inOrganisation = (
+  organisationId: string,
+): Pick<Prisma.TenantWhereInput, 'organisationId' | 'isWorkspace'> => ({
+  organisationId,
+  isWorkspace: false,
+});
 
 @Injectable()
 export class TenantsService {
@@ -41,9 +56,10 @@ export class TenantsService {
   constructor(
     private prisma: PrismaService,
     private readonly amqpConnection: AmqpConnection,
+    private readonly webhooks: WebhookService,
   ) {}
 
-  async create(createTenantDto: CreateTenantDto, ownerId: string) {
+  async create(createTenantDto: CreateTenantDto, creator: TenantCreator) {
     // Get or create plan - check by both id and name to avoid unique constraint issues
     let plan = await this.prisma.plan.findFirst({
       where: {
@@ -68,7 +84,8 @@ export class TenantsService {
           name: createTenantDto.name,
           subdomain: createTenantDto.subdomain,
           planId: plan.id,
-          ownerId,
+          organisationId: creator.organisationId,
+          ownerId: creator.ownerId,
           dbStatus: StepStatus.IN_PROGRESS, // Start first step
         },
       });
@@ -152,6 +169,7 @@ export class TenantsService {
       ...detail,
     });
     this.logger.warn(`Tenant ${tenantId} failed at ${step}: ${error}`);
+    this.webhooks.notify(tenantId, 'tenant.failed');
     return true;
   }
 
@@ -303,6 +321,7 @@ export class TenantsService {
         payload,
       );
       this.logger.log(`Tenant ${payload.tenantId} is now ACTIVE`);
+      this.webhooks.notify(payload.tenantId, 'tenant.active');
     } catch (error) {
       this.logger.error(
         `Failed to activate tenant ${payload.tenantId}: ${errorMessage(error)}`,
@@ -351,18 +370,18 @@ export class TenantsService {
     }
   }
 
-  async findAll(ownerId: string) {
+  async findAll(organisationId: string) {
     return this.prisma.tenant.findMany({
-      where: { ownerId },
+      where: inOrganisation(organisationId),
       include: { plan: true },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  // Another account's tenant reads as missing, so its ids can't be probed.
-  private async findOwnedTenant(id: string, ownerId: string) {
+  // Another company's tenant reads as missing, so its ids can't be probed.
+  private async findInOrganisation(id: string, organisationId: string) {
     const tenant = await this.prisma.tenant.findFirst({
-      where: { id, ownerId },
+      where: { id, ...inOrganisation(organisationId) },
     });
     if (!tenant) {
       throw new NotFoundException(`Tenant ${id} not found`);
@@ -370,9 +389,9 @@ export class TenantsService {
     return tenant;
   }
 
-  async findOne(id: string, ownerId: string) {
+  async findOne(id: string, organisationId: string) {
     const tenant = await this.prisma.tenant.findFirst({
-      where: { id, ownerId },
+      where: { id, ...inOrganisation(organisationId) },
       include: {
         plan: true,
         events: { orderBy: { timestamp: 'desc' }, take: 100 },
@@ -384,9 +403,9 @@ export class TenantsService {
     return tenant;
   }
 
-  async findEvents(id: string, ownerId: string) {
+  async findEvents(id: string, organisationId: string) {
     const tenant = await this.prisma.tenant.findFirst({
-      where: { id, ownerId },
+      where: { id, ...inOrganisation(organisationId) },
       select: { events: { orderBy: { timestamp: 'desc' }, take: 200 } },
     });
     if (!tenant) {
@@ -395,11 +414,11 @@ export class TenantsService {
     return tenant.events;
   }
 
-  async findAllEvents(ownerId: string) {
+  async findAllEvents(organisationId: string) {
     // Project tenant down to identifying fields only — avoid leaking
     // future-added sensitive columns (e.g. stripe IDs) and keep payload small.
     return this.prisma.eventLog.findMany({
-      where: { tenant: { ownerId } },
+      where: { tenant: inOrganisation(organisationId) },
       orderBy: { timestamp: 'desc' },
       take: 200,
       include: {
@@ -410,9 +429,9 @@ export class TenantsService {
     });
   }
 
-  async cancel(id: string, ownerId: string, reason?: string) {
+  async cancel(id: string, organisationId: string, reason?: string) {
     return this.cancelTenant(
-      await this.findOwnedTenant(id, ownerId),
+      await this.findInOrganisation(id, organisationId),
       reason || 'Cancelled by user',
     );
   }
@@ -485,8 +504,8 @@ export class TenantsService {
     return updatedTenant;
   }
 
-  async delete(id: string, ownerId: string) {
-    const tenant = await this.findOwnedTenant(id, ownerId);
+  async delete(id: string, organisationId: string) {
+    const tenant = await this.findInOrganisation(id, organisationId);
 
     // Publish deletion event for other services to clean up resources (schemas, DNS, credentials, etc.)
     await this.amqpConnection.publish('provisioning.direct', 'tenant.deleted', {
