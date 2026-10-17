@@ -160,6 +160,25 @@ export class TenantsController {
     return this.tenantsService.cancel(id, organisationId, cancelDto.reason);
   }
 
+  @Post(':id/retry')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Run the failed step of a FAILED tenant again',
+    description:
+      "Republishes the step's input message to that worker's queue (from the event log, or rebuilt from the tenant) and answers with the tenant PROVISIONING and the step IN_PROGRESS. Finished steps are kept. If it fails again the tenant is FAILED again, with a new event.",
+  })
+  @ApiResponse({ status: 400, description: 'The tenant is not FAILED' })
+  @ApiResponse({
+    status: 409,
+    description: 'The tenant changed meanwhile (a second retry, a removal)',
+  })
+  retry(
+    @Param('id', ParseCuidPipe) id: string,
+    @CurrentOrganisation() organisationId: string,
+  ) {
+    return this.tenantsService.retry(id, organisationId);
+  }
+
   @Delete(':id')
   @ApiOperation({
     summary:

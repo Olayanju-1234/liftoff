@@ -156,6 +156,11 @@ export class AppService {
     return this.proxy('post', `/tenants/${id}/cancel`, dto, auth);
   }
 
+  async retryTenant(id: string, auth?: string) {
+    this.logger.log({ tenantId: id }, 'Retrying failed tenant step');
+    return this.proxy('post', `/tenants/${id}/retry`, {}, auth);
+  }
+
   // ============ ORGANISATION METHODS ============
 
   getOrganisation(auth?: string) {

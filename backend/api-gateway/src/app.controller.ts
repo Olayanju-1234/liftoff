@@ -313,6 +313,29 @@ export class AppController {
     return this.appService.cancelTenant(id, dto, auth);
   }
 
+  @ApiTags('Tenants')
+  @ApiBearerAuth('bearer')
+  @ApiOperation({
+    summary: 'Run the failed step of a FAILED tenant again',
+    description:
+      "Republishes the failed step's input message to that worker's queue and answers with the tenant PROVISIONING and the step IN_PROGRESS. Finished steps are kept; if the step fails again the tenant is FAILED again and tenant.failed is sent.",
+  })
+  @ApiResponse({ status: 200, description: 'Retry queued' })
+  @ApiResponse({ status: 400, description: 'Tenant is not FAILED' })
+  @ApiResponse({ status: 404, description: 'Tenant not found' })
+  @ApiResponse({
+    status: 409,
+    description: 'Tenant changed meanwhile (a second retry, a removal)',
+  })
+  @HttpCode(HttpStatus.OK)
+  @Post('tenants/:id/retry')
+  retryTenant(
+    @Param('id', ParseCuidPipe) id: string,
+    @Headers('authorization') auth: string,
+  ) {
+    return this.appService.retryTenant(id, auth);
+  }
+
   // ============ ORGANISATION ENDPOINTS ============
 
   @ApiTags('Organisation')
