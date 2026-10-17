@@ -210,6 +210,7 @@ export class TenantsController {
       id,
       organisationId,
       step,
+      'provision',
       StepStatus.SUCCESS,
       dto,
     );
@@ -241,6 +242,69 @@ export class TenantsController {
       id,
       organisationId,
       step,
+      'provision',
+      StepStatus.FAILED,
+      dto,
+    );
+  }
+
+  @Post(':id/steps/:step/teardown/complete')
+  @AllowApiKey()
+  @ApiSecurity('api-key')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Your system tore down what a custom step made',
+    description:
+      'The callback for a step.teardown delivery, sent when a customer whose step ran custom is removed. The removal finishes (DELETED, tenant.deleted webhook) once every part is torn down. Idempotent like the step callbacks.',
+  })
+  @ApiResponse({ status: 200, description: 'Recorded, duplicate or ignored' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'No teardown is waiting on your system for this step, it already failed or timed out (remove the customer again), or requestId is not the latest',
+  })
+  completeTeardown(
+    @Param('id', ParseCuidPipe) id: string,
+    @Param('step', ParseStepNamePipe) step: ProvisioningStepName,
+    @Body() dto: CompleteStepDto,
+    @CurrentOrganisation() organisationId: string,
+  ) {
+    return this.tenantsService.customStepCallback(
+      id,
+      organisationId,
+      step,
+      'teardown',
+      StepStatus.SUCCESS,
+      dto,
+    );
+  }
+
+  @Post(':id/steps/:step/teardown/fail')
+  @AllowApiKey()
+  @ApiSecurity('api-key')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Your system could not tear down a custom step',
+    description:
+      'The teardown is FAILED and the customer stays DEPROVISIONING; removing it again sends a new step.teardown. Idempotent like the step callbacks.',
+  })
+  @ApiResponse({ status: 200, description: 'Recorded, duplicate or ignored' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'No teardown is waiting on your system for this step, it already finished, or requestId is not the latest',
+  })
+  failTeardown(
+    @Param('id', ParseCuidPipe) id: string,
+    @Param('step', ParseStepNamePipe) step: ProvisioningStepName,
+    @Body() dto: FailStepDto,
+    @CurrentOrganisation() organisationId: string,
+  ) {
+    return this.tenantsService.customStepCallback(
+      id,
+      organisationId,
+      step,
+      'teardown',
       StepStatus.FAILED,
       dto,
     );

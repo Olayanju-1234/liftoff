@@ -1,9 +1,12 @@
-import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
 import { StepStatus, TenantStatus } from '.prisma/tenant-client';
-import type { CustomStepRequest } from '@liftoff/shared-types';
+import type {
+  CustomStepAction,
+  CustomStepRequest,
+} from '@liftoff/shared-types';
 
 import { TenantsService } from './tenants.service';
 import { CustomStepsService } from './custom-steps.service';
@@ -14,9 +17,16 @@ import { StatusTokenService } from '../status/status-token.service';
 
 type Row = Record<string, unknown>;
 
-// A where value is the expected value, or an { in }, { lt } or { not } filter.
-function matches(record: Row, where: Row = {}): boolean {
+// A where value is the expected value, or an { in }, { lt } or { not } filter; a tenant's
+// customStepCalls filter is { none: <call where> } against the calls passed in.
+function matches(record: Row, where: Row = {}, related: Row[] = []): boolean {
   return Object.entries(where).every(([field, condition]) => {
+    if (field === 'customStepCalls') {
+      const { none } = condition as { none: Row };
+      return !related.some(
+        (call) => call.tenantId === record.id && matches(call, none),
+      );
+    }
     if (
       condition &&
       typeof condition === 'object' &&
@@ -146,7 +156,7 @@ describe('Custom steps (dispatch, callbacks, timeouts)', () => {
           return Promise.resolve({ ...row });
         }),
         updateMany: jest.fn(({ where, data }: { where: Row; data: Row }) => {
-          if (!matches(row, where)) return Promise.resolve({ count: 0 });
+          if (!matches(row, where, calls)) return Promise.resolve({ count: 0 });
           Object.assign(row, data);
           return Promise.resolve({ count: 1 });
         }),
@@ -293,14 +303,18 @@ describe('Custom steps (dispatch, callbacks, timeouts)', () => {
     step = 'credentials',
     body: Row = {},
     organisationId = 'org-1',
+    action: CustomStepAction = 'provision',
   ) =>
     service.customStepCallback(
       TENANT_ID,
       organisationId,
       step as 'credentials',
+      action,
       outcome === 'complete' ? StepStatus.SUCCESS : StepStatus.FAILED,
       body,
     );
+  const teardown = (outcome: 'complete' | 'fail', step: string, body = {}) =>
+    callback(outcome, step, body, 'org-1', 'teardown');
 
   describe('dispatch', () => {
     it("sends a builtin step's input straight to its worker's queue and records how it ran", async () => {
@@ -630,7 +644,9 @@ describe('Custom steps (dispatch, callbacks, timeouts)', () => {
 
     it('refuses fail after complete with 409', async () => {
       await callback('complete');
-      await expect(callback('fail')).rejects.toBeInstanceOf(ConflictException);
+      await expect(callback('fail')).rejects.toThrow(
+        'The credentials step is already done',
+      );
       expect(row.status).toBe(TenantStatus.PROVISIONING);
     });
 
@@ -820,6 +836,290 @@ describe('Custom steps (dispatch, callbacks, timeouts)', () => {
           url: `${URL_BASE}/credentials`,
         }),
       ]);
+    });
+  });
+
+  describe('teardown', () => {
+    // An ACTIVE customer whose steps ran as given; each custom one was requested once.
+    const activeWith = (modes: Row) => {
+      Object.assign(row, {
+        status: TenantStatus.ACTIVE,
+        dbStatus: StepStatus.SUCCESS,
+        dnsStatus: StepStatus.SUCCESS,
+        credentialsStatus: StepStatus.SUCCESS,
+        billingStatus: StepStatus.SKIPPED,
+        notificationStatus: StepStatus.SUCCESS,
+        stepModes: modes,
+      });
+      Object.entries(modes)
+        .filter(([, mode]) => mode === 'custom')
+        .forEach(([step], i) =>
+          calls.push({
+            id: `prov-${i}`,
+            tenantId: TENANT_ID,
+            step,
+            action: 'provision',
+            url: `${URL_BASE}/${step}`,
+            status: StepStatus.SUCCESS,
+            deadlineAt: new Date(),
+            createdAt: new Date(Date.now() - 60_000),
+          }),
+        );
+    };
+    const teardownCalls = () =>
+      calls.filter((call) => call.action === 'teardown');
+    const workerDone = (
+      part: 'db' | 'credentials' | 'billing',
+      skipped = false,
+    ) => service.handleDeprovisionDone({ tenantId: TENANT_ID, part, skipped });
+
+    it('sends step.teardown for a step that ran custom, and the workers nothing to drop for it', async () => {
+      activeWith({ database: 'custom', address: 'builtin' });
+      custom('database');
+
+      await service.delete(TENANT_ID, 'org-1');
+      await settle();
+
+      expect(row).toMatchObject({
+        status: TenantStatus.DEPROVISIONING,
+        teardownDbStatus: StepStatus.IN_PROGRESS,
+        teardownCredentialsStatus: StepStatus.IN_PROGRESS,
+        teardownBillingStatus: StepStatus.SKIPPED,
+      });
+      expect(teardownCalls()).toEqual([
+        expect.objectContaining({
+          step: 'database',
+          url: `${URL_BASE}/database`,
+          status: StepStatus.IN_PROGRESS,
+        }),
+      ]);
+      expect(requestBody()).toMatchObject({
+        event: 'step.teardown',
+        step: 'database',
+        callbackUrl: `https://api.test/tenants/${TENANT_ID}/steps/database/teardown`,
+      });
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision',
+        expect.objectContaining({ schemaName: null }),
+        { timeout: 5_000 },
+      );
+      expect(eventsOf('tenant.step.teardown.requested')).toHaveLength(1);
+    });
+
+    it("ignores the worker's result for a part the company tears down", async () => {
+      activeWith({ database: 'custom' });
+      custom('database');
+      await service.delete(TENANT_ID, 'org-1');
+      await settle();
+
+      await workerDone('db', true);
+
+      expect(row.teardownDbStatus).toBe(StepStatus.IN_PROGRESS);
+    });
+
+    it("finishes the removal once the company's teardown and the workers are done", async () => {
+      activeWith({ database: 'custom' });
+      custom('database');
+      await service.delete(TENANT_ID, 'org-1');
+      await settle();
+
+      await workerDone('credentials');
+      expect(row.status).toBe(TenantStatus.DEPROVISIONING);
+
+      const result = await teardown('complete', 'database', {
+        output: { snapshot: 'snap_1' },
+      });
+
+      expect(result).toMatchObject({
+        action: 'teardown',
+        outcome: 'recorded',
+        status: TenantStatus.DELETED,
+      });
+      expect(row).toMatchObject({
+        status: TenantStatus.DELETED,
+        teardownDbStatus: StepStatus.SUCCESS,
+        live: null,
+      });
+      expect(eventsOf('tenant.step.torn_down')).toEqual([
+        expect.objectContaining({
+          payload: {
+            step: 'database',
+            requestId: teardownCalls()[0].id,
+            output: { snapshot: 'snap_1' },
+          },
+        }),
+      ]);
+      expect(webhooks.notify).toHaveBeenCalledWith(TENANT_ID, 'tenant.deleted');
+      await expect(teardown('complete', 'database')).resolves.toMatchObject({
+        outcome: 'duplicate',
+      });
+    });
+
+    it('keeps the customer DEPROVISIONING when the teardown fails, and removing again sends a new one', async () => {
+      activeWith({ database: 'custom' });
+      custom('database');
+      await service.delete(TENANT_ID, 'org-1');
+      await settle();
+      await workerDone('credentials');
+
+      await teardown('fail', 'database', { error: 'Snapshot store down' });
+
+      expect(row).toMatchObject({
+        status: TenantStatus.DEPROVISIONING,
+        teardownDbStatus: StepStatus.FAILED,
+      });
+      expect(eventsOf('tenant.deprovision.failed')).toEqual([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            part: 'database',
+            error: 'Snapshot store down',
+          }) as unknown,
+        }),
+      ]);
+      await expect(teardown('complete', 'database')).rejects.toThrow(
+        'Remove the customer again to retry it.',
+      );
+
+      await service.delete(TENANT_ID, 'org-1');
+      await settle();
+
+      expect(teardownCalls().map((call) => call.status)).toEqual([
+        StepStatus.CANCELLED,
+        StepStatus.IN_PROGRESS,
+      ]);
+      expect(row.teardownDbStatus).toBe(StepStatus.IN_PROGRESS);
+      await teardown('complete', 'database');
+      expect(row.status).toBe(TenantStatus.DELETED);
+    });
+
+    it('holds the removal for a custom step that has no teardown column (address, welcome)', async () => {
+      activeWith({ address: 'custom', welcome: 'custom' });
+      org.stepConfig = {
+        address: { mode: 'custom', url: `${URL_BASE}/address` },
+        welcome: { mode: 'custom', url: `${URL_BASE}/welcome` },
+      };
+      await service.delete(TENANT_ID, 'org-1');
+      await settle();
+
+      await workerDone('db');
+      await workerDone('credentials');
+      await teardown('complete', 'address');
+      expect(row.status).toBe(TenantStatus.DEPROVISIONING);
+
+      await teardown('complete', 'welcome');
+      expect(row.status).toBe(TenantStatus.DELETED);
+    });
+
+    it('tears nothing down for a skipped step and ignores the worker for it', async () => {
+      activeWith({ credentials: 'skipped' });
+
+      await service.delete(TENANT_ID, 'org-1');
+      await workerDone('credentials');
+
+      expect(row.teardownCredentialsStatus).toBe(StepStatus.SKIPPED);
+      expect(teardownCalls()).toHaveLength(0);
+      await workerDone('db');
+      expect(row.status).toBe(TenantStatus.DELETED);
+    });
+
+    it('sends the teardown to the URL the step ran on once the step is no longer custom', async () => {
+      activeWith({ database: 'custom' });
+      org.stepConfig = { database: { mode: 'builtin' } };
+
+      await service.delete(TENANT_ID, 'org-1');
+
+      expect(teardownCalls()[0].url).toBe(`${URL_BASE}/database`);
+    });
+
+    it('skips the teardown of a custom step that never reached the company', async () => {
+      Object.assign(row, {
+        status: TenantStatus.FAILED,
+        dbStatus: StepStatus.FAILED,
+        stepModes: { database: 'custom' },
+      });
+      org.stepConfig = { database: { mode: 'custom' } };
+
+      await service.delete(TENANT_ID, 'org-1');
+      await workerDone('credentials');
+
+      expect(teardownCalls()).toHaveLength(0);
+      expect(row).toMatchObject({
+        teardownDbStatus: StepStatus.SKIPPED,
+        status: TenantStatus.DELETED,
+      });
+      expect(eventsOf('tenant.step.teardown.skipped')).toHaveLength(1);
+    });
+
+    it('fails the teardown when its deadline passes', async () => {
+      activeWith({ database: 'custom' });
+      custom('database');
+      await service.delete(TENANT_ID, 'org-1');
+      await settle();
+
+      const [call] = await customSteps.overdue(
+        new Date(Date.now() + 11 * 60_000),
+      );
+      await service.timeOutCustomStep(call);
+
+      expect(row).toMatchObject({
+        status: TenantStatus.DEPROVISIONING,
+        teardownDbStatus: StepStatus.FAILED,
+      });
+      expect(eventsOf('tenant.deprovision.failed')[0].payload.error).toBe(
+        'Your system did not confirm the teardown within 10 minutes',
+      );
+    });
+
+    it("fails the teardown when the company's system rejects step.teardown", async () => {
+      activeWith({ billing: 'custom' });
+      custom('billing');
+      webhooks.post.mockResolvedValueOnce({
+        delivered: false,
+        status: 410,
+        error: 'rejected with 410',
+      });
+
+      await service.delete(TENANT_ID, 'org-1');
+      await settle();
+
+      expect(row.teardownBillingStatus).toBe(StepStatus.FAILED);
+      expect(teardownCalls()[0].status).toBe(StepStatus.FAILED);
+    });
+
+    it('gives a test customer its name back only once the company tore its database down', async () => {
+      activeWith({ database: 'custom' });
+      row.isTest = true;
+      row.live = true;
+      custom('database');
+
+      await service.delete(TENANT_ID, 'org-1');
+      await settle();
+      expect(row).toMatchObject({ status: TenantStatus.DELETED, live: true });
+
+      await teardown('complete', 'database');
+      expect(row.live).toBeNull();
+    });
+
+    it('ignores a teardown callback for a customer that is not being removed', async () => {
+      activeWith({ database: 'custom' });
+      calls.push({
+        id: 'td-1',
+        tenantId: TENANT_ID,
+        step: 'database',
+        action: 'teardown',
+        url: `${URL_BASE}/database`,
+        status: StepStatus.IN_PROGRESS,
+        deadlineAt: new Date(),
+        createdAt: new Date(),
+      });
+
+      await expect(teardown('complete', 'database')).resolves.toMatchObject({
+        outcome: 'ignored',
+      });
+      await expect(teardown('complete', 'address')).rejects.toThrow(
+        'Liftoff is not waiting on your system to tear down the address step',
+      );
     });
   });
 });

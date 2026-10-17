@@ -27,7 +27,9 @@ The last three come from removal (`DELETE /tenants/:id`). A teardown dead letter
 marks only that teardown `FAILED`; the tenant stays `DEPROVISIONING`, and calling
 `DELETE /tenants/:id` again (or **Retry removal** in the dashboard) republishes
 `tenant.deprovision`. Every teardown is idempotent, so there is nothing to replay by
-hand.
+hand. A step that ran custom is torn down by the company's system instead
+(`step.teardown`); a worker's result for that part is ignored, and removing the
+customer again re-sends a teardown that failed.
 
 tenant-service binds two durable queues to all eight keys, so each dead letter
 lands in both:

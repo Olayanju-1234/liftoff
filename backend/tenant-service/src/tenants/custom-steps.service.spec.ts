@@ -222,4 +222,44 @@ describe('CustomStepsService', () => {
       ['call-2', 'teardown'],
     ]);
   });
+
+  it('retires a failed teardown when a new one is opened, but keeps failed provision requests as they are', async () => {
+    const service = build('https://api.test');
+    const target = { url: 'https://steps.acme.com/dns', timeoutMs: 60_000 };
+
+    await service.open('t1', 'address', 'teardown', target);
+    expect(prisma.customStepCall.updateMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 't1',
+        step: 'address',
+        action: 'teardown',
+        status: StepStatus.FAILED,
+      },
+      data: { status: StepStatus.CANCELLED },
+    });
+
+    prisma.customStepCall.updateMany.mockClear();
+    await service.open('t1', 'address', 'provision', target);
+    expect(prisma.customStepCall.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries the teardowns that were never sent, failed or were cut short', async () => {
+    prisma.customStepCall.findMany.mockResolvedValueOnce([
+      { step: 'database', status: StepStatus.FAILED },
+      { step: 'address', status: StepStatus.IN_PROGRESS },
+      { step: 'billing', status: StepStatus.SUCCESS },
+      { step: 'welcome', status: StepStatus.CANCELLED },
+      { step: 'billing', status: StepStatus.FAILED },
+    ]);
+
+    await expect(
+      build('https://api.test').teardownsToRetry('t1', [
+        'database',
+        'address',
+        'credentials',
+        'billing',
+        'welcome',
+      ]),
+    ).resolves.toEqual(['database', 'credentials', 'welcome']);
+  });
 });

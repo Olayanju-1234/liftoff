@@ -437,6 +437,84 @@ export class AppController {
     });
   }
 
+  @ApiTags('Custom steps')
+  @ApiBearerAuth('bearer')
+  @ApiSecurity('api-key')
+  @ApiHeader({
+    name: API_KEY_HEADER,
+    required: false,
+    description: 'Company API key, instead of a user token',
+  })
+  @ApiOperation({
+    summary: 'Your system tore down what a custom step made',
+    description:
+      'The callback for a step.teardown delivery, sent when a customer whose step ran custom is removed: POST <callbackUrl>/complete. The removal finishes (DELETED, tenant.deleted webhook) once every part is torn down. Idempotent like the step callbacks.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '{ tenantId, step, action: "teardown", outcome, status }',
+  })
+  @ApiResponse({ status: 400, description: 'Unknown step or invalid body' })
+  @ApiResponse({ status: 404, description: 'Tenant not found' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'No teardown is waiting on your system for this step, it already failed or timed out (remove the customer again), or requestId is not the latest',
+  })
+  @HttpCode(HttpStatus.OK)
+  @Post('tenants/:id/steps/:step/teardown/complete')
+  completeTeardown(
+    @Param('id', ParseCuidPipe) id: string,
+    @Param('step', ParseStepNamePipe) step: ProvisioningStepName,
+    @Body() dto: CompleteStepDto,
+    @Headers('authorization') auth: string,
+    @Headers(API_KEY_HEADER) apiKey: string,
+  ) {
+    return this.appService.stepCallback(id, step, 'teardown/complete', dto, {
+      auth,
+      apiKey,
+    });
+  }
+
+  @ApiTags('Custom steps')
+  @ApiBearerAuth('bearer')
+  @ApiSecurity('api-key')
+  @ApiHeader({
+    name: API_KEY_HEADER,
+    required: false,
+    description: 'Company API key, instead of a user token',
+  })
+  @ApiOperation({
+    summary: 'Your system could not tear down a custom step',
+    description:
+      'POST <callbackUrl>/fail for a step.teardown delivery. That part of the removal reads FAILED and the customer stays DEPROVISIONING; removing it again sends a new step.teardown.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '{ tenantId, step, action: "teardown", outcome, status }',
+  })
+  @ApiResponse({ status: 400, description: 'Unknown step or invalid body' })
+  @ApiResponse({ status: 404, description: 'Tenant not found' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'No teardown is waiting on your system for this step, it already finished, or requestId is not the latest',
+  })
+  @HttpCode(HttpStatus.OK)
+  @Post('tenants/:id/steps/:step/teardown/fail')
+  failTeardown(
+    @Param('id', ParseCuidPipe) id: string,
+    @Param('step', ParseStepNamePipe) step: ProvisioningStepName,
+    @Body() dto: FailStepDto,
+    @Headers('authorization') auth: string,
+    @Headers(API_KEY_HEADER) apiKey: string,
+  ) {
+    return this.appService.stepCallback(id, step, 'teardown/fail', dto, {
+      auth,
+      apiKey,
+    });
+  }
+
   // ============ ORGANISATION ENDPOINTS ============
 
   @ApiTags('Organisation')
