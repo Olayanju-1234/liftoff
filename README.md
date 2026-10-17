@@ -93,7 +93,7 @@ Single entry point for all client requests. Applies rate limiting (100 req/min p
 
 ### Tenant Service
 
-Core orchestration service. Manages the provisioning state machine and subscribes to all pipeline events to keep per-step status accurate. It also consumes the dead-letter exchange: a rejected step marks that step and the tenant `FAILED`. Runs a scheduled job every 5 minutes to auto-cancel pipelines stuck for more than 30 minutes.
+Core orchestration service. Manages the provisioning state machine and subscribes to all pipeline events to keep per-step status accurate. It also consumes the dead-letter exchange: a rejected step marks that step and the tenant `FAILED`. A step that stays `IN_PROGRESS` with no change for 2 minutes is failed the same way (every minute; reason "Step timed out: …", `tenant.failed` webhook), and a sweeper every 5 minutes cancels any pipeline still `PROVISIONING` after 30 minutes as the backstop.
 
 Provisioning states: `PROVISIONING → ACTIVE | FAILED | CANCELLED`
 

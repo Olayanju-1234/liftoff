@@ -281,8 +281,8 @@ export default function Docs() {
                         rows={[
                             ['PROVISIONING', 'Steps are running. Expect ACTIVE within seconds.'],
                             ['ACTIVE', 'All five steps succeeded. Terminal.'],
-                            ['FAILED', 'A step failed for good. The step’s own status is FAILED and the event log holds the error. Terminal; create again or delete.'],
-                            ['CANCELLED', 'You cancelled it, or nothing moved for 30 minutes and the sweeper did. cancelReason says which. Terminal.'],
+                            ['FAILED', 'A step failed for good, or made no progress for 2 minutes and was timed out ("Step timed out: …" in the event log). The step’s own status is FAILED and the event log holds the error. tenant.failed is sent. Terminal; create again or delete.'],
+                            ['CANCELLED', 'You cancelled it, or no step was ever in progress and nothing moved for 30 minutes, so the sweeper did. cancelReason says which. Terminal.'],
                             ['SUSPENDED', 'Reserved for a future pause action; not set by the service today.'],
                         ]}
                     />

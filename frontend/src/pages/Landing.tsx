@@ -325,7 +325,7 @@ export default function Landing() {
                             </div>
                         </Note>
                         <Note n="3" title="Nothing provisions forever">
-                            <p>A sweeper cancels anything stuck for 30 minutes and records why, so a customer is never silently “pending” for a day.</p>
+                            <p>A step with no progress for 2 minutes is failed with the reason recorded, and a sweeper cancels anything else stuck for 30 minutes, so a customer is never silently “pending” for a day.</p>
                             <div className="mt-5 flex items-center gap-3">
                                 <SequenceTrack
                                     tenant={sampleTenant(
