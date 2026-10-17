@@ -219,7 +219,7 @@ const ENDPOINTS: [string, string, string][] = [
     ['POST', '/tenants/:id/retry', 'Run the failed step of a FAILED tenant again; finished steps are kept'],
     ['POST', '/tenants/:id/cancel', 'Stop a tenant that is still provisioning; from ACTIVE or FAILED, remove it like DELETE'],
     ['DELETE', '/tenants/:id', 'Remove a tenant: drop its schema, revoke its API key, cancel its Stripe subscription. Ends DELETED; events are kept'],
-    ['GET / PUT', '/organisation', 'Your company: name, base domain, webhook URL (PUT returns the signing secret once), Stripe key (never returned), your customer plans and a price per plan'],
+    ['GET / PUT', '/organisation', 'Your company: name, base domain, webhook URL (PUT returns the signing secret once), Stripe key (never returned), your customer plans and a price per plan, and how each step runs (stepConfig: builtin, skipped or custom)'],
     ['GET / PUT', '/settings', 'Your profile and notification preferences'],
     ['POST', '/api-keys', 'Create a company API key (returned once)'],
     ['GET', '/api-keys', 'List your API keys by name and prefix, never the key'],

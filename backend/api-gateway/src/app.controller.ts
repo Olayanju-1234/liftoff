@@ -372,9 +372,13 @@ export class AppController {
   @ApiOperation({
     summary: "Update the caller's company",
     description:
-      'Setting webhookUrl (or rotateWebhookSecret) returns webhookSecret once. tenant.active, tenant.failed and tenant.deleted are POSTed there, signed with it in x-liftoff-signature. stripeSecretKey connects the company’s own Stripe account (stored encrypted, never returned: the response says stripeConfigured; null disconnects) and stripePrices maps customer plans to Stripe Price IDs.',
+      'Setting webhookUrl (or rotateWebhookSecret) returns webhookSecret once. tenant.active, tenant.failed and tenant.deleted are POSTed there, signed with it in x-liftoff-signature. stripeSecretKey connects the company’s own Stripe account (stored encrypted, never returned: the response says stripeConfigured; null disconnects) and stripePrices maps customer plans to Stripe Price IDs. stepConfig sets each of the five provisioning steps (database, address, credentials, billing, welcome) to builtin, skipped or custom: a custom step is POSTed to your URL, signed with the webhook secret (so set a webhook URL first), and waits for your callback. Merged per step; null puts a step, or all of them, back to builtin.',
   })
-  @ApiResponse({ status: 400, description: 'Private or loopback webhookUrl' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Invalid body, a private or loopback URL, a custom step without a URL, or custom steps without a webhook secret',
+  })
   @ApiResponse({
     status: 503,
     description: 'Stripe cannot be connected on this deployment',
