@@ -32,6 +32,7 @@ import {
   type ProvisioningStep,
 } from './dead-letters';
 import { WebhookService } from '../webhooks/webhook.service';
+import { schemaNameFor, withAddress } from './address';
 
 const PUBLISH_TIMEOUT_MS = 5_000;
 
@@ -60,6 +61,14 @@ export class TenantsService {
   ) {}
 
   async create(createTenantDto: CreateTenantDto, creator: TenantCreator) {
+    const organisation = await this.prisma.organisation.findUnique({
+      where: { id: creator.organisationId },
+      select: { handle: true, baseDomain: true },
+    });
+    if (!organisation) {
+      throw new NotFoundException('Organisation not found');
+    }
+
     // Get or create plan - check by both id and name to avoid unique constraint issues
     let plan = await this.prisma.plan.findFirst({
       where: {
@@ -83,6 +92,10 @@ export class TenantsService {
         data: {
           name: createTenantDto.name,
           subdomain: createTenantDto.subdomain,
+          schemaName: schemaNameFor(
+            organisation.handle,
+            createTenantDto.subdomain,
+          ),
           planId: plan.id,
           organisationId: creator.organisationId,
           ownerId: creator.ownerId,
@@ -92,15 +105,18 @@ export class TenantsService {
 
       await this.startProvisioning(tenant);
 
-      return tenant;
+      return withAddress(tenant, organisation.baseDomain);
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        const target = (error.meta?.target as string[])?.[0];
+        const target = (error.meta?.target as string[] | undefined) ?? [];
+        const field =
+          target.find((t) => t === 'name' || t === 'subdomain') ??
+          'name or subdomain';
         throw new ConflictException(
-          `A tenant with this ${target} already exists.`,
+          `A tenant with this ${field} already exists in your organisation.`,
         );
       }
       throw error;
@@ -109,17 +125,19 @@ export class TenantsService {
 
   // Callers create the tenant with dbStatus IN_PROGRESS first.
   async startProvisioning(
-    tenant: Pick<Tenant, 'id' | 'name' | 'subdomain' | 'planId'>,
+    tenant: Pick<Tenant, 'id' | 'name' | 'subdomain' | 'planId' | 'schemaName'>,
   ) {
     await this.logEvent(tenant.id, 'tenant.created', 'Success', {
       name: tenant.name,
       plan: tenant.planId,
+      schema: tenant.schemaName,
     });
 
     const eventPayload: TenantRequestedPayload = {
       tenantId: tenant.id,
       subdomain: tenant.subdomain,
       planId: tenant.planId,
+      ...(tenant.schemaName ? { schemaName: tenant.schemaName } : {}),
     };
 
     try {
@@ -371,11 +389,23 @@ export class TenantsService {
   }
 
   async findAll(organisationId: string) {
-    return this.prisma.tenant.findMany({
-      where: inOrganisation(organisationId),
-      include: { plan: true },
-      orderBy: { createdAt: 'desc' },
+    const [baseDomain, tenants] = await Promise.all([
+      this.baseDomainOf(organisationId),
+      this.prisma.tenant.findMany({
+        where: inOrganisation(organisationId),
+        include: { plan: true },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+    return tenants.map((tenant) => withAddress(tenant, baseDomain));
+  }
+
+  private async baseDomainOf(organisationId: string): Promise<string | null> {
+    const organisation = await this.prisma.organisation.findUnique({
+      where: { id: organisationId },
+      select: { baseDomain: true },
     });
+    return organisation?.baseDomain ?? null;
   }
 
   // Another company's tenant reads as missing, so its ids can't be probed.
@@ -395,12 +425,14 @@ export class TenantsService {
       include: {
         plan: true,
         events: { orderBy: { timestamp: 'desc' }, take: 100 },
+        organisation: { select: { baseDomain: true } },
       },
     });
     if (!tenant) {
       throw new NotFoundException(`Tenant ${id} not found`);
     }
-    return tenant;
+    const { organisation, ...row } = tenant;
+    return withAddress(row, organisation?.baseDomain);
   }
 
   async findEvents(id: string, organisationId: string) {
@@ -430,10 +462,11 @@ export class TenantsService {
   }
 
   async cancel(id: string, organisationId: string, reason?: string) {
-    return this.cancelTenant(
+    const cancelled = await this.cancelTenant(
       await this.findInOrganisation(id, organisationId),
       reason || 'Cancelled by user',
     );
+    return withAddress(cancelled, await this.baseDomainOf(organisationId));
   }
 
   // The timeout sweeper acts for no user, so it looks the tenant up unscoped.
@@ -511,10 +544,12 @@ export class TenantsService {
     await this.amqpConnection.publish('provisioning.direct', 'tenant.deleted', {
       tenantId: id,
       subdomain: tenant.subdomain,
+      schemaName: tenant.schemaName,
     });
 
     await this.logEvent(id, 'tenant.deleted', 'Success', {
       subdomain: tenant.subdomain,
+      schema: tenant.schemaName,
     });
 
     // Events are cascade deleted due to Prisma schema onDelete: Cascade
@@ -523,6 +558,6 @@ export class TenantsService {
     });
 
     this.logger.log(`Tenant ${id} (${tenant.subdomain}) deleted`);
-    return deletedTenant;
+    return withAddress(deletedTenant, await this.baseDomainOf(organisationId));
   }
 }

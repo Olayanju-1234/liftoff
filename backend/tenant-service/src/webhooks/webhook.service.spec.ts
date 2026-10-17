@@ -26,6 +26,7 @@ const withWebhook = {
   organisation: {
     webhookUrl: 'https://hooks.acme.com/liftoff',
     webhookSecret: 'whsec_test',
+    baseDomain: 'acme.app',
   },
 };
 
@@ -95,7 +96,7 @@ describe('WebhookService', () => {
       const body = init.body as string;
       expect(JSON.parse(body)).toEqual({
         event: 'tenant.active',
-        tenant: tenantRow,
+        tenant: { ...tenantRow, address: 'globex.acme.app' },
       });
       // The organisation (and its secret) never travels with the tenant.
       expect(body).not.toContain('whsec_test');

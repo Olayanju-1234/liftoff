@@ -31,6 +31,7 @@ type MockPrisma = {
     delete: jest.Mock;
   };
   eventLog: { create: jest.Mock; findMany: jest.Mock };
+  organisation: { findUnique: jest.Mock };
 };
 
 const buildPrisma = (): MockPrisma => ({
@@ -48,6 +49,11 @@ const buildPrisma = (): MockPrisma => ({
     delete: jest.fn(),
   },
   eventLog: { create: jest.fn().mockResolvedValue({}), findMany: jest.fn() },
+  organisation: {
+    findUnique: jest
+      .fn()
+      .mockResolvedValue({ handle: 'acme-corp', baseDomain: null }),
+  },
 });
 
 describe('TenantsService', () => {
@@ -81,11 +87,14 @@ describe('TenantsService', () => {
   describe('create', () => {
     it('reuses existing plan and publishes tenant.requested', async () => {
       prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
-      prisma.tenant.create.mockResolvedValueOnce({
-        id: 'tenant-1',
-        subdomain: 'acme',
-        planId: 'starter',
-      });
+      prisma.tenant.create.mockImplementationOnce(({ data }) =>
+        Promise.resolve({
+          id: 'tenant-1',
+          subdomain: 'acme',
+          planId: 'starter',
+          schemaName: data.schemaName,
+        }),
+      );
 
       const result = await service.create(baseDto, creator);
 
@@ -95,6 +104,8 @@ describe('TenantsService', () => {
       expect(createArgs.data.dbStatus).toBe(StepStatus.IN_PROGRESS);
       expect(createArgs.data.organisationId).toBe('org-1');
       expect(createArgs.data.ownerId).toBe('owner-1');
+      // The schema carries the organisation handle so two companies' "acme" never share one.
+      expect(createArgs.data.schemaName).toBe('tenant_acme_corp_acme');
       expect(amqp.publish).toHaveBeenCalledWith(
         'provisioning.direct',
         'tenant.requested',
@@ -102,10 +113,42 @@ describe('TenantsService', () => {
           tenantId: 'tenant-1',
           subdomain: 'acme',
           planId: 'starter',
+          schemaName: 'tenant_acme_corp_acme',
         },
         { timeout: 5_000 },
       );
       expect(result.id).toBe('tenant-1');
+      expect(result.address).toBe('acme.liftoff.ojusentinel.com');
+    });
+
+    it("builds the address from the organisation's base domain", async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        handle: 'acme-corp',
+        baseDomain: 'acme.app',
+      });
+      prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
+      prisma.tenant.create.mockResolvedValueOnce({
+        id: 'tenant-1',
+        subdomain: 'globex',
+        planId: 'starter',
+        schemaName: 'tenant_acme_corp_globex',
+      });
+
+      const result = await service.create(
+        { ...baseDto, subdomain: 'globex' },
+        creator,
+      );
+
+      expect(result.address).toBe('globex.acme.app');
+    });
+
+    it('answers 404 when the caller’s organisation is gone', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(null);
+
+      await expect(service.create(baseDto, creator)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(prisma.tenant.create).not.toHaveBeenCalled();
     });
 
     it('fails the tenant at its first step when tenant.requested cannot be published', async () => {
@@ -114,6 +157,7 @@ describe('TenantsService', () => {
         id: 'tenant-1',
         subdomain: 'acme',
         planId: 'starter',
+        schemaName: 'tenant_acme_corp_acme',
       });
       prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
       amqp.publish.mockRejectedValueOnce(new Error('timeout'));
@@ -167,20 +211,22 @@ describe('TenantsService', () => {
       expect(prisma.plan.create).toHaveBeenCalled();
     });
 
-    it('translates Prisma P2002 unique violation into ConflictException', async () => {
+    it('translates the per-organisation unique violation into a 409 naming the field', async () => {
       prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
       const p2002 = new Prisma.PrismaClientKnownRequestError(
         'Unique constraint failed',
         {
           code: 'P2002',
           clientVersion: 'test',
-          meta: { target: ['subdomain'] },
+          meta: { target: ['organisationId', 'subdomain'] },
         },
       );
       prisma.tenant.create.mockRejectedValueOnce(p2002);
 
-      await expect(service.create(baseDto, creator)).rejects.toBeInstanceOf(
-        ConflictException,
+      await expect(service.create(baseDto, creator)).rejects.toThrow(
+        new ConflictException(
+          'A tenant with this subdomain already exists in your organisation.',
+        ),
       );
       expect(amqp.publish).not.toHaveBeenCalled();
     });

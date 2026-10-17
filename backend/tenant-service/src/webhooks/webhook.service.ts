@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma.service';
 import { errorMessage } from '../common/error-message';
 import { assertPublicDestination, parseWebhookUrl } from './destination';
 import { signWebhookBody } from './signature';
+import { withAddress } from '../tenants/address';
 
 export const WEBHOOK_TIMEOUT_MS = 10_000;
 // Four attempts: now, then after 1 s, 5 s and 25 s.
@@ -43,7 +44,9 @@ export class WebhookService {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
       include: {
-        organisation: { select: { webhookUrl: true, webhookSecret: true } },
+        organisation: {
+          select: { webhookUrl: true, webhookSecret: true, baseDomain: true },
+        },
       },
     });
     if (!tenant) {
@@ -56,7 +59,10 @@ export class WebhookService {
     }
 
     const url = parseWebhookUrl(organisation.webhookUrl);
-    const payload: TenantWebhookPayload = { event, tenant: tenantRow };
+    const payload: TenantWebhookPayload = {
+      event,
+      tenant: withAddress(tenantRow, organisation.baseDomain),
+    };
     const body = JSON.stringify(payload);
     const deliveryId = randomUUID();
     const headers = {

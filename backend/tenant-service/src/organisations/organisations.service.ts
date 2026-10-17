@@ -17,6 +17,8 @@ export interface OrganisationResponse {
   webhookUrl: string | null;
   // True once a secret exists; the secret itself is only in the response that made it.
   webhookConfigured: boolean;
+  // Tenant addresses are <subdomain>.<baseDomain>; null means the platform domain is shown.
+  baseDomain: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,6 +33,7 @@ const publicFields = {
   handle: true,
   webhookUrl: true,
   webhookSecret: true,
+  baseDomain: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.OrganisationSelect;
@@ -68,6 +71,9 @@ export class OrganisationsService {
     if (dto.name !== undefined) {
       data.name = dto.name;
     }
+    if (dto.baseDomain !== undefined) {
+      data.baseDomain = dto.baseDomain;
+    }
 
     let secret: string | undefined;
     if (dto.webhookUrl === null) {
@@ -100,6 +106,7 @@ export class OrganisationsService {
     this.logger.log(
       `Updated organisation ${organisationId}: ${JSON.stringify({
         name: dto.name !== undefined,
+        baseDomain: dto.baseDomain !== undefined,
         webhookUrl: dto.webhookUrl !== undefined,
         secretIssued: secret !== undefined,
       })}`,
