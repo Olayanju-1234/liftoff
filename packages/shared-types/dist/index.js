@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PLAN_IDS = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
+exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
 const swagger_1 = require("@nestjs/swagger");
 const class_validator_1 = require("class-validator");
 class CreateTenantDto {
@@ -53,6 +53,7 @@ __decorate([
     (0, class_validator_1.MaxLength)(500),
     __metadata("design:type", String)
 ], CancelTenantDto.prototype, "reason", void 0);
+exports.HANDLE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/i;
 class RegisterDto {
 }
 exports.RegisterDto = RegisterDto;
@@ -78,17 +79,52 @@ __decorate([
     __metadata("design:type", String)
 ], RegisterDto.prototype, "name", void 0);
 __decorate([
-    (0, swagger_1.ApiProperty)({ example: 'Acme Corp', maxLength: 100 }),
+    (0, swagger_1.ApiProperty)({
+        example: 'Acme Corp',
+        maxLength: 100,
+        description: 'The company signing up. Its customers become tenants.',
+    }),
+    (0, class_validator_1.ValidateIf)((dto) => dto.tenantName === undefined),
     (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)({ message: 'Tenant name is required' }),
+    (0, class_validator_1.IsNotEmpty)({ message: 'Company name is required' }),
+    (0, class_validator_1.MaxLength)(100),
+    __metadata("design:type", String)
+], RegisterDto.prototype, "companyName", void 0);
+__decorate([
+    (0, swagger_1.ApiProperty)({
+        example: 'acme',
+        minLength: 3,
+        maxLength: 50,
+        description: 'Unique, URL-safe name for the company. Case-insensitive.',
+    }),
+    (0, class_validator_1.ValidateIf)((dto) => dto.subdomain === undefined),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)({ message: 'Handle is required' }),
+    (0, class_validator_1.MinLength)(3),
+    (0, class_validator_1.MaxLength)(50),
+    (0, class_validator_1.Matches)(exports.HANDLE_PATTERN, {
+        message: 'Handle may only contain letters, digits and hyphens',
+    }),
+    __metadata("design:type", String)
+], RegisterDto.prototype, "handle", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ deprecated: true, description: 'Use companyName.' }),
+    (0, class_validator_1.ValidateIf)((dto) => dto.companyName === undefined),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)({ message: 'Company name is required' }),
     (0, class_validator_1.MaxLength)(100),
     __metadata("design:type", String)
 ], RegisterDto.prototype, "tenantName", void 0);
 __decorate([
-    (0, swagger_1.ApiProperty)({ example: 'acme', maxLength: 50 }),
+    (0, swagger_1.ApiPropertyOptional)({ deprecated: true, description: 'Use handle.' }),
+    (0, class_validator_1.ValidateIf)((dto) => dto.handle === undefined),
     (0, class_validator_1.IsString)(),
-    (0, class_validator_1.IsNotEmpty)({ message: 'Subdomain is required' }),
+    (0, class_validator_1.IsNotEmpty)({ message: 'Handle is required' }),
+    (0, class_validator_1.MinLength)(3),
     (0, class_validator_1.MaxLength)(50),
+    (0, class_validator_1.Matches)(exports.HANDLE_PATTERN, {
+        message: 'Handle may only contain letters, digits and hyphens',
+    }),
     __metadata("design:type", String)
 ], RegisterDto.prototype, "subdomain", void 0);
 class LoginDto {
@@ -162,5 +198,55 @@ __decorate([
     (0, class_validator_1.MaxLength)(200),
     __metadata("design:type", String)
 ], ConfirmEmailChangeDto.prototype, "token", void 0);
+class UpdateOrganisationDto {
+}
+exports.UpdateOrganisationDto = UpdateOrganisationDto;
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ example: 'Acme Corp', maxLength: 100 }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.MaxLength)(100),
+    __metadata("design:type", String)
+], UpdateOrganisationDto.prototype, "name", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        example: 'https://api.acme.com/liftoff/webhook',
+        nullable: true,
+        description: 'Where tenant.active and tenant.failed are POSTed. Setting a new URL issues a new signing secret, returned once. null turns deliveries off.',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((dto) => dto.webhookUrl !== null),
+    (0, class_validator_1.IsUrl)({
+        protocols: ['http', 'https'],
+        require_protocol: true,
+        require_tld: false,
+    }),
+    (0, class_validator_1.MaxLength)(2000),
+    __metadata("design:type", String)
+], UpdateOrganisationDto.prototype, "webhookUrl", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        description: 'Issue a new signing secret for the current URL. Returned once; the old one stops working.',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], UpdateOrganisationDto.prototype, "rotateWebhookSecret", void 0);
+class CreateApiKeyDto {
+}
+exports.CreateApiKeyDto = CreateApiKeyDto;
+__decorate([
+    (0, swagger_1.ApiProperty)({ example: 'Billing integration', maxLength: 100 }),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.MaxLength)(100),
+    __metadata("design:type", String)
+], CreateApiKeyDto.prototype, "name", void 0);
+exports.API_KEY_HEADER = 'x-api-key';
+exports.API_KEY_PREFIX = 'lk_';
+exports.WEBHOOK_SIGNATURE_HEADER = 'x-liftoff-signature';
+exports.WEBHOOK_EVENT_HEADER = 'x-liftoff-event';
+exports.WEBHOOK_DELIVERY_HEADER = 'x-liftoff-delivery';
 exports.PLAN_IDS = ['starter', 'pro', 'enterprise'];
 //# sourceMappingURL=index.js.map

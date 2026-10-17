@@ -6,12 +6,15 @@ export declare class CreateTenantDto {
 export declare class CancelTenantDto {
     reason?: string;
 }
+export declare const HANDLE_PATTERN: RegExp;
 export declare class RegisterDto {
     email: string;
     password: string;
     name?: string;
-    tenantName: string;
-    subdomain: string;
+    companyName?: string;
+    handle?: string;
+    tenantName?: string;
+    subdomain?: string;
 }
 export declare class LoginDto {
     email: string;
@@ -29,6 +32,24 @@ export declare class UpdateSettingsDto {
 }
 export declare class ConfirmEmailChangeDto {
     token: string;
+}
+export declare class UpdateOrganisationDto {
+    name?: string;
+    webhookUrl?: string | null;
+    rotateWebhookSecret?: boolean;
+}
+export declare class CreateApiKeyDto {
+    name: string;
+}
+export declare const API_KEY_HEADER = "x-api-key";
+export declare const API_KEY_PREFIX = "lk_";
+export declare const WEBHOOK_SIGNATURE_HEADER = "x-liftoff-signature";
+export declare const WEBHOOK_EVENT_HEADER = "x-liftoff-event";
+export declare const WEBHOOK_DELIVERY_HEADER = "x-liftoff-delivery";
+export type TenantWebhookEvent = 'tenant.active' | 'tenant.failed';
+export interface TenantWebhookPayload<TTenant = unknown> {
+    event: TenantWebhookEvent;
+    tenant: TTenant;
 }
 export declare const PLAN_IDS: readonly ["starter", "pro", "enterprise"];
 export type PlanId = (typeof PLAN_IDS)[number];
