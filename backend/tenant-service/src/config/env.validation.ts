@@ -45,6 +45,9 @@ export const envValidationSchema = Joi.object({
   // Encrypts per-organisation secrets (Stripe keys) at rest. Without it the company
   // cannot connect Stripe (503) and billing is SKIPPED for everyone.
   ORG_SECRETS_KEY: Joi.string().min(32).optional().allow(''),
+  // Derives the public status-page token of every tenant. Falls back to JWT_SECRET;
+  // changing whichever is in use invalidates every status link handed out so far.
+  STATUS_TOKEN_SECRET: Joi.string().min(32).optional().allow(''),
   // Shared with the workers, which fetch per-organisation config over /internal/*.
   // Without it the internal API answers 503 and billing fails for real tenants.
   INTERNAL_API_TOKEN: Joi.string().min(32).optional().allow(''),

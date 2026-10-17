@@ -408,6 +408,42 @@ export const PLAN_IDS = ['starter', 'pro', 'enterprise'] as const;
 export type PlanId = (typeof PLAN_IDS)[number];
 
 // ============================================================================
+// Public status page
+// ============================================================================
+
+// The last path segment of a tenant's statusUrl: 32 bytes, base64url.
+export const STATUS_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+// What GET /status/:token says, for the company's customer: plain words only.
+export type PublicTenantState =
+  | 'setting-up'
+  | 'ready'
+  | 'needs-attention'
+  | 'stopped'
+  | 'removed';
+export type PublicStepState =
+  | 'waiting'
+  | 'in-progress'
+  | 'done'
+  | 'skipped'
+  | 'failed'
+  | 'stopped';
+
+export interface PublicTenantStatus {
+  // The company doing the onboarding, and the customer being set up.
+  company: string;
+  name: string;
+  state: PublicTenantState;
+  // Steps finished (done or skipped) out of the total.
+  done: number;
+  total: number;
+  steps: { name: string; state: PublicStepState }[];
+  // The customer's address, once ready; null before that.
+  address: string | null;
+  updatedAt: string;
+}
+
+// ============================================================================
 // Tenant status
 // ============================================================================
 

@@ -10,6 +10,7 @@ import { IdempotencyService } from './idempotency.service';
 import { QuotasService } from './quotas.service';
 import { DEAD_LETTER_EXCHANGE, DEAD_LETTER_QUEUE } from './dead-letters';
 import { WebhooksModule } from '../webhooks/webhooks.module';
+import { StatusModule } from '../status/status.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { WebhooksModule } from '../webhooks/webhooks.module';
     }),
     ScheduleModule.forRoot(),
     WebhooksModule,
+    StatusModule,
     RabbitMQModule.forRoot({
       exchanges: [
         {

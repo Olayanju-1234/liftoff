@@ -13,6 +13,7 @@ import { TenantsService } from './tenants.service';
 import { PrismaService } from '../prisma.service';
 import { WebhookService } from '../webhooks/webhook.service';
 import { QuotaExceededException, QuotasService } from './quotas.service';
+import { StatusTokenService } from '../status/status-token.service';
 import {
   DEAD_LETTER_QUEUE,
   type DeadLetterMessage,
@@ -71,6 +72,10 @@ describe('TenantsService', () => {
   let amqp: { publish: jest.Mock };
   let webhooks: { notify: jest.Mock };
   let quotas: { assertCanProvision: jest.Mock; record: jest.Mock };
+  const statusTokens = {
+    hashFor: jest.fn((id: string) => `hash(${id})`),
+    urlFor: jest.fn((id: string) => `https://app.test/status/tok(${id})`),
+  };
 
   const baseDto = { name: 'Acme', subdomain: 'acme', planId: 'starter' };
   const creator = { organisationId: 'org-1', ownerId: 'owner-1' };
@@ -99,6 +104,7 @@ describe('TenantsService', () => {
         { provide: AmqpConnection, useValue: amqp },
         { provide: WebhookService, useValue: webhooks },
         { provide: QuotasService, useValue: quotas },
+        { provide: StatusTokenService, useValue: statusTokens },
       ],
     }).compile();
 
@@ -122,6 +128,12 @@ describe('TenantsService', () => {
       expect(prisma.plan.create).not.toHaveBeenCalled();
       expect(prisma.tenant.create).toHaveBeenCalledTimes(1);
       const [[createArgs]] = prisma.tenant.create.mock.calls;
+      // The id is drawn up front so the status token hash lands in the same insert.
+      expect(createArgs.data.id).toMatch(/^c[a-z0-9]{24}$/);
+      expect(createArgs.data.statusTokenHash).toBe(
+        `hash(${createArgs.data.id as string})`,
+      );
+      expect(result.statusUrl).toBe('https://app.test/status/tok(tenant-1)');
       expect(createArgs.data.dbStatus).toBe(StepStatus.IN_PROGRESS);
       expect(createArgs.data.organisationId).toBe('org-1');
       expect(createArgs.data.ownerId).toBe('owner-1');

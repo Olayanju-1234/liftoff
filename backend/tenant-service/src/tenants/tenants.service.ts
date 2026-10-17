@@ -43,6 +43,8 @@ import { WebhookService } from '../webhooks/webhook.service';
 import { legacySchemaName, schemaNameFor, withAddress } from './address';
 import { STEP_INPUT, rebuildInput, storedInput } from './retry';
 import { QuotasService } from './quotas.service';
+import { StatusTokenService } from '../status/status-token.service';
+import { newTenantId } from './ids';
 
 const PUBLISH_TIMEOUT_MS = 5_000;
 
@@ -115,7 +117,19 @@ export class TenantsService {
     private readonly amqpConnection: AmqpConnection,
     private readonly webhooks: WebhookService,
     private readonly quotas: QuotasService,
+    private readonly statusTokens: StatusTokenService,
   ) {}
+
+  // Every tenant the API returns carries its address and its public status page.
+  private present<T extends { id: string; subdomain: string }>(
+    tenant: T,
+    baseDomain: string | null | undefined,
+  ) {
+    return {
+      ...withAddress(tenant, baseDomain),
+      statusUrl: this.statusTokens.urlFor(tenant.id),
+    };
+  }
 
   async create(createTenantDto: CreateTenantDto, creator: TenantCreator) {
     const organisation = await this.prisma.organisation.findUnique({
@@ -149,8 +163,11 @@ export class TenantsService {
     }
 
     try {
+      // The id is drawn here so the status token hash can be written in the same insert.
+      const id = newTenantId();
       const tenant = await this.prisma.tenant.create({
         data: {
+          id,
           name: createTenantDto.name,
           subdomain: createTenantDto.subdomain,
           schemaName: schemaNameFor(
@@ -161,6 +178,7 @@ export class TenantsService {
           organisationId: creator.organisationId,
           ownerId: creator.ownerId,
           isTest,
+          statusTokenHash: this.statusTokens.hashFor(id),
           dbStatus: StepStatus.IN_PROGRESS, // Start first step
         },
       });
@@ -170,7 +188,7 @@ export class TenantsService {
       }
       await this.startProvisioning(tenant);
 
-      return withAddress(tenant, organisation.baseDomain);
+      return this.present(tenant, organisation.baseDomain);
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -550,7 +568,7 @@ export class TenantsService {
         orderBy: { createdAt: 'desc' },
       }),
     ]);
-    return tenants.map((tenant) => withAddress(tenant, baseDomain));
+    return tenants.map((tenant) => this.present(tenant, baseDomain));
   }
 
   private async baseDomainOf(organisationId: string): Promise<string | null> {
@@ -585,7 +603,7 @@ export class TenantsService {
       throw new NotFoundException(`Tenant ${id} not found`);
     }
     const { organisation, ...row } = tenant;
-    return withAddress(row, organisation?.baseDomain);
+    return this.present(row, organisation?.baseDomain);
   }
 
   async findEvents(id: string, organisationId: string) {
@@ -624,7 +642,7 @@ export class TenantsService {
       tenant.status === TenantStatus.FAILED
         ? await this.deprovision(tenant, cancelReason, true)
         : await this.cancelTenant(tenant, cancelReason);
-    return withAddress(result, await this.baseDomainOf(organisationId));
+    return this.present(result, await this.baseDomainOf(organisationId));
   }
 
   // The timeout sweeper acts for no user, so it looks the tenant up unscoped.
@@ -726,7 +744,7 @@ export class TenantsService {
     this.logger.log(
       `Retrying tenant ${id} at ${step}: ${input.routingKey} → ${input.queue} (${source})`,
     );
-    return withAddress(
+    return this.present(
       await this.reload(id),
       await this.baseDomainOf(organisationId),
     );
@@ -760,7 +778,7 @@ export class TenantsService {
   async delete(id: string, organisationId: string) {
     const tenant = await this.findInOrganisation(id, organisationId);
     const removed = await this.deprovision(tenant, 'Deleted by user');
-    return withAddress(removed, await this.baseDomainOf(organisationId));
+    return this.present(removed, await this.baseDomainOf(organisationId));
   }
 
   // Starts (or resumes) the teardown saga. Safe to call again: a finished removal is

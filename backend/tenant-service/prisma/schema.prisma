@@ -48,6 +48,10 @@ model Tenant {
   billingStatus     StepStatus @default(PENDING)
   notificationStatus StepStatus @default(PENDING)
   
+  // SHA-256 of the public status-page token (derived per tenant from STATUS_TOKEN_SECRET),
+  // so GET /status/:token is one indexed lookup and the token itself is never stored.
+  statusTokenHash String? @unique
+
   // What billing created in the company's Stripe account, from tenant.billing.active.
   // Null when billing was skipped (test tenant, or Stripe not connected).
   stripeCustomerId     String?
