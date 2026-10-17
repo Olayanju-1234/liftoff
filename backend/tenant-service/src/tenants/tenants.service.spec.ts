@@ -33,7 +33,7 @@ type MockPrisma = {
     delete: jest.Mock;
     count: jest.Mock;
   };
-  eventLog: { create: jest.Mock; findMany: jest.Mock };
+  eventLog: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
   organisation: { findUnique: jest.Mock };
 };
 
@@ -52,7 +52,11 @@ const buildPrisma = (): MockPrisma => ({
     delete: jest.fn(),
     count: jest.fn().mockResolvedValue(0),
   },
-  eventLog: { create: jest.fn().mockResolvedValue({}), findMany: jest.fn() },
+  eventLog: {
+    create: jest.fn().mockResolvedValue({}),
+    findMany: jest.fn(),
+    findFirst: jest.fn().mockResolvedValue(null),
+  },
   organisation: {
     findUnique: jest
       .fn()
@@ -1368,6 +1372,206 @@ describe('TenantsService', () => {
           });
         },
       );
+    });
+  });
+
+  describe('retry', () => {
+    const failedAt = (step: ProvisioningStep, extra: object = {}) => {
+      const tenant: Record<string, unknown> = {
+        id: 't',
+        subdomain: 'acme',
+        planId: 'pro',
+        organisationId: 'org-1',
+        isWorkspace: false,
+        isTest: false,
+        schemaName: 'tenant_acme_corp_acme',
+        status: TenantStatus.FAILED,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+        dbStatus: StepStatus.SUCCESS,
+        dnsStatus: StepStatus.SUCCESS,
+        credentialsStatus: StepStatus.SUCCESS,
+        billingStatus: StepStatus.SUCCESS,
+        notificationStatus: StepStatus.SUCCESS,
+        ...extra,
+      };
+      const order: ProvisioningStep[] = [
+        'dbStatus',
+        'dnsStatus',
+        'credentialsStatus',
+        'billingStatus',
+        'notificationStatus',
+      ];
+      for (const later of order.slice(order.indexOf(step) + 1)) {
+        tenant[later] = StepStatus.PENDING;
+      }
+      tenant[step] = StepStatus.FAILED;
+      return tenant;
+    };
+
+    beforeEach(() => {
+      prisma.tenant.updateMany.mockResolvedValue({ count: 1 });
+      prisma.tenant.findUnique.mockResolvedValue({
+        id: 't',
+        subdomain: 'acme',
+      });
+    });
+
+    it.each([
+      ['dnsStatus', 'dns-provisioner-queue', ['tenant.db.ready']],
+      ['credentialsStatus', 'credentials-queue', ['tenant.dns.ready']],
+      ['billingStatus', 'billing-queue', ['tenant.credentials.ready']],
+      [
+        'notificationStatus',
+        'notification-queue',
+        ['tenant.billing.active', 'tenant.billing.skipped'],
+      ],
+    ])(
+      'republishes the stored input of %s straight to %s',
+      async (step, queue, events) => {
+        const stored = {
+          tenantId: 't',
+          subdomain: 'acme',
+          planId: 'pro',
+          x: 1,
+        };
+        prisma.tenant.findFirst.mockResolvedValueOnce(
+          failedAt(step as ProvisioningStep),
+        );
+        prisma.eventLog.findFirst.mockResolvedValueOnce({ payload: stored });
+
+        await service.retry('t', 'org-1');
+
+        expect(prisma.eventLog.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: {
+              tenantId: 't',
+              eventType: { in: events },
+              status: 'Success',
+            },
+          }),
+        );
+        const [[{ where, data }]] = prisma.tenant.updateMany.mock.calls;
+        expect(where).toEqual({
+          id: 't',
+          status: TenantStatus.FAILED,
+          [step]: StepStatus.FAILED,
+        });
+        expect(data).toEqual({
+          status: TenantStatus.PROVISIONING,
+          [step]: StepStatus.IN_PROGRESS,
+        });
+        expect(amqp.publish).toHaveBeenCalledWith('', queue, stored, {
+          timeout: 5_000,
+        });
+        expect(prisma.eventLog.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            eventType: 'tenant.retry',
+            payload: expect.objectContaining({
+              step,
+              source: 'event-log',
+            }) as unknown,
+          }) as unknown,
+        });
+      },
+    );
+
+    it('rebuilds tenant.requested for the first step, which is never logged', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce(
+        failedAt('dbStatus', { isTest: true }),
+      );
+
+      await service.retry('t', 'org-1');
+
+      expect(prisma.eventLog.findFirst).not.toHaveBeenCalled();
+      expect(amqp.publish).toHaveBeenCalledWith(
+        '',
+        'db-provisioner-queue',
+        {
+          tenantId: 't',
+          subdomain: 'acme',
+          planId: 'pro',
+          test: true,
+          schemaName: 'tenant_acme_corp_acme',
+        },
+        { timeout: 5_000 },
+      );
+    });
+
+    it("rebuilds notification's input from the row when the log has nothing usable", async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce(
+        failedAt('notificationStatus', {
+          billingStatus: StepStatus.SKIPPED,
+        }),
+      );
+      prisma.eventLog.findFirst.mockResolvedValueOnce({
+        payload: { tenantId: 'someone-else' },
+      });
+
+      await service.retry('t', 'org-1');
+
+      expect(amqp.publish).toHaveBeenCalledWith(
+        '',
+        'notification-queue',
+        expect.objectContaining({
+          tenantId: 't',
+          skipped: true,
+          skipReason: 'not-connected',
+          stripeSubscriptionId: null,
+        }),
+        { timeout: 5_000 },
+      );
+    });
+
+    it.each([
+      TenantStatus.ACTIVE,
+      TenantStatus.PROVISIONING,
+      TenantStatus.CANCELLED,
+      TenantStatus.DEPROVISIONING,
+    ])('refuses a %s tenant with 400 and publishes nothing', async (status) => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({
+        ...failedAt('billingStatus'),
+        status,
+      });
+
+      await expect(service.retry('t', 'org-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prisma.tenant.updateMany).not.toHaveBeenCalled();
+      expect(amqp.publish).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 and publishes nothing when a second retry got there first', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce(failedAt('billingStatus'));
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(service.retry('t', 'org-1')).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(amqp.publish).not.toHaveBeenCalled();
+    });
+
+    it('puts the tenant back to FAILED and answers 503 when the retry cannot be published', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce(failedAt('billingStatus'));
+      amqp.publish.mockRejectedValueOnce(new Error('broker down'));
+
+      await expect(service.retry('t', 'org-1')).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
+      const [, [{ data }]] = prisma.tenant.updateMany.mock.calls;
+      expect(data).toEqual({
+        status: TenantStatus.FAILED,
+        billingStatus: StepStatus.FAILED,
+      });
+    });
+
+    it("answers 404 for another organisation's tenant", async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce(null);
+
+      await expect(service.retry('t', 'org-2')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(amqp.publish).not.toHaveBeenCalled();
     });
   });
 });

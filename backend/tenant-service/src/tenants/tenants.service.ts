@@ -40,6 +40,7 @@ import {
 } from './dead-letters';
 import { WebhookService } from '../webhooks/webhook.service';
 import { legacySchemaName, schemaNameFor, withAddress } from './address';
+import { STEP_INPUT, rebuildInput, storedInput } from './retry';
 import { QuotasService } from './quotas.service';
 
 const PUBLISH_TIMEOUT_MS = 5_000;
@@ -626,6 +627,93 @@ export class TenantsService {
 
     this.logger.log(`Tenant ${id} cancelled: ${cancelReason}`);
     return updatedTenant;
+  }
+
+  // Runs the failed step again: its input message goes straight back to that worker's
+  // queue, and the tenant reads PROVISIONING with the step IN_PROGRESS until it answers.
+  async retry(id: string, organisationId: string) {
+    const tenant = await this.findInOrganisation(id, organisationId);
+    const step = PROVISIONING_STEPS.find(
+      (s) => tenant[s] === StepStatus.FAILED,
+    );
+    if (tenant.status !== TenantStatus.FAILED || !step) {
+      throw new BadRequestException(
+        `Only a FAILED tenant can be retried; this one is ${tenant.status}`,
+      );
+    }
+
+    const input = STEP_INPUT[step];
+    const { payload, source } = await this.retryInput(tenant, step);
+
+    const where: Prisma.TenantWhereInput = {
+      id,
+      status: TenantStatus.FAILED,
+    };
+    where[step] = StepStatus.FAILED;
+    const data: Prisma.TenantUpdateManyMutationInput = {
+      status: TenantStatus.PROVISIONING,
+    };
+    data[step] = StepStatus.IN_PROGRESS;
+    // A double click, or a retry racing a removal, publishes once.
+    const { count } = await this.prisma.tenant.updateMany({ where, data });
+    if (count === 0) {
+      throw new ConflictException(
+        'This tenant changed while you were retrying it. Refresh and try again.',
+      );
+    }
+
+    await this.logEvent(id, 'tenant.retry', 'Success', {
+      step,
+      queue: input.queue,
+      routingKey: input.routingKey,
+      source,
+    });
+    try {
+      await this.amqpConnection.publish('', input.queue, payload, {
+        timeout: PUBLISH_TIMEOUT_MS,
+      });
+    } catch (error) {
+      await this.failStep(
+        id,
+        step,
+        `Could not republish ${input.routingKey} to ${input.queue}: ${errorMessage(error)}`,
+      );
+      throw new ServiceUnavailableException(
+        'The retry could not be queued. Try again in a moment.',
+      );
+    }
+    this.logger.log(
+      `Retrying tenant ${id} at ${step}: ${input.routingKey} → ${input.queue} (${source})`,
+    );
+    return withAddress(
+      await this.reload(id),
+      await this.baseDomainOf(organisationId),
+    );
+  }
+
+  // The payload the step originally received, from the event log; rebuilt from the
+  // tenant row when it is not there (tenant.requested is never logged).
+  private async retryInput(
+    tenant: Tenant,
+    step: ProvisioningStep,
+  ): Promise<{ payload: object; source: 'event-log' | 'tenant' }> {
+    const { events } = STEP_INPUT[step];
+    if (events.length > 0) {
+      const logged = await this.prisma.eventLog.findFirst({
+        where: {
+          tenantId: tenant.id,
+          eventType: { in: events },
+          status: 'Success',
+        },
+        orderBy: { timestamp: 'desc' },
+        select: { payload: true },
+      });
+      const payload = storedInput(logged?.payload, tenant.id);
+      if (payload) {
+        return { payload, source: 'event-log' };
+      }
+    }
+    return { payload: rebuildInput(tenant, step), source: 'tenant' };
   }
 
   async delete(id: string, organisationId: string) {

@@ -158,7 +158,7 @@ sequenceDiagram
 - Exchange: `provisioning.direct` (direct, durable)
 - Dead letter exchange: `dlx.provisioning` (durable)
 - Each worker queue dead-letters to `dlx.provisioning` with its own key (`db-provisioner.failed`, `billing.failed`, …)
-- tenant-service binds two durable queues to every key: `provisioning.dead-letters`, an unconsumed parking lot for inspection and replay, and its own consumer queue, which marks the step and tenant `FAILED`. See [docs/dead-letters.md](docs/dead-letters.md)
+- tenant-service binds two durable queues to every key: `provisioning.dead-letters`, an unconsumed parking lot for inspection, and its own consumer queue, which marks the step and tenant `FAILED`. A failed step is replayed with `POST /tenants/:id/retry` (the Retry button in both dashboard views). See [docs/dead-letters.md](docs/dead-letters.md)
 - `prefetchCount: 10` on all consumers
 
 ### Shared Event Types
@@ -348,6 +348,7 @@ Quotas: an organisation may have 10 active tenants (`PROVISIONING` or `ACTIVE`) 
 | POST | `/tenants` | Create tenant and start provisioning (user token or API key; 10/min per IP). Send an `Idempotency-Key` header to make retries safe: the first response is stored per organisation for 24 h and replayed on a repeat (`Idempotent-Replayed: true`); the same key with a different body gets 422 |
 | GET | `/tenants/:id` | Get tenant with step statuses (user token or API key; 60/min per IP) |
 | DELETE | `/tenants/:id` | Remove a tenant: drop its schema, revoke its key, cancel its Stripe subscription; `DEPROVISIONING`, then `DELETED` (soft) and the `tenant.deleted` webhook. Again on a stuck removal retries it |
+| POST | `/tenants/:id/retry` | Run the failed step of a `FAILED` tenant again: its input message goes straight back to that worker's queue (payload from the event log, or rebuilt from the tenant), the tenant reads `PROVISIONING` with the step `IN_PROGRESS`, finished steps are kept. 400 unless `FAILED`, 409 if it changed meanwhile |
 | POST | `/tenants/:id/cancel` | From `PROVISIONING`: stop the pipeline (`CANCELLED`). From `ACTIVE`/`FAILED`: remove it like `DELETE`, recording the reason |
 | GET | `/tenants/:id/events` | Get event log for tenant |
 | GET | `/events` | Event log across the organisation's tenants |

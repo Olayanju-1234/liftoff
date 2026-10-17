@@ -234,12 +234,33 @@ describe('API Gateway (e2e)', () => {
       );
     });
 
+    it('POST /tenants/:id/retry proxies with the user token and answers 200', async () => {
+      http.post.mockReturnValueOnce(
+        of({ data: { id: tenantId, status: 'PROVISIONING' } }),
+      );
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/tenants/${tenantId}/retry`,
+        headers,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ id: tenantId, status: 'PROVISIONING' });
+      expect(http.post).toHaveBeenCalledWith(
+        `/tenants/${tenantId}/retry`,
+        {},
+        forwarded,
+      );
+    });
+
     it.each([
       ['GET', '/tenants/3f2b8c1e-9a4d-4e7b-8c2f-1d5e6a7b8c9d'],
       ['GET', '/tenants/..%2Fsettings'],
       ['GET', '/tenants/..%2F..%2Fauth%2Fme/events'],
       ['DELETE', `/tenants/${tenantId}%3Fforce%3Dtrue`],
       ['POST', `/tenants/${tenantId.toUpperCase()}/cancel`],
+      ['POST', '/tenants/..%2Fsettings/retry'],
     ] as const)('%s %s is rejected before proxying', async (method, url) => {
       const payload = method === 'POST' ? {} : undefined;
       const res = await app.inject({ method, url, headers, payload });

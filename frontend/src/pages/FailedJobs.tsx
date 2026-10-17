@@ -33,7 +33,7 @@ export default function FailedJobs() {
     const now = useNow();
     const tenants = useResource(getTenants, { interval: 10_000 });
     const events = useResource(getEvents, { interval: 15_000 });
-    const actions = useTenantActions({ onCancelled: tenants.refresh, onDeleted: tenants.refresh });
+    const actions = useTenantActions({ onCancelled: tenants.refresh, onDeleted: tenants.refresh, onRetried: tenants.refresh });
     const [open, setOpen] = useState<string | null>(null);
 
     const list = tenants.data ?? [];
@@ -153,7 +153,14 @@ export default function FailedJobs() {
                                     <p className="font-mono text-[12px] text-abort">
                                         {stage ? `${stage.code} ${stage.service} failed · ${stage.deadLetterKey}` : 'tenant marked FAILED'}
                                     </p>
-                                    <OpenLink id={t.id} />
+                                    <div className="flex gap-2">
+                                        {stage && t.status === 'FAILED' && (
+                                            <Button size="sm" onClick={() => actions.retry(t)} busy={actions.retrying === t.id} title={`Republish ${stage.consumes} to ${stage.queue}`}>
+                                                {actions.retrying !== t.id && <RotateCcw size={13} />} Retry {stage.code}
+                                            </Button>
+                                        )}
+                                        <OpenLink id={t.id} />
+                                    </div>
                                 </li>
                             );
                         })}
@@ -221,10 +228,11 @@ export default function FailedJobs() {
 
             <aside className="mt-8 rounded-md border border-dashed border-rule-strong bg-card/70 px-5 py-4 text-[14px] leading-relaxed text-ink-2">
                 <p className="label mb-1.5">Note</p>
-                Replaying a dead-lettered message isn't exposed through the API, and this codebase doesn't bind a queue to{' '}
-                <code className="font-mono text-[13px] text-ink">{DLX}</code>, so the broker only keeps those messages if you bind one
-                yourself. Until then, the tenant state above is the record of what failed. Cancel a stalled tenant here, or let the sweeper
-                do it after 30 minutes.
+                Every dead letter on <code className="font-mono text-[13px] text-ink">{DLX}</code> is also parked in{' '}
+                <code className="font-mono text-[13px] text-ink">provisioning.dead-letters</code> for inspection. You don't need it to
+                replay: <span className="font-medium text-ink">Retry</span> (<code className="font-mono text-[13px] text-ink">POST /tenants/:id/retry</code>)
+                republishes the failed step's input straight to its worker queue, from the event log or rebuilt from the tenant. Cancel a
+                stalled tenant here, or let the step timeout fail it after 2 minutes.
             </aside>
         </>
     );

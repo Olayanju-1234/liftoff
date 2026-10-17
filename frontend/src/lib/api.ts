@@ -12,6 +12,8 @@ export const getTenant = (id: string) => api.get<Tenant>(`/tenants/${id}`).then(
 export const createTenant = (data: { name: string; subdomain: string; planId: string; test?: boolean }, idempotencyKey?: string) =>
     api.post<Tenant>('/tenants', data, idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : undefined).then(res => res.data);
 export const deleteTenant = (id: string) => api.delete<Tenant>(`/tenants/${id}`).then((res) => res.data);
+// Runs the failed step of a FAILED tenant again; answers with the tenant PROVISIONING.
+export const retryTenant = (id: string) => api.post<Tenant>(`/tenants/${id}/retry`).then((res) => res.data);
 export const cancelTenant = (id: string, reason?: string) =>
     api.post<Tenant>(`/tenants/${id}/cancel`, { reason }).then(res => res.data);
 

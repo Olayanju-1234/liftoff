@@ -64,9 +64,30 @@ routing key to replay it with.
 
 ## Replay
 
-Fix the cause first, for example a missing Stripe price or a bad plan ID. Then
-take the message off the parking lot and publish its payload back to
-`provisioning.direct` with the original routing key:
+Fix the cause first, for example a missing Stripe price (Settings → Billing) or
+a bad plan ID. Then press **Retry** on the tenant (both dashboard views, and the
+Failed list under the hood), or call the API:
+
+```bash
+curl -s -X POST https://api.liftoff.ojusentinel.com/tenants/<id>/retry \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+tenant-service finds the first `FAILED` step, takes the message that step
+consumed (the payload it logged when the previous step finished, or, for the
+first step, `tenant.requested` rebuilt from the tenant row) and publishes it
+through the default exchange straight to that worker's queue, so only the
+failed worker sees it again. The tenant reads `PROVISIONING` with the step
+`IN_PROGRESS`, a `tenant.retry` event names the step, queue and payload source,
+and the 2-minute step timeout applies again. Only a `FAILED` tenant can be
+retried (400 otherwise); a second click while the first is in flight gets 409.
+The parked copy stays in `provisioning.dead-letters`: RabbitMQ can't take one
+message out of the middle of a queue, and the cap ages it out.
+
+### By hand
+
+When the API is not an option, take the message off the parking lot and
+publish its payload back to `provisioning.direct` with the original routing key:
 
 ```bash
 # Removes the oldest parked message and prints it
@@ -91,9 +112,9 @@ If tenant-service can't publish `tenant.requested` within 5 seconds (the broker
 is down, for example), it marks the tenant `FAILED` at `dbStatus` with the error
 `Could not publish tenant.requested: …`. Nothing reached the broker, so nothing
 is parked. `POST /auth/register` still returns tokens in this case, and
-`POST /tenants` returns an error. To start the saga again, publish
-`tenant.requested` yourself with the tenant's `id`, `subdomain` and `planId`
-from `GET /tenants/:id`:
+`POST /tenants` returns an error. `POST /tenants/:id/retry` starts the saga
+again once the broker is back. By hand, publish `tenant.requested` yourself
+with the tenant's `id`, `subdomain` and `planId` from `GET /tenants/:id`:
 
 ```bash
 rabbitmqadmin -V <vhost> publish exchange=provisioning.direct routing_key=tenant.requested \
