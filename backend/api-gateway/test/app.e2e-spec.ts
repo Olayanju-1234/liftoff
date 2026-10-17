@@ -275,6 +275,94 @@ describe('API Gateway (e2e)', () => {
     });
   });
 
+  describe('customer plans on PUT /organisation', () => {
+    const headers = { authorization: 'Bearer user.jwt.token' };
+
+    it('proxies a valid plan list with prices, lowercasing and trimming ids', async () => {
+      http.put.mockReturnValueOnce(of({ data: { id: 'org-1' } }));
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/organisation',
+        headers,
+        payload: {
+          plans: [
+            {
+              id: ' Growth ',
+              name: 'Growth',
+              description: 'For teams of 10 to 50',
+            },
+            { id: 'scale', name: ' Scale ' },
+          ],
+          stripePrices: { growth: 'price_1Qabcdefgh', scale: null },
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [[, body]] = http.put.mock.calls as [[string, unknown]];
+      expect(body).toEqual({
+        plans: [
+          {
+            id: 'growth',
+            name: 'Growth',
+            description: 'For teams of 10 to 50',
+          },
+          { id: 'scale', name: 'Scale' },
+        ],
+        stripePrices: { growth: 'price_1Qabcdefgh', scale: null },
+      });
+    });
+
+    it.each([
+      ['an empty list', { plans: [] }],
+      ['a bad id', { plans: [{ id: 'Not Valid', name: 'x' }] }],
+      ['a missing name', { plans: [{ id: 'growth' }] }],
+      [
+        'duplicate ids',
+        {
+          plans: [
+            { id: 'a', name: 'A' },
+            { id: 'A', name: 'B' },
+          ],
+        },
+      ],
+      [
+        'an unknown plan field',
+        { plans: [{ id: 'a', name: 'A', price: 'x' }] },
+      ],
+      ['a bad price', { stripePrices: { growth: 'not-a-price' } }],
+      ['a bad price key', { stripePrices: { 'Bad Key': 'price_1Qabcdefgh' } }],
+    ])('rejects %s with 400 before proxying', async (_what, payload) => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/organisation',
+        headers,
+        payload,
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(http.put).not.toHaveBeenCalled();
+    });
+
+    it('proxies plans: null (back to the defaults)', async () => {
+      http.put.mockReturnValueOnce(of({ data: { id: 'org-1' } }));
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/organisation',
+        headers,
+        payload: { plans: null },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(http.put).toHaveBeenCalledWith(
+        '/organisation',
+        { plans: null },
+        { headers: { Authorization: 'Bearer user.jwt.token' } },
+      );
+    });
+  });
+
   describe('public status page', () => {
     const token = 'A'.repeat(43);
 
