@@ -23,9 +23,8 @@ export class AppService {
     private readonly internalApi: InternalApiClient,
   ) {}
 
+  // Unbound: tenant-service sends this step's input to the queue when the step is due.
   @RabbitSubscribe({
-    exchange: 'provisioning.direct',
-    routingKey: 'tenant.credentials.ready',
     queue: 'billing-queue',
     queueOptions: {
       durable: true,

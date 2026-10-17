@@ -38,7 +38,7 @@ export function setupSwagger(app: NestFastifyApplication): void {
         in: 'header',
         name: 'x-api-key',
         description:
-          'Company API key from POST /api-keys. Accepted on POST /tenants and GET /tenants/:id, also as `Authorization: Bearer lk_…`.',
+          'Company API key from POST /api-keys. Accepted on POST /tenants, GET /tenants/:id and the custom step callbacks, also as `Authorization: Bearer lk_…`.',
       },
       'api-key',
     )
@@ -46,6 +46,10 @@ export function setupSwagger(app: NestFastifyApplication): void {
     .addTag('Organisation', 'The signed-up company and its webhook')
     .addTag('API keys', 'Company API keys for server-to-server calls')
     .addTag('Tenants', 'Customer tenants: lifecycle and provisioning state')
+    .addTag(
+      'Custom steps',
+      'Callbacks from your own system for steps set to custom (PUT /organisation { stepConfig })',
+    )
     .addTag('Settings', 'Per-user settings')
     .addTag('Health', 'Liveness probe')
     .build();

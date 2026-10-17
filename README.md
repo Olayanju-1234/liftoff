@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/Olayanju-1234/liftoff/actions/workflows/ci.yml/badge.svg)](https://github.com/Olayanju-1234/liftoff/actions/workflows/ci.yml)
 
-A production-grade microservices platform that automates the full lifecycle of tenant provisioning through an event-driven pipeline. Built to demonstrate distributed systems design, Stripe billing integration, and choreography-based saga patterns.
+A production-grade microservices platform that automates the full lifecycle of tenant provisioning through an event-driven pipeline. Built to demonstrate distributed systems design, Stripe billing integration, and an orchestrated saga whose steps are pluggable: each one runs on Liftoff, is skipped, or is handed to the company's own system.
 
-**Who it is for:** a SaaS company signs up as an **organisation**. Its customers are the **tenants** it provisions, by hand from the dashboard or from its own backend with a **company API key**. When a tenant is ready (or fails) Liftoff POSTs a signed **webhook** to the company. See [Integrate](#integrate).
+**Who it is for:** a SaaS company signs up as an **organisation**. Its customers are the **tenants** it provisions, by hand from the dashboard or from its own backend with a **company API key**. When a tenant is ready (or fails) Liftoff POSTs a signed **webhook** to the company. Any of the five steps can be a **custom step** that runs on the company's own infrastructure: Liftoff calls its URL and waits for a callback. See [Integrate](#integrate).
 
 **[Live dashboard](https://liftoff.ojusentinel.com)** · [API docs](https://api.liftoff.ojusentinel.com/api/docs) · all seven services, RabbitMQ and PostgreSQL on one 1-vCPU ARM VPS behind nginx
 
-**At a glance:** 7 NestJS services · RabbitMQ choreography saga with a dead-letter exchange · schema-per-tenant PostgreSQL · Stripe customers and subscriptions with 14-day trials · stuck-pipeline sweeper · ADRs for the outbox pattern and Render vs AWS
+**At a glance:** 7 NestJS services · RabbitMQ saga orchestrated by tenant-service, with a dead-letter exchange · per-step builtin / skipped / custom (the company's URL, signed, with a callback and a deadline) · schema-per-tenant PostgreSQL · Stripe customers and subscriptions with 14-day trials · stuck-pipeline sweeper · ADRs for the outbox pattern and Render vs AWS
 
 ![Provisioning control: the RabbitMQ saga drawn as a live wiring diagram, with a tenant in flight at DNS and one stalled at billing](docs/assets/dashboard.png)
 
@@ -56,18 +56,22 @@ graph LR
     end
 
     UI -->|REST| GW
-    GW -->|tenant.requested| MQ
+    GW -->|REST| TS[Tenant Service]
+    TS -->|each step's input, to its queue| MQ
+    TS -->|custom step: step.requested| CO[Company's system]
+    CO -->|POST /steps/:step/complete| GW
     MQ --> DB
-    DB -->|tenant.db.ready| MQ
     MQ --> DNS
-    DNS -->|tenant.dns.ready| MQ
     MQ --> CRED
-    CRED -->|tenant.credentials.ready| MQ
     MQ --> BILL
+    MQ --> NOTIF
+    DB -->|tenant.db.ready| MQ
+    DNS -->|tenant.dns.ready| MQ
+    CRED -->|tenant.credentials.ready| MQ
     BILL -->|Stripe Customer + Subscription| BILL
     BILL -->|tenant.billing.active| MQ
-    MQ --> NOTIF
-    NOTIF -->|tenant.provisioning.complete| GW
+    NOTIF -->|tenant.provisioning.complete| MQ
+    MQ -->|results| TS
     DB --> PG
     CRED --> PG
     MQ --> DLX
@@ -93,23 +97,23 @@ Single entry point for all client requests. Applies rate limiting (100 req/min p
 
 ### Tenant Service
 
-Core orchestration service. Manages the provisioning state machine and subscribes to all pipeline events to keep per-step status accurate. It also consumes the dead-letter exchange: a rejected step marks that step and the tenant `FAILED`. A step that stays `IN_PROGRESS` with no change for 2 minutes is failed the same way (every minute; reason "Step timed out: …", `tenant.failed` webhook), and a sweeper every 5 minutes cancels any pipeline still `PROVISIONING` after 30 minutes as the backstop.
+Core orchestration service. Manages the provisioning state machine and decides what runs next: when a step is due it reads the organisation's step settings and either sends the step's input straight to that worker's queue (builtin), marks it `SKIPPED` and moves on (skipped), or POSTs `step.requested` to the company's URL and waits for its callback (custom; see step 4 of [Integrate](#integrate)). Workers only report results; none listens to another's. It also consumes the dead-letter exchange: a rejected step marks that step and the tenant `FAILED`. A step that stays `IN_PROGRESS` with no change for 2 minutes is failed the same way (every minute; reason "Step timed out: …", `tenant.failed` webhook), and a sweeper every 5 minutes cancels any pipeline still `PROVISIONING` after 30 minutes as the backstop.
 
 Provisioning states: `PROVISIONING → ACTIVE | FAILED | CANCELLED`, then `→ DEPROVISIONING → DELETED` on removal
 
 Removal (`DELETE /tenants/:id`, or `POST /tenants/:id/cancel` from `ACTIVE`/`FAILED`) is a second, smaller saga. tenant-service sets the tenant `DEPROVISIONING`, stops any provisioning step still open, and publishes `tenant.deprovision`. db-provisioner drops the schema (`DROP SCHEMA IF EXISTS … CASCADE`, only names matching `tenant_*`, and never a schema another live tenant shares), credentials-service deletes the tenant's key, and billing-service cancels the Stripe subscription in the company's account when there is one. Each answers `tenant.deprovision.done`; tenant-service records it in `teardownDbStatus` / `teardownCredentialsStatus` / `teardownBillingStatus`, and whichever result lands last moves the tenant to `DELETED` (soft: `deletedAt` is set, the row and its events stay, it leaves `GET /tenants`) and sends the `tenant.deleted` webhook. A test tenant reads `DELETED` at once and is cleaned up in the background. Every teardown is idempotent, so a replayed message or a second `DELETE` is safe; a teardown that dead-letters reads `FAILED` and `DELETE` again retries it. A deleted tenant gives its name and subdomain back once its schema is gone (`Tenant.live` becomes null, which the per-organisation unique indexes ignore).
 
-Step statuses: `PENDING → IN_PROGRESS → SUCCESS | FAILED | CANCELLED | SKIPPED` (`SKIPPED` is billing on a test tenant)
+Step statuses: `PENDING → IN_PROGRESS → SUCCESS | FAILED | CANCELLED | SKIPPED` (`SKIPPED` is billing on a test tenant or without Stripe, or any step the company set to skipped)
 
-Steps never move backwards. Each worker consumes its event in parallel with tenant-service, so a step can finish before tenant-service records its start. tenant-service therefore marks a step `IN_PROGRESS` only while it is still `PENDING`.
+Steps never move backwards: tenant-service marks a step `IN_PROGRESS` only while it is still `PENDING`, so a replayed or duplicate result never starts a step twice. `Tenant.stepModes` records how each step ran (`builtin`, `skipped` or `custom`), and each custom request is a `CustomStepCall` row with its URL, deadline, outcome and the company's output.
 
 ### Billing Service
 
-Subscribes to `tenant.credentials.ready`. Billing is never simulated. The company connects its own Stripe account with `PUT /organisation {"stripeSecretKey": "sk_…", "stripePrices": {"starter": "price_…", …}}` (Settings → Billing in the dashboard); the key is stored AES-256-GCM encrypted with `ORG_SECRETS_KEY` and never returned (`stripeConfigured: true` instead). For each tenant, billing-service fetches that configuration from tenant-service's internal API (`GET /internal/tenants/:id/billing`, authenticated with the shared `INTERNAL_API_TOKEN`, so the key never travels through RabbitMQ), creates a Stripe Customer and a Subscription with a 14-day trial on the price mapped to the tenant's plan, and publishes `tenant.billing.active` with the real ids, which tenant-service stores on the tenant. With no Stripe connected, or for a test tenant, it publishes `skipped: true` with a `skipReason` and the step is recorded as `SKIPPED`: the dashboard then says "Billing: not connected".
+Consumes `billing-queue`, where tenant-service sends the `tenant.credentials.ready` payload when billing is due and builtin. Billing is never simulated. The company connects its own Stripe account with `PUT /organisation {"stripeSecretKey": "sk_…", "stripePrices": {"starter": "price_…", …}}` (Settings → Billing in the dashboard); the key is stored AES-256-GCM encrypted with `ORG_SECRETS_KEY` and never returned (`stripeConfigured: true` instead). For each tenant, billing-service fetches that configuration from tenant-service's internal API (`GET /internal/tenants/:id/billing`, authenticated with the shared `INTERNAL_API_TOKEN`, so the key never travels through RabbitMQ), creates a Stripe Customer and a Subscription with a 14-day trial on the price mapped to the tenant's plan, and publishes `tenant.billing.active` with the real ids, which tenant-service stores on the tenant. With no Stripe connected, or for a test tenant, it publishes `skipped: true` with a `skipReason` and the step is recorded as `SKIPPED`: the dashboard then says "Billing: not connected".
 
 ### Notification Service
 
-Subscribes to `tenant.billing.active` and emails **the company**, not the customer: "<Customer> is ready", with the address and plan and a link to the customer page. Recipients are the organisation's users with a verified email and *Email notifications* on. It then publishes `tenant.provisioning.complete` with `notification: { sent, recipients, skipReason? }`; tenant-service records the step as `SUCCESS` or, when nothing was sent (no provider, nobody to send to), `SKIPPED`, and the tenant goes `ACTIVE` either way. It also subscribes to `tenant.failed`, which tenant-service publishes whenever a step is marked `FAILED`, and emails "<Customer> needs attention" with the step and the error to the users with *Failed provisioning alerts* on.
+Consumes `notification-queue` (the `tenant.billing.active` payload, sent by tenant-service when the welcome step is due and builtin) and emails **the company**, not the customer: "<Customer> is ready", with the address and plan and a link to the customer page. Recipients are the organisation's users with a verified email and *Email notifications* on. It then publishes `tenant.provisioning.complete` with `notification: { sent, recipients, skipReason? }`; tenant-service records the step as `SUCCESS` or, when nothing was sent (no provider, nobody to send to), `SKIPPED`, and the tenant goes `ACTIVE` either way. It also subscribes to `tenant.failed`, which tenant-service publishes whenever a step is marked `FAILED`, and emails "<Customer> needs attention" with the step and the error to the users with *Failed provisioning alerts* on.
 
 The customer-facing welcome is the company's job: the `tenant.active` webhook carries the tenant, its address and plan, so the company's own product sends the welcome in its own voice.
 
@@ -121,6 +125,7 @@ The customer-facing welcome is the company's job: the `tenant.active` webhook ca
 sequenceDiagram
     participant Admin
     participant Gateway
+    participant Tenant as Tenant Service
     participant RabbitMQ
     participant DB as DB Provisioner
     participant DNS as DNS Provisioner
@@ -129,34 +134,47 @@ sequenceDiagram
     participant Notify as Notification
 
     Admin->>Gateway: POST /tenants {name, subdomain, planId}
-    Gateway->>RabbitMQ: publish tenant.requested
+    Gateway->>Tenant: POST /tenants
+    Tenant->>RabbitMQ: tenant.requested → db-provisioner-queue
 
-    RabbitMQ->>DB: consume tenant.requested
+    RabbitMQ->>DB: consume
     DB->>DB: Create isolated DB schema
     DB->>RabbitMQ: publish tenant.db.ready
+    RabbitMQ->>Tenant: record dbStatus, read step settings
+    Tenant->>RabbitMQ: tenant.db.ready → dns-provisioner-queue
 
-    RabbitMQ->>DNS: consume tenant.db.ready
+    RabbitMQ->>DNS: consume
     DNS->>DNS: Register subdomain
     DNS->>RabbitMQ: publish tenant.dns.ready
+    RabbitMQ->>Tenant: record dnsStatus
+    Tenant->>RabbitMQ: tenant.dns.ready → credentials-queue
 
-    RabbitMQ->>Creds: consume tenant.dns.ready
+    RabbitMQ->>Creds: consume
     Creds->>Creds: Generate API keys
     Creds->>RabbitMQ: publish tenant.credentials.ready
+    RabbitMQ->>Tenant: record credentialsStatus
+    Tenant->>RabbitMQ: tenant.credentials.ready → billing-queue
 
-    RabbitMQ->>Billing: consume tenant.credentials.ready
+    RabbitMQ->>Billing: consume
     Billing->>Billing: GET tenant-service /internal/tenants/:id/billing
     Billing->>Billing: company's Stripe: customers.create() + subscriptions.create() (14-day trial), or skip
     Billing->>RabbitMQ: publish tenant.billing.active
+    RabbitMQ->>Tenant: record billingStatus
+    Tenant->>RabbitMQ: tenant.billing.active → notification-queue
 
-    RabbitMQ->>Notify: consume tenant.billing.active
+    RabbitMQ->>Notify: consume
     Notify->>Admin: Email the company: "<Customer> is ready"
     Notify->>RabbitMQ: publish tenant.provisioning.complete
+    RabbitMQ->>Tenant: ACTIVE, tenant.active webhook
 ```
+
+A step set to **skipped** is marked `SKIPPED` and the next one is sent at once. A step set to **custom** goes to the company instead of a worker: tenant-service records a request, POSTs `step.requested` to the company's URL (signed, retried) and moves on when the company calls `/complete`, or fails the step on `/fail`, a rejected request, or the deadline.
 
 ### Message Broker Configuration
 
 - Exchange: `provisioning.direct` (direct, durable)
 - Dead letter exchange: `dlx.provisioning` (durable)
+- Worker step queues are not bound to the exchange: tenant-service publishes each step's input to the queue through the default exchange, and on every connect removes the bindings older versions left (`tenant.requested → db-provisioner-queue`, `tenant.db.ready → dns-provisioner-queue`, …)
 - Each worker queue dead-letters to `dlx.provisioning` with its own key (`db-provisioner.failed`, `billing.failed`, …)
 - tenant-service binds two durable queues to every key: `provisioning.dead-letters`, an unconsumed parking lot for inspection, and its own consumer queue, which marks the step and tenant `FAILED`. A failed step is replayed with `POST /tenants/:id/retry` (the Retry button in both dashboard views). See [docs/dead-letters.md](docs/dead-letters.md)
 - `prefetchCount: 10` on all consumers
@@ -340,7 +358,7 @@ Quotas: an organisation may have 10 active tenants (`PROVISIONING` or `ACTIVE`) 
 
 `name` and `subdomain` are unique per organisation, not across the platform: two companies can both have an "acme". Every tenant in a response carries `address`, `<subdomain>.<baseDomain>` when the organisation has set one and `<subdomain>.liftoff.ojusentinel.com` otherwise (display only; DNS is simulated), and `schemaName`, the Postgres schema db-provisioner created: `tenant_<handle>_<subdomain>` for tenants created since org scoping, `tenant_<subdomain>` for older ones.
 
-`POST /tenants` and `GET /tenants/:id` also accept a company API key, as `x-api-key: <key>` or `Authorization: Bearer <key>`. Every other route needs a signed-in user.
+`POST /tenants`, `GET /tenants/:id` and the custom step callbacks also accept a company API key, as `x-api-key: <key>` or `Authorization: Bearer <key>`. Every other route needs a signed-in user.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -348,7 +366,9 @@ Quotas: an organisation may have 10 active tenants (`PROVISIONING` or `ACTIVE`) 
 | POST | `/tenants` | Create tenant and start provisioning (user token or API key; 10/min per IP). Send an `Idempotency-Key` header to make retries safe: the first response is stored per organisation for 24 h and replayed on a repeat (`Idempotent-Replayed: true`); the same key with a different body gets 422 |
 | GET | `/tenants/:id` | Get tenant with step statuses (user token or API key; 60/min per IP) |
 | DELETE | `/tenants/:id` | Remove a tenant: drop its schema, revoke its key, cancel its Stripe subscription; `DEPROVISIONING`, then `DELETED` (soft) and the `tenant.deleted` webhook. Again on a stuck removal retries it |
-| POST | `/tenants/:id/retry` | Run the failed step of a `FAILED` tenant again: its input message goes straight back to that worker's queue (payload from the event log, or rebuilt from the tenant), the tenant reads `PROVISIONING` with the step `IN_PROGRESS`, finished steps are kept. 400 unless `FAILED`, 409 if it changed meanwhile |
+| POST | `/tenants/:id/retry` | Run the failed step of a `FAILED` tenant again, by the step settings as they are now: a builtin step's input message goes straight back to that worker's queue (payload from the event log, or rebuilt from the tenant), a custom step gets a new `step.requested`, a step switched to skipped is skipped. The tenant reads `PROVISIONING`, finished steps are kept. 400 unless `FAILED`, 409 if it changed meanwhile |
+| POST | `/tenants/:id/steps/:step/complete` | Custom step callback (API key or user token): the step is `SUCCESS` and the next starts. Body `{ requestId?, output? }` |
+| POST | `/tenants/:id/steps/:step/fail` | Custom step callback: the step and tenant are `FAILED` with your `{ error }`. Both callbacks are idempotent (`outcome: "duplicate"`) and a late one for a cancelled or removed tenant answers `outcome: "ignored"` |
 | POST | `/tenants/:id/cancel` | From `PROVISIONING`: stop the pipeline (`CANCELLED`). From `ACTIVE`/`FAILED`: remove it like `DELETE`, recording the reason |
 | GET | `/tenants/:id/events` | Get event log for tenant |
 | GET | `/events` | Event log across the organisation's tenants |
@@ -428,6 +448,32 @@ const ok = expected.length === signature.length && crypto.timingSafeEqual(Buffer
 
 Answer with any 2xx. A 5xx, timeout or network error is retried after 1 s, 5 s and 25 s (four attempts in all, 10 s each); a 4xx is not retried. Redirects are not followed. The URL's host is resolved on every attempt and must not point at a private, loopback, link-local or metadata address. Delivery never blocks the saga: failures are logged by tenant-service and the tenant's status is still the source of truth, so poll `GET /tenants/:id` if a webhook does not arrive. Rotate the secret with `PUT /organisation {"rotateWebhookSecret": true}`.
 
+**4. Run a step yourself (custom steps).** Each of the five steps (`database`, `address`, `credentials`, `billing`, `welcome`) is `builtin` by default. Set one to `skipped` to leave it out, or to `custom` to run it on your own infrastructure. Custom requests are signed with the webhook secret, so set the webhook first:
+
+```bash
+curl -s -X PUT https://api.liftoff.ojusentinel.com/organisation \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"stepConfig":{"database":{"mode":"custom","url":"https://api.globex-saas.com/liftoff/steps","timeoutMs":600000},"billing":{"mode":"skipped"}}}'
+```
+
+When the step is due, Liftoff POSTs `step.requested` to that URL with the same headers and signature as a webhook (`x-liftoff-event: step.requested`):
+
+```json
+{ "event": "step.requested", "step": "database", "requestId": "cm…", "callbackUrl": "https://api.liftoff.ojusentinel.com/tenants/cmv…/steps/database", "deadline": "2026-10-17T18:10:00.000Z", "tenant": { "id": "cmv…", "name": "Globex", "…": "…" } }
+```
+
+Answer 2xx at once, do the work, then call back with an API key (a 4xx answer, or no 2xx after four attempts, fails the step):
+
+```bash
+curl -s -X POST "$CALLBACK_URL/complete" -H "x-api-key: $LIFTOFF_API_KEY" \
+  -H 'Content-Type: application/json' -d '{"requestId":"cm…","output":{"databaseId":"db_123"}}'
+curl -s -X POST "$CALLBACK_URL/fail" -H "x-api-key: $LIFTOFF_API_KEY" \
+  -H 'Content-Type: application/json' -d '{"requestId":"cm…","error":"No capacity left in eu-west-1"}'
+```
+
+No callback by the deadline (`timeoutMs`, 10 minutes by default, 1 minute to 24 hours) fails the step with "Your system did not call back within …". Retry sends a new `step.requested` with a new `requestId`; a callback naming an older one gets 409. Test tenants call custom steps too (`tenant.isTest: true`).
+
 ---
 
 ## Getting Started
@@ -503,6 +549,9 @@ migration steps are written up in
   the `credentials` schema (pinned in its `schema.prisma`). db-provisioner-service
   manages no tables; it only creates a `tenant_<subdomain>` schema per tenant.
 
+**Tenant Service (custom steps):**
+- `PUBLIC_API_URL`: the gateway's public address (`https://api.liftoff.ojusentinel.com` in production). Custom step requests carry `callbackUrl` under it; unset, it is `http://localhost:4000` and a warning is logged.
+
 **Tenant Service (per-organisation secrets and the internal API):**
 - `ORG_SECRETS_KEY` (32+ chars): encrypts each company's Stripe key at rest. Without it, connecting Stripe answers 503 and billing is `SKIPPED` for everyone.
 - `INTERNAL_API_TOKEN` (32+ chars): shared with the workers for `GET /internal/*`. Without it the internal API answers 503.
@@ -522,12 +571,12 @@ migration steps are written up in
 
 ## Engineering Decisions
 
-### Choreography-based saga (not orchestration)
+### Orchestrated saga (it started as choreography)
 
-Each service reacts to events independently rather than a central orchestrator directing the flow. This means:
-- No single point of failure in the pipeline
-- Services can be deployed and scaled independently
-- Adding a new pipeline step only requires publishing a new event type
+The pipeline began as choreography: each worker listened for the previous worker's result. That made every step mandatory and built in, which is the opposite of what a company plugging Liftoff into its own stack needs. tenant-service now decides what runs next: workers still only consume their own queue and publish a result, but tenant-service records each result, reads the organisation's step settings, and sends the next step to a worker, skips it, or hands it to the company's URL. The cost is one more hop per step through tenant-service; what it buys:
+- Per-organisation, per-step control (builtin, skipped, custom) without workers knowing about organisations
+- One place that knows a step is due, so deadlines, retries and the dashboard read the same state
+- Workers stay small, independently deployable consumers
 
 ### RabbitMQ over Kafka
 

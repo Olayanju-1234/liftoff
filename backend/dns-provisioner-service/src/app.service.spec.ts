@@ -44,7 +44,7 @@ describe('AppService', () => {
     jest.restoreAllMocks();
   });
 
-  it('subscribes to tenant.db.ready with a dead-letter exchange', () => {
+  it('consumes dns-provisioner-queue, unbound, with a dead-letter exchange', () => {
     // SetMetadata stores method metadata on the function itself.
     const handler: unknown = Object.getOwnPropertyDescriptor(
       AppService.prototype,
@@ -57,11 +57,13 @@ describe('AppService', () => {
 
     expect(config).toMatchObject({
       type: 'subscribe',
-      exchange: 'provisioning.direct',
-      routingKey: 'tenant.db.ready',
       queue: 'dns-provisioner-queue',
       queueOptions: { deadLetterExchange: 'dlx.provisioning' },
     });
+
+    // tenant-service sends the input to the queue; a binding would run the step twice.
+    expect(config).not.toHaveProperty('exchange');
+    expect(config).not.toHaveProperty('routingKey');
   });
 
   it('publishes tenant.dns.ready with the tenant id, subdomain and plan', async () => {

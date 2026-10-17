@@ -131,6 +131,40 @@ export interface TenantWebhookPayload<TTenant = unknown> {
     event: TenantWebhookEvent;
     tenant: TTenant;
 }
+export declare const CUSTOM_STEP_ACTIONS: readonly ["provision", "teardown"];
+export type CustomStepAction = (typeof CUSTOM_STEP_ACTIONS)[number];
+export type CustomStepEvent = 'step.requested' | 'step.teardown';
+export declare const CUSTOM_STEP_EVENT: Record<CustomStepAction, CustomStepEvent>;
+export interface CustomStepRequest<TTenant = unknown> {
+    event: CustomStepEvent;
+    step: ProvisioningStepName;
+    requestId: string;
+    callbackUrl: string;
+    deadline: string;
+    tenant: TTenant;
+}
+export declare const CUSTOM_STEP_OUTPUT_MAX_BYTES = 4096;
+export declare class IsSmallJsonObject implements ValidatorConstraintInterface {
+    validate(value: unknown): boolean;
+    defaultMessage(): string;
+}
+export declare class CompleteStepDto {
+    requestId?: string;
+    output?: Record<string, unknown>;
+}
+export declare class FailStepDto {
+    requestId?: string;
+    error?: string;
+}
+export type StepCallbackOutcome = 'recorded' | 'duplicate' | 'ignored';
+export interface StepCallbackResult {
+    tenantId: string;
+    step: ProvisioningStepName;
+    action: CustomStepAction;
+    outcome: StepCallbackOutcome;
+    status: string;
+    reason?: string;
+}
 export declare const PLAN_IDS: readonly ["starter", "pro", "enterprise"];
 export type PlanId = (typeof PLAN_IDS)[number];
 export declare const STATUS_TOKEN_PATTERN: RegExp;

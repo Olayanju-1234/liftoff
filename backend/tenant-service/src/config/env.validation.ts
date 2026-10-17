@@ -28,6 +28,12 @@ export const envValidationSchema = Joi.object({
 
   // CORS / frontend integration.
   FRONTEND_URL: Joi.string().optional().allow(''),
+  // The gateway's public address, e.g. https://api.liftoff.ojusentinel.com: custom step
+  // requests tell the company's system to call back there. Defaults to localhost:4000.
+  PUBLIC_API_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .optional()
+    .allow(''),
   // Shown as the tenant address when the organisation has no base domain of its own.
   TENANT_BASE_DOMAIN: Joi.string().hostname().optional().allow(''),
 

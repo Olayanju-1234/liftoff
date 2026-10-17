@@ -7,6 +7,7 @@ import {
   STEP_TIMEOUT_MINUTES,
 } from './provisioning-timeout.service';
 import { TenantsService } from './tenants.service';
+import { CustomStepsService } from './custom-steps.service';
 import { PrismaService } from '../prisma.service';
 
 type MockPrisma = {
@@ -26,7 +27,12 @@ const steps = {
 describe('ProvisioningTimeoutService', () => {
   let service: ProvisioningTimeoutService;
   let prisma: MockPrisma;
-  let tenants: { failStep: jest.Mock; cancelStale: jest.Mock };
+  let tenants: {
+    failStep: jest.Mock;
+    cancelStale: jest.Mock;
+    timeOutCustomStep: jest.Mock;
+  };
+  let customSteps: { overdue: jest.Mock };
 
   beforeEach(async () => {
     jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
@@ -42,12 +48,15 @@ describe('ProvisioningTimeoutService', () => {
     tenants = {
       failStep: jest.fn().mockResolvedValue(true),
       cancelStale: jest.fn().mockResolvedValue({}),
+      timeOutCustomStep: jest.fn().mockResolvedValue(true),
     };
+    customSteps = { overdue: jest.fn().mockResolvedValue([]) };
     const moduleRef = await Test.createTestingModule({
       providers: [
         ProvisioningTimeoutService,
         { provide: PrismaService, useValue: prisma },
         { provide: TenantsService, useValue: tenants },
+        { provide: CustomStepsService, useValue: customSteps },
       ],
     }).compile();
     service = moduleRef.get(ProvisioningTimeoutService);
@@ -158,6 +167,62 @@ describe('ProvisioningTimeoutService', () => {
         't1',
         'Provisioning timeout - no progress for 30 minutes',
       );
+    });
+  });
+
+  describe('custom steps', () => {
+    const waitingOnCompany = {
+      customStepCalls: {
+        none: { action: 'provision', status: StepStatus.IN_PROGRESS },
+      },
+    };
+
+    it('leaves a tenant waiting on the company to its own deadline, not the 2-minute timeout', async () => {
+      await service.handleStepTimeouts();
+
+      const [[args]] = prisma.tenant.findMany.mock.calls;
+      expect(args.where).toMatchObject(waitingOnCompany);
+    });
+
+    it('never sweeps a tenant that is waiting on the company, however long its timeout', async () => {
+      await service.handleProvisioningTimeout();
+
+      const [[args]] = prisma.tenant.findMany.mock.calls;
+      expect(args.where).toMatchObject(waitingOnCompany);
+    });
+
+    it('fails every request whose deadline passed and counts those it failed', async () => {
+      const calls = [
+        { id: 'call-1', tenantId: 't1', step: 'database', action: 'provision' },
+        { id: 'call-2', tenantId: 't2', step: 'billing', action: 'provision' },
+      ];
+      customSteps.overdue.mockResolvedValueOnce(calls);
+      // The second was called back between the read and the write.
+      tenants.timeOutCustomStep
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+
+      await expect(service.handleCustomStepTimeouts()).resolves.toBe(1);
+
+      const [[now]] = customSteps.overdue.mock.calls as [[Date]];
+      expect(Math.abs(now.getTime() - Date.now())).toBeLessThan(5_000);
+      expect(tenants.timeOutCustomStep).toHaveBeenCalledWith(calls[0]);
+      expect(tenants.timeOutCustomStep).toHaveBeenCalledWith(calls[1]);
+    });
+
+    it('keeps going when one request cannot be timed out, and survives a failed query', async () => {
+      customSteps.overdue.mockResolvedValueOnce([
+        { id: 'call-1', tenantId: 't1', step: 'address', action: 'provision' },
+        { id: 'call-2', tenantId: 't2', step: 'address', action: 'provision' },
+      ]);
+      tenants.timeOutCustomStep
+        .mockRejectedValueOnce(new Error('db down'))
+        .mockResolvedValueOnce(true);
+
+      await expect(service.handleCustomStepTimeouts()).resolves.toBe(1);
+
+      customSteps.overdue.mockRejectedValueOnce(new Error('db down'));
+      await expect(service.handleCustomStepTimeouts()).resolves.toBe(0);
     });
   });
 });

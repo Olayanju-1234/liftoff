@@ -217,6 +217,44 @@ describe('WebhookService', () => {
       expect(sleep).toHaveBeenCalledTimes(1);
     });
 
+    it('stops retrying once the caller no longer needs the delivery', async () => {
+      fetchImpl.mockResolvedValue(response(503));
+      const stillWanted = jest
+        .fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+
+      const result = await service.post({
+        url: new URL('https://steps.acme.com/x'),
+        secret: 'whsec_test',
+        event: 'step.requested',
+        body: '{}',
+        label: 'step.requested address for tenant t1',
+        stillWanted,
+      });
+
+      expect(result).toEqual({ delivered: false, abandoned: true });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports the last status and error when it gives up', async () => {
+      fetchImpl.mockResolvedValue(response(502));
+
+      await expect(
+        service.post({
+          url: new URL('https://steps.acme.com/x'),
+          secret: 'whsec_test',
+          event: 'step.requested',
+          body: '{}',
+          label: 'step.requested address for tenant t1',
+        }),
+      ).resolves.toEqual({
+        delivered: false,
+        status: 502,
+        error: 'answered 502',
+      });
+    });
+
     it('bounds each attempt with a timeout', () => {
       expect(WEBHOOK_TIMEOUT_MS).toBe(10_000);
     });

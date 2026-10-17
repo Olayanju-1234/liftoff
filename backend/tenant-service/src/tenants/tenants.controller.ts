@@ -20,11 +20,16 @@ import {
 } from '@nestjs/swagger';
 import type { FastifyReply } from 'fastify';
 import {
+  CompleteStepDto,
+  FailStepDto,
   IDEMPOTENCY_KEY_HEADER,
   IDEMPOTENCY_KEY_MAX_LENGTH,
   IDEMPOTENT_REPLAYED_HEADER,
+  type ProvisioningStepName,
 } from '@liftoff/shared-types';
+import { StepStatus } from '.prisma/tenant-client';
 import { ParseCuidPipe } from '../common/parse-cuid.pipe';
+import { ParseStepNamePipe } from '../common/parse-step-name.pipe';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CurrentOrganisation } from '../auth/decorators/current-organisation.decorator';
 import { AllowApiKey } from '../auth/decorators/allow-api-key.decorator';
@@ -165,7 +170,7 @@ export class TenantsController {
   @ApiOperation({
     summary: 'Run the failed step of a FAILED tenant again',
     description:
-      "Republishes the step's input message to that worker's queue (from the event log, or rebuilt from the tenant) and answers with the tenant PROVISIONING and the step IN_PROGRESS. Finished steps are kept. If it fails again the tenant is FAILED again, with a new event.",
+      "Runs the failed step again by the step settings as they are now: a builtin step's input message goes back to that worker's queue (from the event log, or rebuilt from the tenant), a custom step gets a new step.requested with a new requestId, a step switched to skipped is skipped. Answers with the tenant PROVISIONING. Finished steps are kept. If it fails again the tenant is FAILED again, with a new event.",
   })
   @ApiResponse({ status: 400, description: 'The tenant is not FAILED' })
   @ApiResponse({
@@ -177,6 +182,68 @@ export class TenantsController {
     @CurrentOrganisation() organisationId: string,
   ) {
     return this.tenantsService.retry(id, organisationId);
+  }
+
+  @Post(':id/steps/:step/complete')
+  @AllowApiKey()
+  @ApiSecurity('api-key')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Your system finished a custom step',
+    description:
+      'The callback for step.requested, with a company API key. Records the step SUCCESS and starts the next one. Idempotent: the same result again answers outcome "duplicate"; for a cancelled or removed customer it answers outcome "ignored" and changes nothing.',
+  })
+  @ApiResponse({ status: 200, description: 'Recorded, duplicate or ignored' })
+  @ApiResponse({ status: 400, description: 'Unknown step or invalid body' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'The step is not waiting on your system, already failed or timed out, or requestId is not the latest request',
+  })
+  completeStep(
+    @Param('id', ParseCuidPipe) id: string,
+    @Param('step', ParseStepNamePipe) step: ProvisioningStepName,
+    @Body() dto: CompleteStepDto,
+    @CurrentOrganisation() organisationId: string,
+  ) {
+    return this.tenantsService.customStepCallback(
+      id,
+      organisationId,
+      step,
+      StepStatus.SUCCESS,
+      dto,
+    );
+  }
+
+  @Post(':id/steps/:step/fail')
+  @AllowApiKey()
+  @ApiSecurity('api-key')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Your system could not do a custom step',
+    description:
+      'The callback for step.requested, with a company API key. Fails the step and the customer with your error (tenant.failed webhook, failure email); Retry requests the step again. Idempotent like /complete.',
+  })
+  @ApiResponse({ status: 200, description: 'Recorded, duplicate or ignored' })
+  @ApiResponse({ status: 400, description: 'Unknown step or invalid body' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'The step is not waiting on your system, already finished, or requestId is not the latest request',
+  })
+  failStep(
+    @Param('id', ParseCuidPipe) id: string,
+    @Param('step', ParseStepNamePipe) step: ProvisioningStepName,
+    @Body() dto: FailStepDto,
+    @CurrentOrganisation() organisationId: string,
+  ) {
+    return this.tenantsService.customStepCallback(
+      id,
+      organisationId,
+      step,
+      StepStatus.FAILED,
+      dto,
+    );
   }
 
   @Delete(':id')

@@ -7,6 +7,7 @@ import {
   type TenantWebhookEvent,
   type TenantWebhookPayload,
 } from '@liftoff/shared-types';
+import type { Prisma } from '.prisma/tenant-client';
 import { PrismaService } from '../prisma.service';
 import { errorMessage } from '../common/error-message';
 import { assertPublicDestination, parseWebhookUrl } from './destination';
@@ -23,6 +24,34 @@ export type Fetch = typeof fetch;
 export type Sleep = (ms: number) => Promise<void>;
 
 const wait: Sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export const webhookOrganisationFields = {
+  webhookUrl: true,
+  webhookSecret: true,
+  baseDomain: true,
+  plans: true,
+} satisfies Prisma.OrganisationSelect;
+
+export interface SignedPost {
+  url: URL;
+  secret: string;
+  event: string;
+  body: string;
+  // Names the delivery in log lines, e.g. "Webhook tenant.active for tenant t1".
+  label: string;
+  // Asked before each retry; false stops retrying because the answer no longer matters.
+  stillWanted?: () => Promise<boolean>;
+}
+
+export interface SignedPostResult {
+  delivered: boolean;
+  // The last HTTP status the receiver answered with, if it answered at all.
+  status?: number;
+  // Why the last attempt failed.
+  error?: string;
+  // stillWanted() said to stop.
+  abandoned?: boolean;
+}
 
 @Injectable()
 export class WebhookService {
@@ -48,16 +77,7 @@ export class WebhookService {
   async deliver(tenantId: string, event: TenantWebhookEvent): Promise<boolean> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      include: {
-        organisation: {
-          select: {
-            webhookUrl: true,
-            webhookSecret: true,
-            baseDomain: true,
-            plans: true,
-          },
-        },
-      },
+      include: { organisation: { select: webhookOrganisationFields } },
     });
     if (!tenant) {
       this.logger.warn(`Webhook ${event}: tenant ${tenantId} is gone`);
@@ -68,35 +88,56 @@ export class WebhookService {
       return false;
     }
 
-    const url = parseWebhookUrl(organisation.webhookUrl);
-    // The same record the API returns, status page link included, so the company can
-    // hand it to its customer from the webhook alone.
     const payload: TenantWebhookPayload = {
       event,
-      tenant: {
-        ...withAddress(tenantRow, organisation.baseDomain),
-        statusUrl: this.statusTokens.urlFor(tenantRow.id),
-        planName: planNameFor(
-          effectivePlans(organisation.plans),
-          tenantRow.planId,
-        ),
-      },
+      tenant: this.tenantRecord(tenantRow, organisation),
     };
-    const body = JSON.stringify(payload);
+    const result = await this.post({
+      url: parseWebhookUrl(organisation.webhookUrl),
+      secret: organisation.webhookSecret,
+      event,
+      body: JSON.stringify(payload),
+      label: `Webhook ${event} for tenant ${tenantId}`,
+    });
+    return result.delivered;
+  }
+
+  // The same record the API returns, status page link included, so the company can
+  // hand it to its customer from the webhook alone.
+  tenantRecord<T extends { id: string; subdomain: string; planId: string }>(
+    tenant: T,
+    organisation: { baseDomain: string | null; plans: Prisma.JsonValue },
+  ) {
+    return {
+      ...withAddress(tenant, organisation.baseDomain),
+      statusUrl: this.statusTokens.urlFor(tenant.id),
+      planName: planNameFor(effectivePlans(organisation.plans), tenant.planId),
+    };
+  }
+
+  // A signed POST with retries; webhooks and custom step requests both go through here.
+  async post(request: SignedPost): Promise<SignedPostResult> {
+    const { url, secret, event, body, label } = request;
     const deliveryId = randomUUID();
     const headers = {
       'content-type': 'application/json',
       'user-agent': 'Liftoff-Webhooks/1.0',
       [WEBHOOK_EVENT_HEADER]: event,
       [WEBHOOK_DELIVERY_HEADER]: deliveryId,
-      [WEBHOOK_SIGNATURE_HEADER]: signWebhookBody(
-        organisation.webhookSecret,
-        body,
-      ),
+      [WEBHOOK_SIGNATURE_HEADER]: signWebhookBody(secret, body),
     };
 
     const attempts = WEBHOOK_BACKOFF_MS.length + 1;
+    let last: Omit<SignedPostResult, 'delivered'> = {};
     for (let attempt = 1; attempt <= attempts; attempt++) {
+      if (
+        attempt > 1 &&
+        request.stillWanted &&
+        !(await request.stillWanted())
+      ) {
+        this.logger.log(`${label} no longer needed; stopped retrying`);
+        return { delivered: false, abandoned: true };
+      }
       try {
         await assertPublicDestination(url);
         const response = await this.fetchImpl(url, {
@@ -109,22 +150,31 @@ export class WebhookService {
         });
         if (response.ok) {
           this.logger.log(
-            `Webhook ${event} for tenant ${tenantId} delivered (${response.status}) on attempt ${attempt}`,
+            `${label} delivered (${response.status}) on attempt ${attempt}`,
           );
-          return true;
+          return { delivered: true, status: response.status };
         }
         if (response.status >= 400 && response.status < 500) {
           this.logger.warn(
-            `Webhook ${event} for tenant ${tenantId} rejected with ${response.status}; not retrying`,
+            `${label} rejected with ${response.status}; not retrying`,
           );
-          return false;
+          return {
+            delivered: false,
+            status: response.status,
+            error: `rejected with ${response.status}`,
+          };
         }
+        last = {
+          status: response.status,
+          error: `answered ${response.status}`,
+        };
         this.logger.warn(
-          `Webhook ${event} for tenant ${tenantId} got ${response.status} on attempt ${attempt}/${attempts}`,
+          `${label} got ${response.status} on attempt ${attempt}/${attempts}`,
         );
       } catch (error) {
+        last = { error: errorMessage(error) };
         this.logger.warn(
-          `Webhook ${event} for tenant ${tenantId} attempt ${attempt}/${attempts} failed: ${errorMessage(error)}`,
+          `${label} attempt ${attempt}/${attempts} failed: ${errorMessage(error)}`,
         );
       }
       if (attempt < attempts) {
@@ -132,8 +182,8 @@ export class WebhookService {
       }
     }
     this.logger.error(
-      `Webhook ${event} for tenant ${tenantId} gave up after ${attempts} attempts (delivery ${deliveryId})`,
+      `${label} gave up after ${attempts} attempts (delivery ${deliveryId})`,
     );
-    return false;
+    return { delivered: false, ...last };
   }
 }

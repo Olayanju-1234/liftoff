@@ -14,9 +14,11 @@ import {
   IDEMPOTENCY_KEY_HEADER,
   IDEMPOTENT_REPLAYED_HEADER,
   CancelTenantDto,
+  CompleteStepDto,
   ConfirmEmailChangeDto,
   CreateApiKeyDto,
   CreateTenantDto,
+  FailStepDto,
   ForgotPasswordDto,
   LoginDto,
   RefreshTokenDto,
@@ -25,6 +27,7 @@ import {
   UpdateOrganisationDto,
   UpdateSettingsDto,
   VerifyEmailDto,
+  type ProvisioningStepName,
 } from '@liftoff/shared-types';
 
 type DownstreamErrorBody = string | Record<string, unknown>;
@@ -165,6 +168,27 @@ export class AppService {
   async retryTenant(id: string, auth?: string) {
     this.logger.log({ tenantId: id }, 'Retrying failed tenant step');
     return this.proxy('post', `/tenants/${id}/retry`, {}, auth);
+  }
+
+  // ============ CUSTOM STEP CALLBACKS ============
+
+  stepCallback(
+    id: string,
+    step: ProvisioningStepName,
+    outcome: 'complete' | 'fail',
+    dto: CompleteStepDto | FailStepDto,
+    credentials: Credentials,
+  ) {
+    this.logger.log(
+      { tenantId: id, step, outcome, viaApiKey: !!credentials.apiKey },
+      'Custom step callback',
+    );
+    return this.proxy(
+      'post',
+      `/tenants/${id}/steps/${step}/${outcome}`,
+      dto,
+      credentials,
+    );
   }
 
   // ============ ORGANISATION METHODS ============

@@ -14,10 +14,18 @@ import {
   Prisma,
   StepStatus,
   TenantStatus,
+  type CustomStepCall,
   type Tenant,
 } from '.prisma/tenant-client';
 import {
   LIVE_TENANT_STATUSES,
+  isLiveTenant,
+  type CompleteStepDto,
+  type EffectiveStepConfigEntry,
+  type FailStepDto,
+  type ProvisioningStepName,
+  type StepCallbackResult,
+  type StepMode,
   type ProvisioningCompletePayload,
   TenantDeprovisionDonePayload,
   TenantDeprovisionPayload,
@@ -52,6 +60,12 @@ import {
 } from '../organisations/customer-plans';
 import { PLAN_CATALOG } from './plans';
 import type { CustomerPlan, PlanId } from '@liftoff/shared-types';
+import { stepConfigFor } from '../organisations/step-config';
+import { STEP_COLUMN, STEP_NAME, nextStep, storedStepModes } from './steps';
+import {
+  CustomStepsService,
+  type CustomStepView,
+} from './custom-steps.service';
 
 const PUBLISH_TIMEOUT_MS = 5_000;
 
@@ -71,6 +85,16 @@ const SAGA_OPEN: TenantStatus[] = [
   TenantStatus.PROVISIONING,
   TenantStatus.FAILED,
 ];
+type FinishedOutcome = typeof StepStatus.SUCCESS | typeof StepStatus.SKIPPED;
+
+// What a finished step leaves behind: its event, and what the next builtin worker is sent.
+interface StepResult {
+  event: string;
+  payload: object;
+  extra?: Prisma.TenantUpdateManyMutationInput;
+  input?: object;
+}
+
 const TEARDOWN_FINISHED: StepStatus[] = [
   StepStatus.SUCCESS,
   StepStatus.SKIPPED,
@@ -137,25 +161,31 @@ export class TenantsService {
     private readonly webhooks: WebhookService,
     private readonly quotas: QuotasService,
     private readonly statusTokens: StatusTokenService,
+    private readonly customSteps: CustomStepsService,
   ) {}
 
-  // Every tenant the API returns carries its address, its public status page and the
-  // name of its customer plan as the company calls it.
-  private present<T extends { id: string; subdomain: string; planId: string }>(
-    tenant: T,
-    context: OrgContext,
-  ) {
+  // Every tenant the API returns carries its address, its public status page, the name
+  // of its customer plan as the company calls it, and how each step ran.
+  private present<
+    T extends {
+      id: string;
+      subdomain: string;
+      planId: string;
+      stepModes?: Prisma.JsonValue;
+    },
+  >(tenant: T, context: OrgContext) {
     return {
       ...withAddress(tenant, context.baseDomain),
       statusUrl: this.statusTokens.urlFor(tenant.id),
       planName: planNameFor(context.plans, tenant.planId),
+      stepModes: storedStepModes(tenant.stepModes),
     };
   }
 
   async create(createTenantDto: CreateTenantDto, creator: TenantCreator) {
     const organisation = await this.prisma.organisation.findUnique({
       where: { id: creator.organisationId },
-      select: { handle: true, baseDomain: true, plans: true },
+      select: { handle: true, baseDomain: true, plans: true, stepConfig: true },
     });
     if (!organisation) {
       throw new NotFoundException('Organisation not found');
@@ -204,9 +234,17 @@ export class TenantsService {
       if (!isTest) {
         await this.quotas.record(creator.organisationId, tenant.id);
       }
-      await this.startProvisioning(tenant);
+      const first = await this.startProvisioning(
+        tenant,
+        organisation.stepConfig,
+      );
 
-      return this.present(tenant, context);
+      // A skipped first step has already moved the row on to the next one.
+      const current =
+        first === 'skipped'
+          ? ((await this.prisma.tenant.findUnique({ where: { id } })) ?? tenant)
+          : { ...tenant, stepModes: { database: first } };
+      return this.present(current, context);
     } catch (error) {
       if (isUniqueViolation(error)) {
         const target = (error.meta?.target as string[] | undefined) ?? [];
@@ -253,13 +291,12 @@ export class TenantsService {
     }
   }
 
-  // Callers create the tenant with dbStatus IN_PROGRESS first.
+  // Callers create the tenant with dbStatus IN_PROGRESS first. Answers how the first
+  // step runs; throws 503 when it could not be started (the tenant is then FAILED).
   async startProvisioning(
-    tenant: Pick<
-      Tenant,
-      'id' | 'name' | 'subdomain' | 'planId' | 'schemaName' | 'isTest'
-    >,
-  ) {
+    tenant: Tenant,
+    stepConfig: Prisma.JsonValue | null,
+  ): Promise<StepMode> {
     await this.logEvent(tenant.id, 'tenant.created', 'Success', {
       name: tenant.name,
       plan: tenant.planId,
@@ -267,30 +304,21 @@ export class TenantsService {
       test: tenant.isTest,
     });
 
-    const eventPayload: TenantRequestedPayload = {
+    const requested: TenantRequestedPayload = {
       tenantId: tenant.id,
       subdomain: tenant.subdomain,
       planId: tenant.planId,
       ...(tenant.schemaName ? { schemaName: tenant.schemaName } : {}),
       ...(tenant.isTest ? { test: true } : {}),
     };
-
-    try {
-      // Without a timeout a down broker buffers the publish and hangs the request.
-      await this.amqpConnection.publish(
-        'provisioning.direct',
-        'tenant.requested',
-        eventPayload,
-        { timeout: PUBLISH_TIMEOUT_MS },
+    const config = stepConfigFor(stepConfig, 'database');
+    const started = await this.runStep(tenant, 'database', config, requested);
+    if (!started) {
+      throw new ServiceUnavailableException(
+        'The customer was added but setup could not start. Retry it from the dashboard in a moment.',
       );
-    } catch (error) {
-      await this.failStep(
-        tenant.id,
-        'dbStatus',
-        `Could not publish tenant.requested: ${errorMessage(error)}`,
-      );
-      throw error;
     }
+    return config.mode;
   }
 
   async failStep(
@@ -339,16 +367,12 @@ export class TenantsService {
     }
   }
 
-  // Each worker consumes the same event in parallel with this service, so the
-  // next step may already be SUCCESS or FAILED; only start it while PENDING.
-  // Returns false, having changed nothing, when the tenant is no longer live.
+  // Records a finished step. Returns false, having changed nothing, when the tenant is no
+  // longer live (a late result for a cancelled or removed tenant).
   private async completeStep(
     tenantId: string,
     step: ProvisioningStep,
-    next: ProvisioningStep,
-    outcome:
-      | typeof StepStatus.SUCCESS
-      | typeof StepStatus.SKIPPED = StepStatus.SUCCESS,
+    outcome: FinishedOutcome,
     extra: Prisma.TenantUpdateManyMutationInput = {},
   ): Promise<boolean> {
     const data: Prisma.TenantUpdateManyMutationInput = { ...extra };
@@ -357,16 +381,310 @@ export class TenantsService {
       where: { id: tenantId, status: { in: LIVE } },
       data,
     });
-    if (count === 0) {
+    return count > 0;
+  }
+
+  // A step is done (its worker reported, the company called back, or it was skipped):
+  // record it, log it and start the next one. The last step activates the tenant.
+  private async finishStep(
+    tenantId: string,
+    step: ProvisioningStepName,
+    outcome: FinishedOutcome,
+    result: StepResult,
+  ): Promise<boolean> {
+    // The builtin welcome step activates through provisioning.complete instead.
+    if (step === 'welcome') {
+      const welcome = outcome === StepStatus.SKIPPED ? 'skipped' : 'custom';
+      return this.activate(tenantId, outcome, { tenantId, welcome }, result);
+    }
+    const completed = await this.completeStep(
+      tenantId,
+      STEP_COLUMN[step],
+      outcome,
+      result.extra,
+    );
+    if (!completed) {
+      this.ignoreStepResult(result.event, tenantId);
       return false;
     }
-
-    const where: Prisma.TenantWhereInput = { id: tenantId };
-    where[next] = StepStatus.PENDING;
-    const start: Prisma.TenantUpdateManyMutationInput = {};
-    start[next] = StepStatus.IN_PROGRESS;
-    await this.prisma.tenant.updateMany({ where, data: start });
+    await this.logEvent(tenantId, result.event, 'Success', result.payload);
+    await this.advance(tenantId, step, result.input);
     return true;
+  }
+
+  // Starts the step after this one unless something already did (a replay, a late
+  // duplicate), and sends it to whoever runs it.
+  private async advance(
+    tenantId: string,
+    after: ProvisioningStepName,
+    input?: object,
+  ): Promise<void> {
+    const next = nextStep(after);
+    if (!next) {
+      return;
+    }
+    const column = STEP_COLUMN[next];
+    const where: Prisma.TenantWhereInput = { id: tenantId };
+    where[column] = StepStatus.PENDING;
+    const start: Prisma.TenantUpdateManyMutationInput = {};
+    start[column] = StepStatus.IN_PROGRESS;
+    const { count } = await this.prisma.tenant.updateMany({
+      where,
+      data: start,
+    });
+    if (count > 0) {
+      await this.dispatch(tenantId, next, input);
+    }
+  }
+
+  // Sends a step that was just marked IN_PROGRESS on its way, by the company's step
+  // settings as they are now. False when it could not start; the step is then FAILED.
+  private async dispatch(
+    tenantId: string,
+    step: ProvisioningStepName,
+    input?: object,
+  ): Promise<boolean> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      include: { organisation: { select: { stepConfig: true } } },
+    });
+    if (!tenant) {
+      this.logger.warn(
+        `Cannot start ${step} for tenant ${tenantId}: it is gone`,
+      );
+      return false;
+    }
+    const { organisation, ...row } = tenant;
+    return this.runStep(
+      row,
+      step,
+      stepConfigFor(organisation?.stepConfig, step),
+      input,
+    );
+  }
+
+  private async runStep(
+    tenant: Tenant,
+    step: ProvisioningStepName,
+    config: EffectiveStepConfigEntry,
+    input?: object,
+  ): Promise<boolean> {
+    await this.recordStepMode(tenant, step, config.mode);
+    if (config.mode === 'skipped') {
+      await this.finishStep(tenant.id, step, StepStatus.SKIPPED, {
+        event: 'tenant.step.skipped',
+        payload: { step, reason: 'Skipped in your step settings' },
+      });
+      return true;
+    }
+    if (config.mode === 'custom') {
+      return this.requestCustomStep(tenant, step, config);
+    }
+    return this.publishBuiltinStep(
+      tenant.id,
+      step,
+      input ?? rebuildInput(tenant, STEP_COLUMN[step]),
+    );
+  }
+
+  private async recordStepMode(
+    tenant: Pick<Tenant, 'id' | 'stepModes'>,
+    step: ProvisioningStepName,
+    mode: StepMode,
+  ): Promise<void> {
+    const stepModes = { ...storedStepModes(tenant.stepModes), [step]: mode };
+    await this.prisma.tenant.updateMany({
+      where: { id: tenant.id },
+      data: { stepModes },
+    });
+  }
+
+  // Through the default exchange straight to the worker's queue: tenant-service decides
+  // what runs next, so no worker listens to another's results.
+  private async publishBuiltinStep(
+    tenantId: string,
+    step: ProvisioningStepName,
+    payload: object,
+  ): Promise<boolean> {
+    const column = STEP_COLUMN[step];
+    const { queue, routingKey } = STEP_INPUT[column];
+    try {
+      // Without a timeout a down broker buffers the publish and hangs the caller.
+      await this.amqpConnection.publish('', queue, payload, {
+        timeout: PUBLISH_TIMEOUT_MS,
+      });
+      return true;
+    } catch (error) {
+      await this.failStep(
+        tenantId,
+        column,
+        `Could not publish ${routingKey}: ${errorMessage(error)}`,
+      );
+      return false;
+    }
+  }
+
+  // The request is recorded before it is sent, so a callback that beats the response to
+  // the POST still finds it. Delivery runs in the background; giving up fails the step.
+  private async requestCustomStep(
+    tenant: Pick<Tenant, 'id'>,
+    step: ProvisioningStepName,
+    config: EffectiveStepConfigEntry,
+  ): Promise<boolean> {
+    if (!config.url) {
+      await this.failStep(
+        tenant.id,
+        STEP_COLUMN[step],
+        `The ${step} step is set to custom but has no URL: set one under Settings → Provisioning`,
+      );
+      return false;
+    }
+    const call = await this.customSteps.open(tenant.id, step, 'provision', {
+      url: config.url,
+      timeoutMs: config.timeoutMs,
+    });
+    await this.logEvent(tenant.id, 'tenant.step.requested', 'Success', {
+      step,
+      requestId: call.id,
+      url: call.url,
+      deadline: call.deadlineAt.toISOString(),
+    });
+    void this.customSteps
+      .send(call)
+      .then((result) =>
+        result.delivered || result.abandoned
+          ? undefined
+          : this.failCustomStep(
+              call,
+              `Your system did not take the ${step} request: ${result.error ?? 'no answer'}`,
+            ),
+      )
+      .catch((error: unknown) =>
+        this.logger.error(
+          `Custom ${step} request for tenant ${tenant.id} failed: ${errorMessage(error)}`,
+        ),
+      );
+    return true;
+  }
+
+  // Closes the request as FAILED and fails the step, unless a callback, the deadline or a
+  // cancel closed it first.
+  async failCustomStep(
+    call: Pick<CustomStepCall, 'id' | 'tenantId' | 'step' | 'url'>,
+    error: string,
+  ): Promise<boolean> {
+    const closed = await this.customSteps.close(call.id, StepStatus.FAILED, {
+      error,
+    });
+    if (!closed) {
+      return false;
+    }
+    return this.failStep(
+      call.tenantId,
+      STEP_COLUMN[call.step as ProvisioningStepName],
+      error,
+      { requestId: call.id, url: call.url },
+    );
+  }
+
+  // The deadline passed without a callback.
+  async timeOutCustomStep(call: CustomStepCall): Promise<boolean> {
+    const minutes = Math.round(
+      (call.deadlineAt.getTime() - call.createdAt.getTime()) / 60_000,
+    );
+    return this.failCustomStep(
+      call,
+      `Your system did not call back within ${minutes} minute${minutes === 1 ? '' : 's'}`,
+    );
+  }
+
+  // POST /tenants/:id/steps/:step/complete and /fail, from the company's system.
+  // Idempotent: the same result twice is a duplicate, not an error.
+  async customStepCallback(
+    tenantId: string,
+    organisationId: string,
+    step: ProvisioningStepName,
+    outcome: typeof StepStatus.SUCCESS | typeof StepStatus.FAILED,
+    body: CompleteStepDto & FailStepDto,
+  ): Promise<StepCallbackResult> {
+    for (let attempt = 0; ; attempt++) {
+      const tenant = await this.findInOrganisation(tenantId, organisationId);
+      const call = await this.customSteps.latest(tenantId, step, 'provision');
+      const answer = (
+        result: StepCallbackResult['outcome'],
+        reason?: string,
+        status: string = tenant.status,
+      ): StepCallbackResult => ({
+        tenantId,
+        step,
+        action: 'provision',
+        outcome: result,
+        status,
+        ...(reason ? { reason } : {}),
+      });
+
+      if (!call) {
+        throw new ConflictException(
+          `The ${step} step of this customer is not waiting on your system`,
+        );
+      }
+      if (body.requestId && body.requestId !== call.id) {
+        throw new ConflictException(
+          `requestId ${body.requestId} is not the latest request for the ${step} step; that is ${call.id}`,
+        );
+      }
+      if (!isLiveTenant(tenant.status)) {
+        return answer(
+          'ignored',
+          `The customer is ${tenant.status.toLowerCase()}, so this result changes nothing`,
+        );
+      }
+      if (call.status === outcome) {
+        return answer('duplicate');
+      }
+      if (call.status !== StepStatus.IN_PROGRESS) {
+        throw new ConflictException(
+          call.status === StepStatus.FAILED
+            ? `The ${step} step already failed${call.error ? ` (${call.error})` : ''}. Retry the customer to request it again.`
+            : `The ${step} step is already ${call.status.toLowerCase()}`,
+        );
+      }
+
+      const closed = await this.customSteps.close(call.id, outcome, {
+        error: outcome === StepStatus.FAILED ? failureReason(body) : undefined,
+        output: body.output as Prisma.InputJsonObject | undefined,
+      });
+      if (!closed) {
+        // Another callback, the deadline or a cancel got there first: answer from what won.
+        if (attempt === 0) {
+          continue;
+        }
+        throw new ConflictException(
+          `The ${step} step changed while your result came in. Read the customer and try again.`,
+        );
+      }
+
+      if (outcome === StepStatus.SUCCESS) {
+        await this.finishStep(tenantId, step, StepStatus.SUCCESS, {
+          event: 'tenant.step.completed',
+          payload: {
+            step,
+            requestId: call.id,
+            ...(body.output ? { output: body.output } : {}),
+          },
+        });
+      } else {
+        await this.failStep(tenantId, STEP_COLUMN[step], failureReason(body), {
+          requestId: call.id,
+          url: call.url,
+        });
+      }
+      const after = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { status: true },
+      });
+      return answer('recorded', undefined, after?.status ?? tenant.status);
+    }
   }
 
   // A worker that was mid-step when the tenant was cancelled or removed still reports in.
@@ -407,21 +725,11 @@ export class TenantsService {
   public async handleDbReady(payload: TenantDbReadyPayload) {
     this.logger.log(`DB ready for tenant ${payload.tenantId}`);
     try {
-      const completed = await this.completeStep(
-        payload.tenantId,
-        'dbStatus',
-        'dnsStatus',
-      );
-      if (!completed) {
-        this.ignoreStepResult('tenant.db.ready', payload.tenantId);
-        return;
-      }
-      await this.logEvent(
-        payload.tenantId,
-        'tenant.db.ready',
-        'Success',
+      await this.finishStep(payload.tenantId, 'database', StepStatus.SUCCESS, {
+        event: 'tenant.db.ready',
         payload,
-      );
+        input: payload,
+      });
     } catch (error) {
       this.logger.error(
         `handleDbReady failed for tenant ${payload.tenantId}: ${errorMessage(error)}`,
@@ -436,21 +744,11 @@ export class TenantsService {
     queue: 'tenant-service-dns-ready-queue',
   })
   public async handleDnsReady(payload: TenantDnsReadyPayload) {
-    const completed = await this.completeStep(
-      payload.tenantId,
-      'dnsStatus',
-      'credentialsStatus',
-    );
-    if (!completed) {
-      this.ignoreStepResult('tenant.dns.ready', payload.tenantId);
-      return;
-    }
-    await this.logEvent(
-      payload.tenantId,
-      'tenant.dns.ready',
-      'Success',
+    await this.finishStep(payload.tenantId, 'address', StepStatus.SUCCESS, {
+      event: 'tenant.dns.ready',
       payload,
-    );
+      input: payload,
+    });
   }
 
   @RabbitSubscribe({
@@ -459,21 +757,11 @@ export class TenantsService {
     queue: 'tenant-service-credentials-ready-queue',
   })
   public async handleCredentialsReady(payload: TenantCredentialsReadyPayload) {
-    const completed = await this.completeStep(
-      payload.tenantId,
-      'credentialsStatus',
-      'billingStatus',
-    );
-    if (!completed) {
-      this.ignoreStepResult('tenant.credentials.ready', payload.tenantId);
-      return;
-    }
-    await this.logEvent(
-      payload.tenantId,
-      'tenant.credentials.ready',
-      'Success',
+    await this.finishStep(payload.tenantId, 'credentials', StepStatus.SUCCESS, {
+      event: 'tenant.credentials.ready',
       payload,
-    );
+      input: payload,
+    });
   }
 
   @RabbitSubscribe({
@@ -485,27 +773,21 @@ export class TenantsService {
     // Billing is skipped, never simulated: a test tenant, or a company without Stripe.
     // The row says so and the saga moves on.
     const skipped = payload.skipped === true;
-    const completed = await this.completeStep(
+    await this.finishStep(
       payload.tenantId,
-      'billingStatus',
-      'notificationStatus',
+      'billing',
       skipped ? StepStatus.SKIPPED : StepStatus.SUCCESS,
-      skipped
-        ? {}
-        : {
-            stripeCustomerId: payload.stripeCustomerId,
-            stripeSubscriptionId: payload.stripeSubscriptionId,
-          },
-    );
-    if (!completed) {
-      this.ignoreStepResult('tenant.billing.active', payload.tenantId);
-      return;
-    }
-    await this.logEvent(
-      payload.tenantId,
-      skipped ? 'tenant.billing.skipped' : 'tenant.billing.active',
-      'Success',
-      payload,
+      {
+        event: skipped ? 'tenant.billing.skipped' : 'tenant.billing.active',
+        payload,
+        input: payload,
+        extra: skipped
+          ? {}
+          : {
+              stripeCustomerId: payload.stripeCustomerId,
+              stripeSubscriptionId: payload.stripeSubscriptionId,
+            },
+      },
     );
   }
 
@@ -521,44 +803,60 @@ export class TenantsService {
     payload: ProvisioningCompletePayload,
   ) {
     this.logger.log(`Activating tenant ${payload.tenantId}`);
-
     // notification-service says whether the company was emailed; nothing sent is SKIPPED.
     const emailed = payload.notification?.sent !== false;
+    await this.activate(
+      payload.tenantId,
+      emailed ? StepStatus.SUCCESS : StepStatus.SKIPPED,
+      payload,
+    );
+  }
+
+  // The welcome step finished: the tenant is ACTIVE. FAILED stays eligible so a replayed
+  // step can finish the saga; a cancelled, removed or removing tenant is never brought back.
+  private async activate(
+    tenantId: string,
+    notificationStatus: FinishedOutcome,
+    payload: object,
+    stepResult?: StepResult,
+  ): Promise<boolean> {
     try {
-      // FAILED stays eligible so a replayed step can finish the saga. A cancelled, removed
-      // or removing tenant is never brought back by a late message.
       const { count } = await this.prisma.tenant.updateMany({
-        where: { id: payload.tenantId, status: { in: SAGA_OPEN } },
-        data: {
-          status: TenantStatus.ACTIVE,
-          notificationStatus: emailed ? StepStatus.SUCCESS : StepStatus.SKIPPED,
-        },
+        where: { id: tenantId, status: { in: SAGA_OPEN } },
+        data: { status: TenantStatus.ACTIVE, notificationStatus },
       });
       if (count === 0) {
         this.logger.warn(
-          `provisioning.complete for tenant ${payload.tenantId} ignored: tenant is gone, cancelled or being removed`,
+          `provisioning.complete for tenant ${tenantId} ignored: tenant is gone, cancelled or being removed`,
         );
-        return;
+        return false;
       }
 
+      if (stepResult) {
+        await this.logEvent(
+          tenantId,
+          stepResult.event,
+          'Success',
+          stepResult.payload,
+        );
+      }
       await this.logEvent(
-        payload.tenantId,
+        tenantId,
         'tenant.provisioning.complete',
         'Success',
         payload,
       );
-      this.logger.log(`Tenant ${payload.tenantId} is now ACTIVE`);
-      this.webhooks.notify(payload.tenantId, 'tenant.active');
+      this.logger.log(`Tenant ${tenantId} is now ACTIVE`);
+      this.webhooks.notify(tenantId, 'tenant.active');
+      return true;
     } catch (error) {
       this.logger.error(
-        `Failed to activate tenant ${payload.tenantId}: ${errorMessage(error)}`,
+        `Failed to activate tenant ${tenantId}: ${errorMessage(error)}`,
       );
-      await this.logEvent(
-        payload.tenantId,
-        'tenant.provisioning.complete',
-        'Error',
-        { error: errorMessage(error) },
-      );
+      await this.logEvent(tenantId, 'tenant.provisioning.complete', 'Error', {
+        error: errorMessage(error),
+      });
+      return false;
     }
   }
 
@@ -655,10 +953,14 @@ export class TenantsService {
       throw new NotFoundException(`Tenant ${id} not found`);
     }
     const { organisation, ...row } = tenant;
-    return this.present(row, {
-      baseDomain: organisation?.baseDomain ?? null,
-      plans: effectivePlans(organisation?.plans),
-    });
+    const customSteps: CustomStepView[] = await this.customSteps.forTenant(id);
+    return {
+      ...this.present(row, {
+        baseDomain: organisation?.baseDomain ?? null,
+        plans: effectivePlans(organisation?.plans),
+      }),
+      customSteps,
+    };
   }
 
   async findEvents(id: string, organisationId: string) {
@@ -728,6 +1030,11 @@ export class TenantsService {
       include: { plan: true },
     });
 
+    await this.customSteps.cancelOpen(
+      id,
+      'provision',
+      'The customer was cancelled',
+    );
     await this.logEvent(id, 'tenant.cancelled', 'Success', {
       reason: cancelReason,
     });
@@ -743,32 +1050,36 @@ export class TenantsService {
     return updatedTenant;
   }
 
-  // Runs the failed step again: its input message goes straight back to that worker's
-  // queue, and the tenant reads PROVISIONING with the step IN_PROGRESS until it answers.
+  // Runs the failed step again, as the company's step settings say now: a builtin step's
+  // input goes straight back to its worker's queue, a custom step is requested again, a
+  // step switched to skipped is skipped. The tenant reads PROVISIONING meanwhile.
   async retry(id: string, organisationId: string) {
     const tenant = await this.findInOrganisation(id, organisationId);
-    const step = PROVISIONING_STEPS.find(
+    const column = PROVISIONING_STEPS.find(
       (s) => tenant[s] === StepStatus.FAILED,
     );
-    if (tenant.status !== TenantStatus.FAILED || !step) {
+    if (tenant.status !== TenantStatus.FAILED || !column) {
       throw new BadRequestException(
         `Only a FAILED tenant can be retried; this one is ${tenant.status}`,
       );
     }
-
-    const input = STEP_INPUT[step];
-    const { payload, source } = await this.retryInput(tenant, step);
+    const step = STEP_NAME[column];
+    const organisation = await this.prisma.organisation.findUnique({
+      where: { id: organisationId },
+      select: { stepConfig: true },
+    });
+    const config = stepConfigFor(organisation?.stepConfig, step);
 
     const where: Prisma.TenantWhereInput = {
       id,
       status: TenantStatus.FAILED,
     };
-    where[step] = StepStatus.FAILED;
+    where[column] = StepStatus.FAILED;
     const data: Prisma.TenantUpdateManyMutationInput = {
       status: TenantStatus.PROVISIONING,
     };
-    data[step] = StepStatus.IN_PROGRESS;
-    // A double click, or a retry racing a removal, publishes once.
+    data[column] = StepStatus.IN_PROGRESS;
+    // A double click, or a retry racing a removal, starts it once.
     const { count } = await this.prisma.tenant.updateMany({ where, data });
     if (count === 0) {
       throw new ConflictException(
@@ -776,6 +1087,32 @@ export class TenantsService {
       );
     }
 
+    if (config.mode === 'builtin') {
+      await this.republishBuiltinStep(tenant, column);
+    } else {
+      await this.logEvent(id, 'tenant.retry', 'Success', {
+        step: column,
+        mode: config.mode,
+      });
+      const started = await this.runStep(tenant, step, config);
+      if (!started) {
+        throw new ServiceUnavailableException(
+          'The retry could not be started. Try again in a moment.',
+        );
+      }
+      this.logger.log(`Retrying tenant ${id} at ${column} (${config.mode})`);
+    }
+    return this.present(
+      await this.reload(id),
+      await this.organisationContext(organisationId),
+    );
+  }
+
+  private async republishBuiltinStep(tenant: Tenant, step: ProvisioningStep) {
+    const { id } = tenant;
+    const input = STEP_INPUT[step];
+    const { payload, source } = await this.retryInput(tenant, step);
+    await this.recordStepMode(tenant, STEP_NAME[step], 'builtin');
     await this.logEvent(id, 'tenant.retry', 'Success', {
       step,
       queue: input.queue,
@@ -798,10 +1135,6 @@ export class TenantsService {
     }
     this.logger.log(
       `Retrying tenant ${id} at ${step}: ${input.routingKey} → ${input.queue} (${source})`,
-    );
-    return this.present(
-      await this.reload(id),
-      await this.organisationContext(organisationId),
     );
   }
 
@@ -887,6 +1220,13 @@ export class TenantsService {
     });
     if (count === 0) {
       return this.reload(id);
+    }
+    if (!resuming) {
+      await this.customSteps.cancelOpen(
+        id,
+        'provision',
+        'The customer is being removed',
+      );
     }
 
     const payload = await this.deprovisionPayload(tenant, reason);
@@ -1079,3 +1419,6 @@ export class TenantsService {
     );
   }
 }
+
+const failureReason = (body: FailStepDto) =>
+  body.error?.trim() || 'Your system reported that the step failed';

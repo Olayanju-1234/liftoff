@@ -92,14 +92,19 @@ describe('AppService', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
-  it('subscribes to tenant.billing.active with a dead-letter exchange, and to tenant.failed without one', () => {
+  it('consumes notification-queue, unbound, with a dead-letter exchange, and subscribes to tenant.failed without one', () => {
     expect(metadataOf('handleTenantBillingActive')).toMatchObject({
       type: 'subscribe',
-      exchange: 'provisioning.direct',
-      routingKey: 'tenant.billing.active',
       queue: 'notification-queue',
       queueOptions: { deadLetterExchange: 'dlx.provisioning' },
     });
+    // tenant-service sends the input to the queue; a binding would run the step twice.
+    expect(metadataOf('handleTenantBillingActive')).not.toHaveProperty(
+      'exchange',
+    );
+    expect(metadataOf('handleTenantBillingActive')).not.toHaveProperty(
+      'routingKey',
+    );
     const failed = metadataOf('handleTenantFailed');
     expect(failed).toMatchObject({
       type: 'subscribe',

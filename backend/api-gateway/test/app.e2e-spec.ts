@@ -275,6 +275,88 @@ describe('API Gateway (e2e)', () => {
     });
   });
 
+  describe('custom step callbacks', () => {
+    const tenantId = 'cmv9gs7040002vyzf6leznb2s';
+    const apiKey = 'lk_live_abcdefghijklmnopqrstuvwxyz';
+
+    it.each(['complete', 'fail'] as const)(
+      'POST /tenants/:id/steps/:step/%s forwards the API key and body, and answers 200',
+      async (outcome) => {
+        http.post.mockReturnValueOnce(
+          of({ data: { tenantId, step: 'database', outcome: 'recorded' } }),
+        );
+        const payload =
+          outcome === 'complete'
+            ? { requestId: 'cmreq', output: { databaseId: 'db_1' } }
+            : { requestId: 'cmreq', error: 'No capacity' };
+
+        const res = await app.inject({
+          method: 'POST',
+          url: `/tenants/${tenantId}/steps/database/${outcome}`,
+          headers: { 'x-api-key': apiKey },
+          payload,
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ outcome: 'recorded' });
+        const [[path, body, config]] = http.post.mock.calls as [
+          [string, unknown, unknown],
+        ];
+        expect(path).toBe(`/tenants/${tenantId}/steps/database/${outcome}`);
+        expect(JSON.parse(JSON.stringify(body))).toEqual(payload);
+        expect(config).toEqual({ headers: { 'x-api-key': apiKey } });
+      },
+    );
+
+    it('accepts an empty body', async () => {
+      http.post.mockReturnValueOnce(of({ data: { outcome: 'duplicate' } }));
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/tenants/${tenantId}/steps/welcome/complete`,
+        headers: { authorization: `Bearer ${apiKey}` },
+      });
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    it.each([
+      ['an unknown step', `/tenants/${tenantId}/steps/dns/complete`, {}],
+      ['a column name', `/tenants/${tenantId}/steps/dbStatus/fail`, {}],
+      ['a bad tenant id', '/tenants/..%2Fsettings/steps/database/complete', {}],
+      [
+        'an output that is not an object',
+        `/tenants/${tenantId}/steps/database/complete`,
+        { output: 'done' },
+      ],
+      [
+        'an output over 4 KB',
+        `/tenants/${tenantId}/steps/database/complete`,
+        { output: { blob: 'x'.repeat(4100) } },
+      ],
+      [
+        'an error over 500 characters',
+        `/tenants/${tenantId}/steps/database/fail`,
+        { error: 'x'.repeat(501) },
+      ],
+      [
+        'an unknown field',
+        `/tenants/${tenantId}/steps/database/complete`,
+        { status: 'done' },
+      ],
+    ])('rejects %s with 400 before proxying', async (_what, url, payload) => {
+      const res = await app.inject({
+        method: 'POST',
+        url,
+        headers: { 'x-api-key': apiKey },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(http.post).not.toHaveBeenCalled();
+    });
+  });
+
   describe('customer plans on PUT /organisation', () => {
     const headers = { authorization: 'Bearer user.jwt.token' };
 
