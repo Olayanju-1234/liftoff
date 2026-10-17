@@ -72,6 +72,11 @@ export default function Customer() {
             tenantRes.refresh();
             eventsRes.refresh();
         },
+        onRetried: () => {
+            setLive(true);
+            tenantRes.refresh();
+            eventsRes.refresh();
+        },
         onDeleted: () => navigate('/'),
     });
 
@@ -127,6 +132,11 @@ export default function Customer() {
                 }
                 actions={
                     <>
+                        {tenant.status === 'FAILED' && failedStage(tenant) && (
+                            <Button variant="primary" onClick={() => actions.retry(tenant)} busy={actions.retrying === tenant.id}>
+                                {actions.retrying !== tenant.id && <RotateCcw size={14} />} Retry
+                            </Button>
+                        )}
                         {tenant.status === 'PROVISIONING' && (
                             <Button onClick={() => actions.requestCancel(tenant)}>
                                 <Ban size={14} /> Cancel setup
@@ -382,7 +392,9 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
             head = stage ? (isStepTimeout(detail) ? `${stepName(stage)} took too long and was stopped.` : `${stepName(stage)} failed.`) : 'Setup failed.';
             body = (
                 <>
-                    Setup can't continue from here, and the customer hasn't been told anything. Remove them and add them again to retry.
+                    {stage
+                        ? `Use Retry to try ${lower(stage)} again; the steps that finished are kept. If it keeps failing, the detail below is what to send support.`
+                        : 'Setup stopped. Remove this customer and add them again.'}
                     {detail && (
                         <span className="mt-1.5 block font-mono text-[12px] text-ink-3">
                             <span className="label mr-2 text-ink-4">Detail</span>

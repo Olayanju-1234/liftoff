@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
-import { cancelTenant, deleteTenant } from './api';
+import { cancelTenant, deleteTenant, retryTenant } from './api';
 import { apiMessage } from './errors';
 import type { Tenant } from './types';
 import { useIsSimple } from './mode';
+import { failedStage } from './pipeline';
+import { STEP_NAMES } from './simple';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 interface Pending {
@@ -11,10 +13,29 @@ interface Pending {
     tenant: Tenant;
 }
 
-export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDeleted?: (t: Tenant) => void } = {}) {
+export function useTenantActions(
+    opts: { onCancelled?: (t: Tenant) => void; onDeleted?: (t: Tenant) => void; onRetried?: (t: Tenant) => void } = {},
+) {
     const [pending, setPending] = useState<Pending | null>(null);
     const [busy, setBusy] = useState(false);
+    const [retrying, setRetrying] = useState<string | null>(null);
     const simple = useIsSimple();
+
+    // No confirmation: a retry only runs the step that failed, and finished steps are kept.
+    const retry = async (tenant: Tenant) => {
+        const stage = failedStage(tenant);
+        setRetrying(tenant.id);
+        try {
+            const next = await retryTenant(tenant.id);
+            const what = stage ? (simple ? STEP_NAMES[stage.key].toLowerCase() : `${stage.code} ${stage.name}`) : 'the failed step';
+            toast.success(simple ? `Trying ${what} again` : `Republished ${stage?.consumes ?? 'the input'} for ${what}`);
+            opts.onRetried?.(next);
+        } catch (err) {
+            toast.error(apiMessage(err, 'Could not retry.'));
+        } finally {
+            setRetrying(null);
+        }
+    };
 
     const confirm = async () => {
         if (!pending) return;
@@ -83,6 +104,8 @@ export function useTenantActions(opts: { onCancelled?: (t: Tenant) => void; onDe
     );
 
     return {
+        retry,
+        retrying,
         requestCancel: (tenant: Tenant) => setPending({ kind: 'cancel', tenant }),
         requestDelete: (tenant: Tenant) => setPending({ kind: 'delete', tenant }),
         dialog,

@@ -76,8 +76,14 @@ export default function TenantDetail() {
             tenantRes.refresh();
             feed.refresh();
         },
+        onRetried: () => {
+            setLive(true);
+            tenantRes.refresh();
+            feed.refresh();
+        },
         onDeleted: () => navigate('/tenants'),
     });
+    const retryStage = tenantRes.data?.status === 'FAILED' ? failedStage(tenantRes.data) : undefined;
 
     const tenant = tenantRes.data;
     const events = feed.data ?? [];
@@ -137,6 +143,16 @@ export default function TenantDetail() {
                 }
                 actions={
                     <>
+                        {retryStage && (
+                            <Button
+                                variant="primary"
+                                onClick={() => actions.retry(tenant)}
+                                busy={actions.retrying === tenant.id}
+                                title={`Republish ${retryStage.consumes} to ${retryStage.queue}`}
+                            >
+                                {actions.retrying !== tenant.id && <RotateCcw size={14} />} Retry {retryStage.code}
+                            </Button>
+                        )}
                         {tenant.status === 'PROVISIONING' && (
                             <Button onClick={() => actions.requestCancel(tenant)}>
                                 <Ban size={14} /> Cancel provisioning
@@ -329,7 +345,18 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
             head = stage
                 ? `${stage.code} ${stage.name} ${isStepTimeout(detail) ? 'timed out' : 'failed'}.`
                 : 'Provisioning failed.';
-            body = <>{detail ?? 'Check the event log below for the error payload.'}</>;
+            body = (
+                <>
+                    {detail ?? 'Check the event log below for the error payload.'}
+                    {stage && tenant.status === 'FAILED' && (
+                        <>
+                            {' '}
+                            Retry republishes <Mono>{stage.consumes}</Mono> straight to <Mono>{stage.queue}</Mono> (the payload from the event log,
+                            or rebuilt from the tenant) and sets the step IN_PROGRESS.
+                        </>
+                    )}
+                </>
+            );
             break;
         }
         case 'cancelled': {
