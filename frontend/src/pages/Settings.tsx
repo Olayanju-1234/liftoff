@@ -260,7 +260,13 @@ function CompanyPanel() {
                             />
                         </Field>
                     </div>
-                    <div className="mt-5 flex items-center justify-end gap-3 border-t border-rule pt-4">
+                    <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-rule pt-4">
+                        {current && (
+                            <p className="min-w-0 flex-1 text-[13px] text-ink-3">
+                                Limits: {current.limits.maxActiveTenants} active customers and {current.limits.maxProvisionsPerDay} new customers a day. Test
+                                customers don't count. Ask support to raise them.
+                            </p>
+                        )}
                         {dirty && <span className="font-mono text-[11.5px] text-hold">unsaved changes</span>}
                         {dirty && (
                             <Button variant="ghost" onClick={() => setDraft(null)}>

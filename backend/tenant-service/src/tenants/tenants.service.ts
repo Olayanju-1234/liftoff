@@ -33,6 +33,7 @@ import {
 } from './dead-letters';
 import { WebhookService } from '../webhooks/webhook.service';
 import { schemaNameFor, withAddress } from './address';
+import { QuotasService } from './quotas.service';
 
 const PUBLISH_TIMEOUT_MS = 5_000;
 
@@ -58,6 +59,7 @@ export class TenantsService {
     private prisma: PrismaService,
     private readonly amqpConnection: AmqpConnection,
     private readonly webhooks: WebhookService,
+    private readonly quotas: QuotasService,
   ) {}
 
   async create(createTenantDto: CreateTenantDto, creator: TenantCreator) {
@@ -68,6 +70,7 @@ export class TenantsService {
     if (!organisation) {
       throw new NotFoundException('Organisation not found');
     }
+    await this.quotas.assertCanProvision(creator.organisationId);
 
     // Get or create plan - check by both id and name to avoid unique constraint issues
     let plan = await this.prisma.plan.findFirst({
@@ -103,6 +106,7 @@ export class TenantsService {
         },
       });
 
+      await this.quotas.record(creator.organisationId, tenant.id);
       await this.startProvisioning(tenant);
 
       return withAddress(tenant, organisation.baseDomain);

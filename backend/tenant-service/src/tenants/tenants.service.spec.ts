@@ -10,6 +10,7 @@ import { Prisma, StepStatus, TenantStatus } from '.prisma/tenant-client';
 import { TenantsService } from './tenants.service';
 import { PrismaService } from '../prisma.service';
 import { WebhookService } from '../webhooks/webhook.service';
+import { QuotaExceededException, QuotasService } from './quotas.service';
 import {
   DEAD_LETTER_QUEUE,
   type DeadLetterMessage,
@@ -61,6 +62,7 @@ describe('TenantsService', () => {
   let prisma: MockPrisma;
   let amqp: { publish: jest.Mock };
   let webhooks: { notify: jest.Mock };
+  let quotas: { assertCanProvision: jest.Mock; record: jest.Mock };
 
   const baseDto = { name: 'Acme', subdomain: 'acme', planId: 'starter' };
   const creator = { organisationId: 'org-1', ownerId: 'owner-1' };
@@ -71,6 +73,10 @@ describe('TenantsService', () => {
     prisma = buildPrisma();
     amqp = { publish: jest.fn().mockResolvedValue(undefined) };
     webhooks = { notify: jest.fn() };
+    quotas = {
+      assertCanProvision: jest.fn().mockResolvedValue({}),
+      record: jest.fn().mockResolvedValue(undefined),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -78,6 +84,7 @@ describe('TenantsService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: AmqpConnection, useValue: amqp },
         { provide: WebhookService, useValue: webhooks },
+        { provide: QuotasService, useValue: quotas },
       ],
     }).compile();
 
@@ -119,6 +126,21 @@ describe('TenantsService', () => {
       );
       expect(result.id).toBe('tenant-1');
       expect(result.address).toBe('acme.liftoff.ojusentinel.com');
+      expect(quotas.assertCanProvision).toHaveBeenCalledWith('org-1');
+      expect(quotas.record).toHaveBeenCalledWith('org-1', 'tenant-1');
+    });
+
+    it('creates nothing when the organisation is over quota', async () => {
+      quotas.assertCanProvision.mockRejectedValueOnce(
+        new QuotaExceededException('over', 60),
+      );
+
+      await expect(service.create(baseDto, creator)).rejects.toBeInstanceOf(
+        QuotaExceededException,
+      );
+      expect(prisma.tenant.create).not.toHaveBeenCalled();
+      expect(amqp.publish).not.toHaveBeenCalled();
+      expect(quotas.record).not.toHaveBeenCalled();
     });
 
     it("builds the address from the organisation's base domain", async () => {

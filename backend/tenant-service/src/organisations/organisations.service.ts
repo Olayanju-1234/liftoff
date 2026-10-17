@@ -19,6 +19,8 @@ export interface OrganisationResponse {
   webhookConfigured: boolean;
   // Tenant addresses are <subdomain>.<baseDomain>; null means the platform domain is shown.
   baseDomain: string | null;
+  // Quotas on POST /tenants. Raised by hand for a company that needs more.
+  limits: { maxActiveTenants: number; maxProvisionsPerDay: number };
   createdAt: Date;
   updatedAt: Date;
 }
@@ -34,6 +36,8 @@ const publicFields = {
   webhookUrl: true,
   webhookSecret: true,
   baseDomain: true,
+  maxActiveTenants: true,
+  maxProvisionsPerDay: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.OrganisationSelect;
@@ -126,7 +130,12 @@ export class OrganisationsService {
   }
 
   private toResponse(row: OrganisationRow): OrganisationResponse {
-    const { webhookSecret, ...rest } = row;
-    return { ...rest, webhookConfigured: webhookSecret !== null };
+    const { webhookSecret, maxActiveTenants, maxProvisionsPerDay, ...rest } =
+      row;
+    return {
+      ...rest,
+      webhookConfigured: webhookSecret !== null,
+      limits: { maxActiveTenants, maxProvisionsPerDay },
+    };
   }
 }

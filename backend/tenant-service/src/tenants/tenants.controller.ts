@@ -30,6 +30,7 @@ import { CurrentOrganisation } from '../auth/decorators/current-organisation.dec
 import { AllowApiKey } from '../auth/decorators/allow-api-key.decorator';
 import { TenantsService } from './tenants.service';
 import { IdempotencyService } from './idempotency.service';
+import { QuotaExceededException } from './quotas.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { CancelTenantDto } from './dto/cancel-tenant.dto';
 
@@ -66,6 +67,11 @@ export class TenantsController {
     status: 422,
     description: 'Idempotency-Key reused with a different body',
   })
+  @ApiResponse({
+    status: 429,
+    description:
+      'The organisation is at its active-tenant or daily provisioning limit; Retry-After says how long to wait',
+  })
   async create(
     @Body() createTenantDto: CreateTenantDto,
     @CurrentOrganisation() organisationId: string,
@@ -75,19 +81,27 @@ export class TenantsController {
   ) {
     const creator = { organisationId, ownerId: userId ?? null };
     const key = idempotencyKey?.trim();
-    if (!key) {
-      return this.tenantsService.create(createTenantDto, creator);
+    try {
+      if (!key) {
+        return await this.tenantsService.create(createTenantDto, creator);
+      }
+      const { body, replayed } = await this.idempotency.run(
+        organisationId,
+        key,
+        createTenantDto,
+        () => this.tenantsService.create(createTenantDto, creator),
+      );
+      if (replayed) {
+        void reply.header(IDEMPOTENT_REPLAYED_HEADER, 'true');
+      }
+      return body;
+    } catch (error) {
+      // Headers set here survive the exception filter's reply.
+      if (error instanceof QuotaExceededException) {
+        void reply.header('Retry-After', String(error.retryAfterSeconds));
+      }
+      throw error;
     }
-    const { body, replayed } = await this.idempotency.run(
-      organisationId,
-      key,
-      createTenantDto,
-      () => this.tenantsService.create(createTenantDto, creator),
-    );
-    if (replayed) {
-      void reply.header(IDEMPOTENT_REPLAYED_HEADER, 'true');
-    }
-    return body;
   }
 
   @Get()

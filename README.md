@@ -306,7 +306,7 @@ The organisation is the company that signed up. Every user in it sees the same t
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/organisation` | Name, handle, `baseDomain`, `webhookUrl` and whether a signing secret exists |
+| GET | `/organisation` | Name, handle, `baseDomain`, `webhookUrl`, whether a signing secret exists, and `limits` (`maxActiveTenants`, `maxProvisionsPerDay`) |
 | PUT | `/organisation` | Update `name`, `baseDomain` or `webhookUrl`. `baseDomain` (e.g. `acme.app`) is what tenant addresses are shown under; `null` clears it. A new webhook URL (or `rotateWebhookSecret: true`) returns `webhookSecret` once; `webhookUrl: null` turns deliveries off. Private and loopback URLs get 400 |
 | POST | `/api-keys` | Create a key (`name`). The response is the only place the key appears |
 | GET | `/api-keys` | List keys: id, name, prefix, last use. Never the key |
@@ -315,6 +315,8 @@ The organisation is the company that signed up. Every user in it sees the same t
 ### Tenants
 
 Tenants are the organisation's customers. `POST /tenants` files the new tenant under the caller's organisation (and records the user who clicked, when there is one). Every tenant endpoint only returns or changes that organisation's tenants: another company's tenant answers 404, so its ID can't be probed.
+
+Quotas: an organisation may have 10 active tenants (`PROVISIONING` or `ACTIVE`) and start 50 per rolling 24 hours by default (`Organisation.maxActiveTenants` / `maxProvisionsPerDay`, raised by hand in SQL). Over either, `POST /tenants` answers 429 with a message naming the limit and a `Retry-After` header. Provisions are counted in `ProvisionLog`, so deleting tenants does not reset the daily count.
 
 `name` and `subdomain` are unique per organisation, not across the platform: two companies can both have an "acme". Every tenant in a response carries `address`, `<subdomain>.<baseDomain>` when the organisation has set one and `<subdomain>.liftoff.ojusentinel.com` otherwise (display only; DNS is simulated), and `schemaName`, the Postgres schema db-provisioner created: `tenant_<handle>_<subdomain>` for tenants created since org scoping, `tenant_<subdomain>` for older ones.
 

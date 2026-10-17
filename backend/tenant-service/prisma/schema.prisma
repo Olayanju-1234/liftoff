@@ -68,6 +68,11 @@ model Organisation {
   // Display only until DNS is real; API responses fall back to the platform domain.
   baseDomain String?
 
+  // Quotas. Raised by hand (SQL) for a company that needs more; test tenants never count.
+  maxActiveTenants    Int @default(10)
+  maxProvisionsPerDay Int @default(50)
+  provisions ProvisionLog[]
+
   // Stored raw, not hashed, because every delivery is signed with it. The API returns it once.
   webhookUrl    String?
   webhookSecret String?
@@ -92,6 +97,17 @@ model ApiKey {
   createdAt  DateTime  @default(now())
 
   @@index([organisationId])
+}
+
+// One row per counted provision, so the rolling-day quota survives tenants being deleted.
+model ProvisionLog {
+  id             String       @id @default(cuid())
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  tenantId       String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organisationId, createdAt])
 }
 
 // One row per Idempotency-Key a company sends on POST /tenants. The response is stored
