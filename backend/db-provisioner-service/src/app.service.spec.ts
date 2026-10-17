@@ -82,6 +82,22 @@ describe('AppService', () => {
     );
   });
 
+  it('creates the schema tenant-service named, when the message carries one', async () => {
+    await service.handleTenantRequested({
+      ...payload,
+      schemaName: 'tenant_acme_corp_acme',
+    });
+
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      'CREATE SCHEMA IF NOT EXISTS "tenant_acme_corp_acme";',
+    );
+    expect(amqp.publish).toHaveBeenCalledWith(
+      'provisioning.direct',
+      'tenant.db.ready',
+      { tenantId: 'tenant-1', subdomain: 'acme', planId: 'starter' },
+    );
+  });
+
   it('reduces the subdomain to [A-Za-z0-9_] before it reaches the raw SQL', async () => {
     await service.handleTenantRequested({
       ...payload,

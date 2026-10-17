@@ -139,15 +139,15 @@ function Row({ tenant, status, now }: { tenant: Tenant; status: SimpleStatus; no
             >
                 <span className="min-w-0">
                     <span className="block truncate text-[15.5px] font-semibold text-ink group-hover:underline">{tenant.name}</span>
-                    <span className="block truncate text-[12.5px] text-ink-3 md:hidden">{tenantHost(tenant.subdomain)}</span>
+                    <span className="block truncate text-[12.5px] text-ink-3 md:hidden">{tenantHost(tenant)}</span>
                 </span>
                 <span className="justify-self-end md:justify-self-start">
                     <Tag tone={meta.tone} live={meta.live}>
                         {meta.label}
                     </Tag>
                 </span>
-                <span className="hidden min-w-0 truncate font-mono text-[12.5px] text-ink-2 md:block" title={tenantHost(tenant.subdomain)}>
-                    {tenantHost(tenant.subdomain)}
+                <span className="hidden min-w-0 truncate font-mono text-[12.5px] text-ink-2 md:block" title={tenantHost(tenant)}>
+                    {tenantHost(tenant)}
                 </span>
                 <span className="hidden text-[13px] text-ink-2 md:block">{planLabel(tenant)}</span>
                 <span className="col-span-2 text-[12.5px] text-ink-3 md:col-span-1 md:text-[13px]" title={fmtStamp(created)}>

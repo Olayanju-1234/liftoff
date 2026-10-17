@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { createTenant } from '../lib/api';
+import { createTenant, getOrganisation } from '../lib/api';
 import { apiMessage } from '../lib/errors';
-import { PLANS, STAGES, schemaName } from '../lib/pipeline';
-import { PLAN_BLURBS, SIMPLE_STEPS, tenantHost } from '../lib/simple';
+import { useResource } from '../lib/hooks';
+import { PLANS, STAGES } from '../lib/pipeline';
+import { PLAN_BLURBS, SIMPLE_STEPS, previewHost } from '../lib/simple';
 import { inputClass } from '../lib/ui';
 import { useIsSimple } from '../lib/mode';
 import { cn } from '../lib/cn';
@@ -31,6 +32,9 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
     // One key per form fill: resubmitting after a timeout replays the first result instead of creating twice.
     const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
     const simple = useIsSimple();
+    // For the address preview only; the API computes the real address.
+    const organisation = useResource(getOrganisation);
+    const host = (sub: string) => previewHost(sub || 'globex', organisation.data?.baseDomain);
 
     const reset = () => {
         setName('');
@@ -108,7 +112,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
                     <Field
                         label={simple ? 'Address' : 'Subdomain'}
                         htmlFor="tenant-subdomain"
-                        hint={simple ? `Letters only, up to 30. Their address will be ${tenantHost(subdomain || 'globex')}.` : 'Letters only, up to 30.'}
+                        hint={simple ? `Letters only, up to 30. Their address will be ${host(subdomain)}.` : `Letters only, up to 30, unique within your company. Address: ${host(subdomain)}.`}
                     >
                         <input
                             id="tenant-subdomain"
@@ -183,7 +187,7 @@ export default function CreateTenantModal({ isOpen, onClose, onCreated }: Create
                                 <li key={s.key} className="flex gap-2">
                                     <span className="w-6 text-ink-3">{s.code}</span>
                                     <span className="truncate">
-                                        {s.index === 0 ? `schema ${schemaName(subdomain || 'globex')}` : s.name.toLowerCase()}
+                                        {s.index === 0 ? `schema tenant_${organisation.data?.handle.replace(/[^a-z0-9]/gi, '_') ?? 'org'}_${subdomain || 'globex'}` : s.name.toLowerCase()}
                                     </span>
                                 </li>
                             ))}

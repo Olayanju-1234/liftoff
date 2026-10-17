@@ -13,6 +13,22 @@ export interface Tenant {
     notificationStatus: StepStatus;
     cancelledAt?: string | null;
     cancelReason?: string | null;
+    // <subdomain>.<organisation base domain>, or the platform domain when the company has none. Display only.
+    address?: string;
+    // The Postgres schema db-provisioner created for it.
+    schemaName?: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+
+// The signed-up company. Its customers are the tenants.
+export interface Organisation {
+    id: string;
+    name: string;
+    handle: string;
+    webhookUrl: string | null;
+    webhookConfigured: boolean;
+    baseDomain: string | null;
     createdAt: string;
     updatedAt: string;
 }

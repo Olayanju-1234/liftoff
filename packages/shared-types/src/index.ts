@@ -1,8 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
   IsAlpha,
   IsBoolean,
   IsEmail,
+  IsFQDN,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -223,6 +225,22 @@ export class UpdateOrganisationDto {
   @IsOptional()
   @IsBoolean()
   rotateWebhookSecret?: boolean;
+
+  @ApiPropertyOptional({
+    example: 'acme.app',
+    nullable: true,
+    maxLength: 253,
+    description:
+      "The company's own domain for tenant addresses: a tenant's address becomes <subdomain>.<baseDomain>. null clears it and addresses fall back to the platform domain. Display only until DNS is real.",
+  })
+  @IsOptional()
+  @ValidateIf((dto: UpdateOrganisationDto) => dto.baseDomain !== null)
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().toLowerCase() : value,
+  )
+  @IsFQDN({ require_tld: true })
+  @MaxLength(253)
+  baseDomain?: string | null;
 }
 
 export class CreateApiKeyDto {
@@ -279,6 +297,9 @@ export interface TenantRequestedPayload {
   tenantId: string;
   subdomain: string;
   planId: string;
+  // The Postgres schema to create. Absent on messages from before org-scoped subdomains,
+  // when the schema was tenant_<subdomain>.
+  schemaName?: string;
 }
 
 export interface TenantDbReadyPayload {

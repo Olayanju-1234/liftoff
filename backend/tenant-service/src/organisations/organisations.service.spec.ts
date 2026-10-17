@@ -25,6 +25,7 @@ const row = {
   handle: 'acme',
   webhookUrl: null as string | null,
   webhookSecret: null as string | null,
+  baseDomain: null as string | null,
   createdAt: new Date('2026-10-17T00:00:00Z'),
   updatedAt: new Date('2026-10-17T00:00:00Z'),
 };
@@ -70,6 +71,7 @@ describe('OrganisationsService', () => {
         handle: 'acme',
         webhookUrl: 'https://hooks.acme.com/liftoff',
         webhookConfigured: true,
+        baseDomain: null,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       });
@@ -86,6 +88,24 @@ describe('OrganisationsService', () => {
   });
 
   describe('update', () => {
+    it('sets and clears the base domain without touching the webhook', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(row);
+      const set = await service.update('org-1', { baseDomain: 'acme.app' });
+      expect(set.baseDomain).toBe('acme.app');
+      expect(set.webhookSecret).toBeUndefined();
+      let [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data).toEqual({ baseDomain: 'acme.app' });
+
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...row,
+        baseDomain: 'acme.app',
+      });
+      const cleared = await service.update('org-1', { baseDomain: null });
+      expect(cleared.baseDomain).toBeNull();
+      [, [{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data).toEqual({ baseDomain: null });
+    });
+
     it('setting a webhook URL issues a secret and returns it once', async () => {
       prisma.organisation.findUnique.mockResolvedValueOnce(row);
 

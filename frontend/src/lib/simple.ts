@@ -64,8 +64,10 @@ export function trialEndsAt(t: Tenant, events: EventLog[]): number {
     return start + TRIAL_DAYS * 86_400_000;
 }
 
-// DNS is simulated, so the address is informational. Override the base domain per deployment.
+// DNS is simulated, so the address is informational. The API computes it from the company's
+// base domain; this fallback only covers responses from before it did.
 const TENANT_DOMAIN = (import.meta.env.VITE_TENANT_DOMAIN as string | undefined)?.trim() || 'liftoff.ojusentinel.com';
 
-export const tenantHost = (subdomain: string) => `${subdomain}.${TENANT_DOMAIN}`;
-export const tenantUrl = (subdomain: string) => `https://${tenantHost(subdomain)}`;
+export const previewHost = (subdomain: string, baseDomain?: string | null) => `${subdomain}.${baseDomain || TENANT_DOMAIN}`;
+export const tenantHost = (t: Pick<Tenant, 'subdomain' | 'address'>) => t.address ?? previewHost(t.subdomain);
+export const tenantUrl = (t: Pick<Tenant, 'subdomain' | 'address'>) => `https://${tenantHost(t)}`;

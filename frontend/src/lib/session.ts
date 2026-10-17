@@ -6,7 +6,9 @@ export interface SessionUser {
     email: string;
     name: string | null;
     role: string;
-    tenantId: string;
+    organisationId: string | null;
+    // Legacy workspace tenant; null for accounts created since organisations.
+    tenantId: string | null;
 }
 
 export interface Session {

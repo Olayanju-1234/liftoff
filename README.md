@@ -185,8 +185,11 @@ erDiagram
 
     Tenant {
         cuid id
+        cuid organisationId
         string name
         string subdomain
+        string schemaName
+        string address
         string planId
         string stripeCustomerId
         string stripeSubscriptionId
@@ -204,6 +207,7 @@ erDiagram
         cuid id
         string name
         string handle
+        string baseDomain
         string webhookUrl
         string webhookSecret
     }
@@ -302,8 +306,8 @@ The organisation is the company that signed up. Every user in it sees the same t
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/organisation` | Name, handle, `webhookUrl` and whether a signing secret exists |
-| PUT | `/organisation` | Update `name` or `webhookUrl`. A new URL (or `rotateWebhookSecret: true`) returns `webhookSecret` once; `webhookUrl: null` turns deliveries off. Private and loopback URLs get 400 |
+| GET | `/organisation` | Name, handle, `baseDomain`, `webhookUrl` and whether a signing secret exists |
+| PUT | `/organisation` | Update `name`, `baseDomain` or `webhookUrl`. `baseDomain` (e.g. `acme.app`) is what tenant addresses are shown under; `null` clears it. A new webhook URL (or `rotateWebhookSecret: true`) returns `webhookSecret` once; `webhookUrl: null` turns deliveries off. Private and loopback URLs get 400 |
 | POST | `/api-keys` | Create a key (`name`). The response is the only place the key appears |
 | GET | `/api-keys` | List keys: id, name, prefix, last use. Never the key |
 | DELETE | `/api-keys/:id` | Revoke a key (204) |
@@ -311,6 +315,8 @@ The organisation is the company that signed up. Every user in it sees the same t
 ### Tenants
 
 Tenants are the organisation's customers. `POST /tenants` files the new tenant under the caller's organisation (and records the user who clicked, when there is one). Every tenant endpoint only returns or changes that organisation's tenants: another company's tenant answers 404, so its ID can't be probed.
+
+`name` and `subdomain` are unique per organisation, not across the platform: two companies can both have an "acme". Every tenant in a response carries `address`, `<subdomain>.<baseDomain>` when the organisation has set one and `<subdomain>.liftoff.ojusentinel.com` otherwise (display only; DNS is simulated), and `schemaName`, the Postgres schema db-provisioner created: `tenant_<handle>_<subdomain>` for tenants created since org scoping, `tenant_<subdomain>` for older ones.
 
 `POST /tenants` and `GET /tenants/:id` also accept a company API key, as `x-api-key: <key>` or `Authorization: Bearer <key>`. Every other route needs a signed-in user.
 

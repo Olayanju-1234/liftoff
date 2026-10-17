@@ -4,6 +4,7 @@ import { PLAN_IDS } from '@liftoff/shared-types';
 import { LEGACY_PLAN_IDS, PLAN_CATALOG } from '../src/tenants/plans';
 import { backfillTenantOwners } from '../src/tenants/backfill-owners';
 import { backfillOrganisations } from '../src/organisations/backfill-organisations';
+import { backfillSchemaNames } from '../src/tenants/backfill-schema-names';
 
 const prisma = new PrismaClient();
 const logger = new Logger('Seed');
@@ -52,6 +53,9 @@ async function main() {
 
   const orgs = await backfillOrganisations(prisma);
   logger.log(`Backfilled organisations ${JSON.stringify(orgs)}`);
+
+  const schemas = await backfillSchemaNames(prisma);
+  logger.log(`Backfilled schema names on ${schemas} tenant(s)`);
 }
 
 main()

@@ -28,6 +28,8 @@ export const envValidationSchema = Joi.object({
 
   // CORS / frontend integration.
   FRONTEND_URL: Joi.string().optional().allow(''),
+  // Shown as the tenant address when the organisation has no base domain of its own.
+  TENANT_BASE_DOMAIN: Joi.string().hostname().optional().allow(''),
 
   // Email (optional — Resend, else SendGrid, else nothing is sent).
   RESEND_API_KEY: Joi.string().optional().allow(''),

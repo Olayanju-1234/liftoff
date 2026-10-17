@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Tenant, EventLog, UserSettings } from './types';
+import type { Tenant, EventLog, Organisation, UserSettings } from './types';
 
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_URL,
@@ -40,6 +40,11 @@ export const saveSettings = async (settings: Partial<UserSettings>): Promise<Use
     const response = await api.put<UserSettings>('/settings', settings);
     return response.data;
 };
+
+// Organisation APIs
+export const getOrganisation = () => api.get<Organisation>('/organisation').then((res) => res.data);
+export const updateOrganisation = (patch: { name?: string; baseDomain?: string | null }) =>
+    api.put<Organisation>('/organisation', patch).then((res) => res.data);
 
 export const confirmEmailChange = (token: string) =>
     api.post<{ id: string; email: string }>('/settings/email/confirm', { token }).then((res) => res.data);

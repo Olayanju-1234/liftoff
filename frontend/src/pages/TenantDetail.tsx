@@ -28,6 +28,7 @@ import {
     sweepAt,
 } from '../lib/pipeline';
 import type { Condition } from '../lib/pipeline';
+import { tenantHost } from '../lib/simple';
 import { fmtAgo, fmtClock, fmtDuration, fmtOffset, fmtStamp } from '../lib/time';
 import { EVENT_TONE } from '../lib/ui';
 import type { Tone } from '../lib/ui';
@@ -232,8 +233,8 @@ function TitleBlock({ tenant, now }: { tenant: Tenant; now: number }) {
                 </button>
             ),
         },
-        { k: 'Subdomain', v: tenant.subdomain, title: tenant.subdomain },
-        { k: 'Schema', v: schemaName(tenant.subdomain), title: schemaName(tenant.subdomain) },
+        { k: 'Address', v: tenantHost(tenant), title: `${tenantHost(tenant)} (DNS is simulated; display only)` },
+        { k: 'Schema', v: tenant.schemaName ?? schemaName(tenant.subdomain), title: tenant.schemaName ?? schemaName(tenant.subdomain) },
         { k: 'Plan', v: planLabel(tenant), title: `planId ${tenant.planId}` },
         { k: 'Created', v: fmtAgo(Date.parse(tenant.createdAt), now), title: fmtStamp(Date.parse(tenant.createdAt)) },
         { k: 'Last change', v: fmtAgo(Date.parse(tenant.updatedAt), now), title: fmtStamp(Date.parse(tenant.updatedAt)) },

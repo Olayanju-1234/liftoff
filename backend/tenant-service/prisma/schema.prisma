@@ -14,8 +14,12 @@ datasource db {
 
 model Tenant {
   id        String   @id @default(cuid())
-  name      String   @unique // e.g., "Acme Inc."
-  subdomain String   @unique // e.g., "acme"
+  // Unique per organisation (below), not across the platform: two companies can both have an "Acme".
+  name      String   // e.g., "Acme Inc."
+  subdomain String   // e.g., "acme"
+  // The Postgres schema db-provisioner created. Older rows used tenant_<subdomain>; new ones
+  // are prefixed with the organisation handle so two companies' "acme" don't share a schema.
+  schemaName String?
   status    TenantStatus @default(PROVISIONING)
   planId    String
   
@@ -49,6 +53,8 @@ model Tenant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([organisationId, subdomain])
+  @@unique([organisationId, name])
   @@index([ownerId])
   @@index([organisationId])
 }
@@ -58,6 +64,9 @@ model Organisation {
   id     String @id @default(cuid())
   name   String
   handle String @unique
+  // The company's own domain for tenant addresses, e.g. "acme.app" → globex.acme.app.
+  // Display only until DNS is real; API responses fall back to the platform domain.
+  baseDomain String?
 
   // Stored raw, not hashed, because every delivery is signed with it. The API returns it once.
   webhookUrl    String?

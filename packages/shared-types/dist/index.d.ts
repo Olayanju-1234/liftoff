@@ -37,6 +37,7 @@ export declare class UpdateOrganisationDto {
     name?: string;
     webhookUrl?: string | null;
     rotateWebhookSecret?: boolean;
+    baseDomain?: string | null;
 }
 export declare class CreateApiKeyDto {
     name: string;
@@ -60,6 +61,7 @@ export interface TenantRequestedPayload {
     tenantId: string;
     subdomain: string;
     planId: string;
+    schemaName?: string;
 }
 export interface TenantDbReadyPayload {
     tenantId: string;
