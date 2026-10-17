@@ -177,6 +177,127 @@ describe('API Gateway (e2e)', () => {
     });
   });
 
+  describe('company API keys', () => {
+    const tenantId = 'cmv9gs7040002vyzf6leznb2s';
+
+    it('POST /tenants forwards x-api-key without an Authorization header', async () => {
+      http.post.mockReturnValueOnce(of({ data: { id: tenantId } }));
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/tenants',
+        headers: { 'x-api-key': 'lk_company_key' },
+        payload: { name: 'Globex', subdomain: 'globex', planId: 'starter' },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(http.post).toHaveBeenCalledWith(
+        '/tenants',
+        { name: 'Globex', subdomain: 'globex', planId: 'starter' },
+        { headers: { 'x-api-key': 'lk_company_key' } },
+      );
+    });
+
+    it('GET /tenants/:id forwards a key sent as a bearer token verbatim', async () => {
+      http.get.mockReturnValueOnce(of({ data: { id: tenantId } }));
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/tenants/${tenantId}`,
+        headers: { authorization: 'Bearer lk_company_key' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(http.get).toHaveBeenCalledWith(`/tenants/${tenantId}`, {
+        headers: { Authorization: 'Bearer lk_company_key' },
+      });
+    });
+
+    it('POST /api-keys proxies with the user token and DELETE answers 204', async () => {
+      http.post.mockReturnValueOnce(
+        of({ data: { id: 'key-1', key: 'lk_new', prefix: 'lk_new' } }),
+      );
+      http.delete.mockReturnValueOnce(of({ data: undefined }));
+
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api-keys',
+        headers: { authorization: 'Bearer user.jwt.token' },
+        payload: { name: 'CI' },
+      });
+      const revoked = await app.inject({
+        method: 'DELETE',
+        url: `/api-keys/${tenantId}`,
+        headers: { authorization: 'Bearer user.jwt.token' },
+      });
+
+      expect(created.statusCode).toBe(201);
+      expect(created.json<{ key: string }>().key).toBe('lk_new');
+      expect(revoked.statusCode).toBe(204);
+      expect(http.delete).toHaveBeenCalledWith(`/api-keys/${tenantId}`, {
+        headers: { Authorization: 'Bearer user.jwt.token' },
+      });
+    });
+
+    it('PUT /organisation rejects an unknown field before proxying', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/organisation',
+        headers: { authorization: 'Bearer user.jwt.token' },
+        payload: { webhookSecret: 'whsec_mine' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(http.put).not.toHaveBeenCalled();
+    });
+
+    it('POST /auth/register accepts companyName + handle and still the older tenantName + subdomain', async () => {
+      http.post.mockReturnValue(of({ data: { accessToken: 'a' } }));
+
+      const modern = await app.inject({
+        method: 'POST',
+        url: '/auth/register',
+        payload: {
+          email: 'admin@acme.com',
+          password: 'CorrectHorse9!',
+          companyName: 'Acme',
+          handle: 'acme',
+        },
+      });
+      const legacy = await app.inject({
+        method: 'POST',
+        url: '/auth/register',
+        payload: {
+          email: 'admin@globex.com',
+          password: 'CorrectHorse9!',
+          tenantName: 'Globex',
+          subdomain: 'globex',
+        },
+      });
+      const neither = await app.inject({
+        method: 'POST',
+        url: '/auth/register',
+        payload: { email: 'x@y.io', password: 'CorrectHorse9!' },
+      });
+      const badHandle = await app.inject({
+        method: 'POST',
+        url: '/auth/register',
+        payload: {
+          email: 'x@y.io',
+          password: 'CorrectHorse9!',
+          companyName: 'X',
+          handle: 'Not A Handle',
+        },
+      });
+
+      expect(modern.statusCode).toBe(201);
+      expect(legacy.statusCode).toBe(201);
+      expect(neither.statusCode).toBe(400);
+      expect(badHandle.statusCode).toBe(400);
+      expect(http.post).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('passes a downstream 401 back to the client', async () => {
     http.get.mockReturnValueOnce(throwError(unauthorized));
 
