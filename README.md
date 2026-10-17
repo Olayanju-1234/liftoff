@@ -4,6 +4,8 @@
 
 A production-grade microservices platform that automates the full lifecycle of tenant provisioning through an event-driven pipeline. Built to demonstrate distributed systems design, Stripe billing integration, and choreography-based saga patterns.
 
+**Who it is for:** a SaaS company signs up as an **organisation**. Its customers are the **tenants** it provisions, by hand from the dashboard or from its own backend with a **company API key**. When a tenant is ready (or fails) Liftoff POSTs a signed **webhook** to the company. See [Integrate](#integrate).
+
 **[Live dashboard](https://liftoff.ojusentinel.com)** · [API docs](https://api.liftoff.ojusentinel.com/api/docs) · all seven services, RabbitMQ and PostgreSQL on one 1-vCPU ARM VPS behind nginx
 
 **At a glance:** 7 NestJS services · RabbitMQ choreography saga with a dead-letter exchange · schema-per-tenant PostgreSQL · Stripe customers and subscriptions with 14-day trials · stuck-pipeline sweeper · ADRs for the outbox pattern and Render vs AWS
@@ -18,6 +20,7 @@ A production-grade microservices platform that automates the full lifecycle of t
 - [Data Model](#data-model)
 - [Auth and Security](#auth-and-security)
 - [API Reference](#api-reference)
+- [Integrate](#integrate)
 - [Getting Started](#getting-started)
 - [Deployment](#deployment)
 - [Engineering Decisions](#engineering-decisions)
@@ -197,11 +200,28 @@ erDiagram
         string cancelReason
     }
 
+    Organisation {
+        cuid id
+        string name
+        string handle
+        string webhookUrl
+        string webhookSecret
+    }
+
     User {
         cuid id
-        cuid tenantId
+        cuid organisationId
         string email
         string role
+    }
+
+    ApiKey {
+        cuid id
+        cuid organisationId
+        string name
+        string prefix
+        string keyHash
+        timestamp lastUsedAt
     }
 
     ApiCredential {
@@ -222,7 +242,9 @@ erDiagram
     }
 
     Plan ||--o{ Tenant : "subscribed to"
-    Tenant ||--o{ User : "has"
+    Organisation ||--o{ User : "staff"
+    Organisation ||--o{ Tenant : "customers"
+    Organisation ||--o{ ApiKey : "has"
     Tenant ||--o{ ApiCredential : "has"
     Tenant ||--o{ EventLog : "tracks"
 ```
@@ -231,7 +253,9 @@ erDiagram
 
 ## Auth and Security
 
-- JWT with `sub`, `email`, `role`, `tenantId` claims
+- JWT with `sub`, `email`, `role`, `organisationId` claims (plus a legacy `tenantId`)
+- Company API keys: `lk_…`, 32 random bytes, stored as a SHA-256 hash, shown once
+- Webhooks signed with HMAC-SHA256; destinations resolved and checked against private, loopback, link-local and metadata ranges on every delivery
 - bcrypt password hashing
 - Single-use refresh token rotation
 - Rate limiting per IP at gateway level
@@ -245,7 +269,8 @@ erDiagram
   sub: string;       // user ID
   email: string;
   role: 'ADMIN' | 'USER';
-  tenantId: string;
+  organisationId: string | null;
+  tenantId: string | null; // legacy workspace tenant; null for new accounts
 }
 ```
 
@@ -265,25 +290,39 @@ validation.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/auth/register` | Register a user and provision their workspace tenant on the `starter` plan |
+| POST | `/auth/register` | Sign a company up: creates the admin user and their organisation (`companyName`, `handle`). Provisions nothing |
 | POST | `/auth/login` | Login and receive tokens |
 | POST | `/auth/refresh` | Refresh access token |
 | POST | `/auth/logout` | Invalidate refresh token |
 | GET | `/auth/me` | Get current user |
 
-### Tenants
+### Organisation and API keys
 
-Every tenant belongs to the account that created it: `POST /tenants` and `POST /auth/register` record the caller as its owner. These endpoints only return or change the caller's own tenants. Another account's tenant answers 404, so its ID can't be probed.
+The organisation is the company that signed up. Every user in it sees the same tenants and keys.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/tenants` | List the caller's tenants |
-| POST | `/tenants` | Create tenant and start provisioning |
-| GET | `/tenants/:id` | Get tenant with step statuses |
+| GET | `/organisation` | Name, handle, `webhookUrl` and whether a signing secret exists |
+| PUT | `/organisation` | Update `name` or `webhookUrl`. A new URL (or `rotateWebhookSecret: true`) returns `webhookSecret` once; `webhookUrl: null` turns deliveries off. Private and loopback URLs get 400 |
+| POST | `/api-keys` | Create a key (`name`). The response is the only place the key appears |
+| GET | `/api-keys` | List keys: id, name, prefix, last use. Never the key |
+| DELETE | `/api-keys/:id` | Revoke a key (204) |
+
+### Tenants
+
+Tenants are the organisation's customers. `POST /tenants` files the new tenant under the caller's organisation (and records the user who clicked, when there is one). Every tenant endpoint only returns or changes that organisation's tenants: another company's tenant answers 404, so its ID can't be probed.
+
+`POST /tenants` and `GET /tenants/:id` also accept a company API key, as `x-api-key: <key>` or `Authorization: Bearer <key>`. Every other route needs a signed-in user.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/tenants` | List the organisation's tenants |
+| POST | `/tenants` | Create tenant and start provisioning (user token or API key; 10/min per IP) |
+| GET | `/tenants/:id` | Get tenant with step statuses (user token or API key; 60/min per IP) |
 | DELETE | `/tenants/:id` | Delete tenant and clean up resources |
 | POST | `/tenants/:id/cancel` | Cancel in-progress provisioning |
 | GET | `/tenants/:id/events` | Get event log for tenant |
-| GET | `/events` | Event log across the caller's tenants |
+| GET | `/events` | Event log across the organisation's tenants |
 
 ### Settings
 
@@ -294,6 +333,69 @@ Settings belong to the caller. A new email doesn't replace the sign-in email rig
 | GET | `/settings` | Get the caller's profile, notification settings and any pending email |
 | PUT | `/settings` | Update them; a new email waits for confirmation, and one another account uses gets 409 |
 | POST | `/settings/email/confirm` | Confirm a pending email with the token from the link (no auth; the token is the proof) |
+
+
+---
+
+## Integrate
+
+Three steps take a SaaS company from signup to a provisioned customer with no dashboard clicks. The examples use the live gateway; swap in `http://localhost:4000` locally.
+
+**1. Create a key.** Sign in on the dashboard (or `POST /auth/login`), then:
+
+```bash
+curl -s https://api.liftoff.ojusentinel.com/api-keys \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"backend"}'
+# {"id":"…","name":"backend","prefix":"lk_3fK9aQ2x","key":"lk_3fK9aQ2x…","lastUsedAt":null,"createdAt":"…"}
+```
+
+Store `key`; it is not shown again. `GET /api-keys` lists prefixes only.
+
+**2. Provision a customer.** The key stands in for a user on `POST /tenants` and `GET /tenants/:id`:
+
+```bash
+curl -s -X POST https://api.liftoff.ojusentinel.com/tenants \
+  -H "x-api-key: $LIFTOFF_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Globex","subdomain":"globex","planId":"starter"}'
+# 202 {"id":"cmv…","status":"PROVISIONING","dbStatus":"IN_PROGRESS",…}
+
+curl -s https://api.liftoff.ojusentinel.com/tenants/cmv… -H "x-api-key: $LIFTOFF_API_KEY"
+```
+
+**3. Receive the webhook.** Give the organisation a URL once (as a signed-in user), and keep the secret it returns:
+
+```bash
+curl -s -X PUT https://api.liftoff.ojusentinel.com/organisation \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"webhookUrl":"https://api.globex-saas.com/liftoff/webhook"}'
+# {…,"webhookUrl":"https://api.globex-saas.com/liftoff/webhook","webhookConfigured":true,"webhookSecret":"whsec_…"}
+```
+
+When a tenant reaches `ACTIVE` or `FAILED`, tenant-service POSTs JSON with these headers:
+
+| Header | Value |
+|---|---|
+| `x-liftoff-event` | `tenant.active` or `tenant.failed` |
+| `x-liftoff-delivery` | UUID, the same on every retry of one delivery |
+| `x-liftoff-signature` | `sha256=` + hex HMAC-SHA256 of the raw body, keyed with your secret |
+
+```json
+{ "event": "tenant.active", "tenant": { "id": "cmv…", "name": "Globex", "subdomain": "globex", "status": "ACTIVE", "planId": "starter", "dbStatus": "SUCCESS", "…": "…" } }
+```
+
+Verify before trusting it (Node):
+
+```js
+const crypto = require('crypto');
+const expected = 'sha256=' + crypto.createHmac('sha256', process.env.LIFTOFF_WEBHOOK_SECRET).update(rawBody).digest('hex');
+const ok = expected.length === signature.length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+```
+
+Answer with any 2xx. A 5xx, timeout or network error is retried after 1 s, 5 s and 25 s (four attempts in all, 10 s each); a 4xx is not retried. Redirects are not followed. The URL's host is resolved on every attempt and must not point at a private, loopback, link-local or metadata address. Delivery never blocks the saga: failures are logged by tenant-service and the tenant's status is still the source of truth, so poll `GET /tenants/:id` if a webhook does not arrive. Rotate the secret with `PUT /organisation {"rotateWebhookSecret": true}`.
 
 ---
 
@@ -319,6 +421,7 @@ for f in backend/*/.env.example frontend/.env.example; do cp -n "$f" "${f%.examp
 
 # Create tables and generate Prisma clients. All three share tenant_db:
 # tenant-service owns the public schema, credentials-service owns credentials
+# The seed also runs the backfills (tenant owners, then organisations); both are idempotent
 cd backend/tenant-service && npx prisma db push && npx prisma db seed && cd ../..
 cd backend/credentials-service && npx prisma db push && cd ../..
 # db-provisioner-service owns no tables, so it only needs its client
@@ -427,8 +530,12 @@ annotations, no drift.
 ## Testing
 
 Unit tests cover the saga's brain — `auth.service` and `tenants.service` —
-with the database, JWT signer, and RabbitMQ connection all mocked. Tests
-focus on:
+with the database, JWT signer, and RabbitMQ connection all mocked, plus the
+organisation layer: API keys (hash-only storage, 401 on unknown or revoked
+keys, the guard's key-vs-JWT routing), organisation scoping (another company's
+tenant is a 404; the legacy workspace tenant is hidden), webhook signing,
+retry and backoff, the private-address block including DNS rebinding, and the
+organisation backfill's idempotence. Tests focus on:
 
 - State transitions (saga step advancement, `PROVISIONING → ACTIVE`)
 - Error semantics (`ConflictException`, `NotFoundException`,
@@ -459,7 +566,7 @@ message dead-letters) when a step fails. Beyond that:
 ```bash
 npm run lint && npm run build && npm test
 npm run test:e2e --workspace=api-gateway
-# tenant-service 49 · api-gateway 20 (+13 e2e) · billing 16 · credentials 6
+# tenant-service 215 · api-gateway 24 (+20 e2e) · billing 16 · credentials 6
 # db-provisioner 5 · dns-provisioner 3 · notification 3
 ```
 
