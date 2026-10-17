@@ -9,7 +9,8 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.INTERNAL_TOKEN_HEADER = exports.DEPROVISION_PARTS = exports.isLiveTenant = exports.LIVE_TENANT_STATUSES = exports.STATUS_TOKEN_PATTERN = exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.StepConfigDto = exports.StepConfigEntryDto = exports.CUSTOM_STEP_URL_MAX_LENGTH = exports.CUSTOM_STEP_MAX_TIMEOUT_MS = exports.CUSTOM_STEP_MIN_TIMEOUT_MS = exports.CUSTOM_STEP_DEFAULT_TIMEOUT_MS = exports.STEP_MODES = exports.PROVISIONING_STEP_NAMES = exports.IsStripePriceMap = exports.UniqueCustomerPlanIds = exports.CustomerPlanDto = exports.DEFAULT_CUSTOMER_PLANS = exports.MAX_CUSTOMER_PLANS = exports.CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH = exports.CUSTOMER_PLAN_NAME_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_PATTERN = exports.STRIPE_PRICE_ID_PATTERN = exports.STRIPE_SECRET_KEY_MAX_LENGTH = exports.STRIPE_SECRET_KEY_PATTERN = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = exports.VerifyEmailDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
+exports.LIVE_TENANT_STATUSES = exports.STATUS_TOKEN_PATTERN = exports.PLAN_IDS = exports.FailStepDto = exports.CompleteStepDto = exports.IsSmallJsonObject = exports.CUSTOM_STEP_OUTPUT_MAX_BYTES = exports.CUSTOM_STEP_EVENT = exports.CUSTOM_STEP_ACTIONS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.StepConfigDto = exports.StepConfigEntryDto = exports.CUSTOM_STEP_URL_MAX_LENGTH = exports.CUSTOM_STEP_MAX_TIMEOUT_MS = exports.CUSTOM_STEP_MIN_TIMEOUT_MS = exports.CUSTOM_STEP_DEFAULT_TIMEOUT_MS = exports.STEP_MODES = exports.PROVISIONING_STEP_NAMES = exports.IsStripePriceMap = exports.UniqueCustomerPlanIds = exports.CustomerPlanDto = exports.DEFAULT_CUSTOMER_PLANS = exports.MAX_CUSTOMER_PLANS = exports.CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH = exports.CUSTOMER_PLAN_NAME_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_PATTERN = exports.STRIPE_PRICE_ID_PATTERN = exports.STRIPE_SECRET_KEY_MAX_LENGTH = exports.STRIPE_SECRET_KEY_PATTERN = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = exports.VerifyEmailDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
+exports.INTERNAL_TOKEN_HEADER = exports.DEPROVISION_PARTS = exports.isLiveTenant = void 0;
 const swagger_1 = require("@nestjs/swagger");
 const class_transformer_1 = require("class-transformer");
 const class_validator_1 = require("class-validator");
@@ -560,6 +561,76 @@ exports.IDEMPOTENT_REPLAYED_HEADER = 'idempotent-replayed';
 exports.WEBHOOK_SIGNATURE_HEADER = 'x-liftoff-signature';
 exports.WEBHOOK_EVENT_HEADER = 'x-liftoff-event';
 exports.WEBHOOK_DELIVERY_HEADER = 'x-liftoff-delivery';
+exports.CUSTOM_STEP_ACTIONS = ['provision', 'teardown'];
+exports.CUSTOM_STEP_EVENT = {
+    provision: 'step.requested',
+    teardown: 'step.teardown',
+};
+exports.CUSTOM_STEP_OUTPUT_MAX_BYTES = 4096;
+let IsSmallJsonObject = class IsSmallJsonObject {
+    validate(value) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return false;
+        }
+        return (Buffer.byteLength(JSON.stringify(value), 'utf8') <=
+            exports.CUSTOM_STEP_OUTPUT_MAX_BYTES);
+    }
+    defaultMessage() {
+        return `output must be a JSON object of at most ${exports.CUSTOM_STEP_OUTPUT_MAX_BYTES} bytes`;
+    }
+};
+exports.IsSmallJsonObject = IsSmallJsonObject;
+exports.IsSmallJsonObject = IsSmallJsonObject = __decorate([
+    (0, class_validator_1.ValidatorConstraint)({ name: 'smallJsonObject', async: false })
+], IsSmallJsonObject);
+class CompleteStepDto {
+}
+exports.CompleteStepDto = CompleteStepDto;
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        example: 'cm2abc…',
+        description: 'The requestId from the request. When sent, a callback for an older request is refused with 409.',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(64),
+    __metadata("design:type", String)
+], CompleteStepDto.prototype, "requestId", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        type: 'object',
+        additionalProperties: true,
+        example: { region: 'eu-west-1', databaseId: 'db_123' },
+        description: `What your system did, for your support team: stored with the step and shown in the event log. A JSON object of at most ${exports.CUSTOM_STEP_OUTPUT_MAX_BYTES} bytes. Never put secrets here.`,
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.Validate)(IsSmallJsonObject),
+    __metadata("design:type", Object)
+], CompleteStepDto.prototype, "output", void 0);
+class FailStepDto {
+}
+exports.FailStepDto = FailStepDto;
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        example: 'cm2abc…',
+        description: 'The requestId from the request. When sent, a callback for an older request is refused with 409.',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(64),
+    __metadata("design:type", String)
+], FailStepDto.prototype, "requestId", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        example: 'No capacity left in eu-west-1',
+        maxLength: 500,
+        description: 'Why it failed, in words your support team can act on. Shown on the customer and in the failure email.',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MaxLength)(500),
+    __metadata("design:type", String)
+], FailStepDto.prototype, "error", void 0);
 exports.PLAN_IDS = ['starter', 'pro', 'enterprise'];
 exports.STATUS_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 exports.LIVE_TENANT_STATUSES = ['PROVISIONING', 'FAILED', 'ACTIVE'];

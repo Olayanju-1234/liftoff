@@ -14,9 +14,8 @@ export class AppService {
 
   constructor(private readonly amqpConnection: AmqpConnection) {}
 
+  // Unbound: tenant-service sends this step's input to the queue when the step is due.
   @RabbitSubscribe({
-    exchange: 'provisioning.direct',
-    routingKey: 'tenant.db.ready',
     queue: 'dns-provisioner-queue',
     queueOptions: {
       durable: true,

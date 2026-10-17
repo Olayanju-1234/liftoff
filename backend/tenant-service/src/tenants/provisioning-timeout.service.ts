@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma.service';
 import { Prisma, StepStatus, TenantStatus } from '.prisma/tenant-client';
 import { TenantsService } from './tenants.service';
+import { CustomStepsService } from './custom-steps.service';
 import { errorMessage } from '../common/error-message';
 import type { ProvisioningStep } from './dead-letters';
 
@@ -18,6 +19,14 @@ export const STEPS_IN_ORDER: ProvisioningStep[] = [
 export const STEP_TIMEOUT_MINUTES = 2;
 export const SWEEP_TIMEOUT_MINUTES = 30;
 
+// A tenant waiting on the company's system has its own deadline (the step's timeoutMs),
+// so neither the 2-minute step timeout nor the 30-minute sweeper touches it.
+const NOT_WAITING_ON_COMPANY: Prisma.TenantWhereInput = {
+  customStepCalls: {
+    none: { action: 'provision', status: StepStatus.IN_PROGRESS },
+  },
+};
+
 @Injectable()
 export class ProvisioningTimeoutService {
   private readonly logger = new Logger(ProvisioningTimeoutService.name);
@@ -25,6 +34,7 @@ export class ProvisioningTimeoutService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tenantsService: TenantsService,
+    private readonly customSteps: CustomStepsService,
   ) {}
 
   // A step with no progress for two minutes is failed with a reason, which fires the
@@ -38,6 +48,7 @@ export class ProvisioningTimeoutService {
         where: {
           status: TenantStatus.PROVISIONING,
           updatedAt: { lt: threshold },
+          ...NOT_WAITING_ON_COMPANY,
           OR: STEPS_IN_ORDER.map(
             (step) =>
               ({ [step]: StepStatus.IN_PROGRESS }) as Prisma.TenantWhereInput,
@@ -80,6 +91,34 @@ export class ProvisioningTimeoutService {
     return failed;
   }
 
+  // A custom step whose deadline passed without a callback fails like a dead letter.
+  @Cron(CronExpression.EVERY_30_SECONDS)
+  async handleCustomStepTimeouts(): Promise<number> {
+    let failed = 0;
+    try {
+      const overdue = await this.customSteps.overdue(new Date());
+      for (const call of overdue) {
+        try {
+          if (await this.tenantsService.timeOutCustomStep(call)) {
+            failed++;
+            this.logger.warn(
+              `Timed out custom ${call.action} ${call.step} for tenant ${call.tenantId}`,
+            );
+          }
+        } catch (error) {
+          this.logger.error(
+            `Failed to time out custom ${call.step} for tenant ${call.tenantId}: ${errorMessage(error)}`,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        `Error checking for overdue custom steps: ${errorMessage(error)}`,
+      );
+    }
+    return failed;
+  }
+
   // Backstop for anything the step timeout cannot see (no step IN_PROGRESS at all):
   // a tenant PROVISIONING with no change for 30 minutes is cancelled.
   @Cron(CronExpression.EVERY_5_MINUTES)
@@ -97,6 +136,7 @@ export class ProvisioningTimeoutService {
           updatedAt: {
             lt: timeoutThreshold,
           },
+          ...NOT_WAITING_ON_COMPANY,
         },
       });
 

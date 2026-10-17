@@ -47,6 +47,10 @@ model Tenant {
   credentialsStatus StepStatus @default(PENDING)
   billingStatus     StepStatus @default(PENDING)
   notificationStatus StepStatus @default(PENDING)
+  // How each step was run, written as it starts: { <step>: builtin | skipped | custom } with
+  // the API's step names. Null on tenants from before custom steps, which were all builtin.
+  stepModes         Json?
+  customStepCalls   CustomStepCall[]
   
   // SHA-256 of the public status-page token (derived per tenant from STATUS_TOKEN_SECRET),
   // so GET /status/:token is one indexed lookup and the token itself is never stored.
@@ -122,6 +126,27 @@ model Organisation {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// A request to the company's own system for a custom step, one row per attempt so a retry
+// gets a fresh requestId. IN_PROGRESS until the company calls back or the deadline passes.
+model CustomStepCall {
+  id          String     @id @default(cuid())
+  tenantId    String
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  step        String     // database | address | credentials | billing | welcome
+  action      String     @default("provision") // provision | teardown
+  url         String
+  status      StepStatus @default(IN_PROGRESS)
+  deadlineAt  DateTime
+  completedAt DateTime?
+  error       String?
+  // What the company sent back with /complete, for its support team.
+  output      Json?
+  createdAt   DateTime   @default(now())
+
+  @@index([tenantId, step, action])
+  @@index([status, deadlineAt])
 }
 
 model ApiKey {

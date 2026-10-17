@@ -26,9 +26,11 @@ import {
   IDEMPOTENCY_KEY_HEADER,
   IDEMPOTENCY_KEY_MAX_LENGTH,
   CancelTenantDto,
+  CompleteStepDto,
   ConfirmEmailChangeDto,
   CreateApiKeyDto,
   CreateTenantDto,
+  FailStepDto,
   ForgotPasswordDto,
   LoginDto,
   RefreshTokenDto,
@@ -37,10 +39,12 @@ import {
   UpdateOrganisationDto,
   UpdateSettingsDto,
   VerifyEmailDto,
+  type ProvisioningStepName,
 } from '@liftoff/shared-types';
 import { AppService } from './app.service';
 import { ParseCuidPipe } from './common/parse-cuid.pipe';
 import { ParseStatusTokenPipe } from './common/parse-status-token.pipe';
+import { ParseStepNamePipe } from './common/parse-step-name.pipe';
 
 @Controller()
 export class AppController {
@@ -351,6 +355,86 @@ export class AppController {
     @Headers('authorization') auth: string,
   ) {
     return this.appService.retryTenant(id, auth);
+  }
+
+  // ============ CUSTOM STEP CALLBACKS ============
+
+  @ApiTags('Custom steps')
+  @ApiBearerAuth('bearer')
+  @ApiSecurity('api-key')
+  @ApiHeader({
+    name: API_KEY_HEADER,
+    required: false,
+    description: 'Company API key, instead of a user token',
+  })
+  @ApiOperation({
+    summary: 'Your system finished a custom step',
+    description:
+      'The callback for a step.requested delivery: POST <callbackUrl>/complete with a company API key, optionally with the requestId it carried and an output object (at most 4 KB, shown in the event log). The step is recorded SUCCESS and the next one starts. Idempotent: the same result again answers outcome "duplicate"; for a cancelled or removed customer it answers outcome "ignored" and changes nothing.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '{ tenantId, step, action, outcome, status }',
+  })
+  @ApiResponse({ status: 400, description: 'Unknown step or invalid body' })
+  @ApiResponse({ status: 404, description: 'Tenant not found' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'The step is not waiting on your system, already failed or timed out (Retry the customer), or requestId is not the latest request',
+  })
+  @HttpCode(HttpStatus.OK)
+  @Post('tenants/:id/steps/:step/complete')
+  completeStep(
+    @Param('id', ParseCuidPipe) id: string,
+    @Param('step', ParseStepNamePipe) step: ProvisioningStepName,
+    @Body() dto: CompleteStepDto,
+    @Headers('authorization') auth: string,
+    @Headers(API_KEY_HEADER) apiKey: string,
+  ) {
+    return this.appService.stepCallback(id, step, 'complete', dto, {
+      auth,
+      apiKey,
+    });
+  }
+
+  @ApiTags('Custom steps')
+  @ApiBearerAuth('bearer')
+  @ApiSecurity('api-key')
+  @ApiHeader({
+    name: API_KEY_HEADER,
+    required: false,
+    description: 'Company API key, instead of a user token',
+  })
+  @ApiOperation({
+    summary: 'Your system could not do a custom step',
+    description:
+      'POST <callbackUrl>/fail with a company API key and an error your support team can act on. The step and the customer read FAILED, tenant.failed is sent and the company is emailed; Retry sends a new step.requested. Idempotent like /complete.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '{ tenantId, step, action, outcome, status }',
+  })
+  @ApiResponse({ status: 400, description: 'Unknown step or invalid body' })
+  @ApiResponse({ status: 404, description: 'Tenant not found' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'The step is not waiting on your system, already finished, or requestId is not the latest request',
+  })
+  @HttpCode(HttpStatus.OK)
+  @Post('tenants/:id/steps/:step/fail')
+  failStep(
+    @Param('id', ParseCuidPipe) id: string,
+    @Param('step', ParseStepNamePipe) step: ProvisioningStepName,
+    @Body() dto: FailStepDto,
+    @Headers('authorization') auth: string,
+    @Headers(API_KEY_HEADER) apiKey: string,
+  ) {
+    return this.appService.stepCallback(id, step, 'fail', dto, {
+      auth,
+      apiKey,
+    });
   }
 
   // ============ ORGANISATION ENDPOINTS ============

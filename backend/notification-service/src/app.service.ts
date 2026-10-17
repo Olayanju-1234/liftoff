@@ -38,9 +38,8 @@ export class AppService {
 
   // The last provisioning step: tell the company its customer is ready. The customer's own
   // welcome is the company's job, from the tenant.active webhook.
+  // Unbound: tenant-service sends this step's input to the queue when the step is due.
   @RabbitSubscribe({
-    exchange: 'provisioning.direct',
-    routingKey: 'tenant.billing.active',
     queue: 'notification-queue',
     queueOptions: {
       durable: true,

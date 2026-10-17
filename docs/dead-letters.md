@@ -1,11 +1,18 @@
 # Dead letters: inspect and replay
 
-When a provisioning worker can't finish its step, it returns `new Nack(false)`.
-RabbitMQ then republishes the message, unchanged, to the `dlx.provisioning`
-exchange with the worker's dead-letter routing key. It also adds an `x-death`
-header that names the rejecting queue, the reason and the original routing key.
+tenant-service sends each builtin step its input itself, through the default
+exchange straight to the worker's queue; no worker queue is bound to
+`provisioning.direct`. When a worker can't finish its step, it returns
+`new Nack(false)`. RabbitMQ then republishes the message, unchanged, to the
+`dlx.provisioning` exchange with the worker's dead-letter routing key. It also
+adds an `x-death` header that names the rejecting queue, the reason and the
+routing key it was sent with (the queue name).
 
-| Dead-letter key | Worker queue | Original routing key | Tenant step |
+A step set to **custom** never reaches a worker, so it never dead-letters: it
+fails when the company's system calls `/fail`, rejects the request, or misses
+its deadline, and Retry asks the company's system again.
+
+| Dead-letter key | Worker queue | Input (event type) | Tenant step |
 |---|---|---|---|
 | `db-provisioner.failed` | `db-provisioner-queue` | `tenant.requested` | `dbStatus` |
 | `dns-provisioner.failed` | `dns-provisioner-queue` | `tenant.db.ready` | `dnsStatus` |
@@ -59,8 +66,8 @@ which needs the `rabbitmq_management` plugin:
 rabbitmqadmin -V <vhost> -f raw_json get queue=provisioning.dead-letters count=10 ackmode=ack_requeue_true
 ```
 
-Each message's `properties.headers["x-death"][0]["routing-keys"][0]` is the
-routing key to replay it with.
+Each message's `properties.headers["x-death"][0]["queue"]` is the worker queue
+to replay it to.
 
 ## Replay
 
@@ -87,19 +94,22 @@ message out of the middle of a queue, and the cap ages it out.
 ### By hand
 
 When the API is not an option, take the message off the parking lot and
-publish its payload back to `provisioning.direct` with the original routing key:
+publish its payload through the default exchange to the worker queue it was
+rejected from:
 
 ```bash
 # Removes the oldest parked message and prints it
 rabbitmqadmin -V <vhost> -f raw_json get queue=provisioning.dead-letters count=1 ackmode=ack_requeue_false
 
-rabbitmqadmin -V <vhost> publish exchange=provisioning.direct routing_key=tenant.credentials.ready \
+rabbitmqadmin -V <vhost> publish exchange=amq.default routing_key=billing-queue \
   payload='{"tenantId":"<id>","subdomain":"acme","planId":"pro"}'
 ```
 
-The worker processes it again. If it succeeds, the saga continues from that
-step, and tenant-service marks the tenant `ACTIVE` when
-`tenant.provisioning.complete` arrives. Until then the tenant and the failed
+Publishing to `provisioning.direct` with the event's routing key no longer
+reaches the worker: only tenant-service listens there, for results. The worker
+processes it again. If it succeeds, tenant-service records the result and sends
+the next step on its way, and marks the tenant `ACTIVE` when the last one is
+done. Until then the tenant and the failed
 step still read `FAILED`. If the step fails again, the message dead-letters
 again and the tenant gets a new `tenant.provisioning.failed` event.
 
@@ -108,15 +118,15 @@ If every parked message has the same key, the management UI's "Move messages"
 
 ### Tenants that never started
 
-If tenant-service can't publish `tenant.requested` within 5 seconds (the broker
-is down, for example), it marks the tenant `FAILED` at `dbStatus` with the error
-`Could not publish tenant.requested: …`. Nothing reached the broker, so nothing
-is parked. `POST /auth/register` still returns tokens in this case, and
-`POST /tenants` returns an error. `POST /tenants/:id/retry` starts the saga
-again once the broker is back. By hand, publish `tenant.requested` yourself
+If tenant-service can't publish a step's input within 5 seconds (the broker is
+down, for example), it marks the tenant `FAILED` at that step with the error
+`Could not publish tenant.requested: …` (or the step's own input). Nothing
+reached the broker, so nothing is parked. `POST /tenants` answers 503 when this
+happens to the first step. `POST /tenants/:id/retry` starts the step again once
+the broker is back. By hand, send `tenant.requested` to db-provisioner yourself
 with the tenant's `id`, `subdomain` and `planId` from `GET /tenants/:id`:
 
 ```bash
-rabbitmqadmin -V <vhost> publish exchange=provisioning.direct routing_key=tenant.requested \
+rabbitmqadmin -V <vhost> publish exchange=amq.default routing_key=db-provisioner-queue \
   payload='{"tenantId":"<id>","subdomain":"<subdomain>","planId":"starter"}'
 ```

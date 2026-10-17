@@ -636,6 +636,114 @@ export interface TenantWebhookPayload<TTenant = unknown> {
 }
 
 // ============================================================================
+// Custom steps
+// ============================================================================
+
+// provision: the step is being run for a new customer. teardown: the customer is being
+// removed and what the step made should go too.
+export const CUSTOM_STEP_ACTIONS = ['provision', 'teardown'] as const;
+export type CustomStepAction = (typeof CUSTOM_STEP_ACTIONS)[number];
+
+export type CustomStepEvent = 'step.requested' | 'step.teardown';
+
+export const CUSTOM_STEP_EVENT: Record<CustomStepAction, CustomStepEvent> = {
+  provision: 'step.requested',
+  teardown: 'step.teardown',
+};
+
+// POSTed to the step's URL, signed like a webhook. The company answers 2xx at once, does
+// the work, then POSTs <callbackUrl>/complete or <callbackUrl>/fail with its API key.
+export interface CustomStepRequest<TTenant = unknown> {
+  event: CustomStepEvent;
+  step: ProvisioningStepName;
+  // Echo it in the callback to make sure the result is for this request, not an older one.
+  requestId: string;
+  callbackUrl: string;
+  // The step fails if no callback arrives by then.
+  deadline: string;
+  tenant: TTenant;
+}
+
+export const CUSTOM_STEP_OUTPUT_MAX_BYTES = 4096;
+
+// Keeps a callback's output small enough to store with the step and show in the event log.
+@ValidatorConstraint({ name: 'smallJsonObject', async: false })
+export class IsSmallJsonObject implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return false;
+    }
+    return (
+      Buffer.byteLength(JSON.stringify(value), 'utf8') <=
+      CUSTOM_STEP_OUTPUT_MAX_BYTES
+    );
+  }
+
+  defaultMessage(): string {
+    return `output must be a JSON object of at most ${CUSTOM_STEP_OUTPUT_MAX_BYTES} bytes`;
+  }
+}
+
+export class CompleteStepDto {
+  @ApiPropertyOptional({
+    example: 'cm2abc…',
+    description:
+      'The requestId from the request. When sent, a callback for an older request is refused with 409.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  requestId?: string;
+
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: true,
+    example: { region: 'eu-west-1', databaseId: 'db_123' },
+    description: `What your system did, for your support team: stored with the step and shown in the event log. A JSON object of at most ${CUSTOM_STEP_OUTPUT_MAX_BYTES} bytes. Never put secrets here.`,
+  })
+  @IsOptional()
+  @Validate(IsSmallJsonObject)
+  output?: Record<string, unknown>;
+}
+
+export class FailStepDto {
+  @ApiPropertyOptional({
+    example: 'cm2abc…',
+    description:
+      'The requestId from the request. When sent, a callback for an older request is refused with 409.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  requestId?: string;
+
+  @ApiPropertyOptional({
+    example: 'No capacity left in eu-west-1',
+    maxLength: 500,
+    description:
+      'Why it failed, in words your support team can act on. Shown on the customer and in the failure email.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  error?: string;
+}
+
+// recorded: this callback moved the step. duplicate: the same result was already in.
+// ignored: the customer was cancelled or removed meanwhile, so nothing changes.
+export type StepCallbackOutcome = 'recorded' | 'duplicate' | 'ignored';
+
+export interface StepCallbackResult {
+  tenantId: string;
+  step: ProvisioningStepName;
+  action: CustomStepAction;
+  outcome: StepCallbackOutcome;
+  // The tenant's status after the callback.
+  status: string;
+  reason?: string;
+}
+
+// ============================================================================
 // Plans
 // ============================================================================
 

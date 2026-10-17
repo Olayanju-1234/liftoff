@@ -14,6 +14,7 @@ import { PrismaService } from '../prisma.service';
 import { WebhookService } from '../webhooks/webhook.service';
 import { QuotaExceededException, QuotasService } from './quotas.service';
 import { StatusTokenService } from '../status/status-token.service';
+import { CustomStepsService } from './custom-steps.service';
 import {
   DEAD_LETTER_QUEUE,
   type DeadLetterMessage,
@@ -74,6 +75,14 @@ describe('TenantsService', () => {
   let amqp: { publish: jest.Mock };
   let webhooks: { notify: jest.Mock };
   let quotas: { assertCanProvision: jest.Mock; record: jest.Mock };
+  let customSteps: {
+    open: jest.Mock;
+    send: jest.Mock;
+    latest: jest.Mock;
+    close: jest.Mock;
+    cancelOpen: jest.Mock;
+    forTenant: jest.Mock;
+  };
   const statusTokens = {
     hashFor: jest.fn((id: string) => `hash(${id})`),
     urlFor: jest.fn((id: string) => `https://app.test/status/tok(${id})`),
@@ -98,6 +107,14 @@ describe('TenantsService', () => {
       assertCanProvision: jest.fn().mockResolvedValue({}),
       record: jest.fn().mockResolvedValue(undefined),
     };
+    customSteps = {
+      open: jest.fn(),
+      send: jest.fn().mockResolvedValue({ delivered: true }),
+      latest: jest.fn().mockResolvedValue(null),
+      close: jest.fn().mockResolvedValue(true),
+      cancelOpen: jest.fn().mockResolvedValue(0),
+      forTenant: jest.fn().mockResolvedValue([]),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -107,6 +124,7 @@ describe('TenantsService', () => {
         { provide: WebhookService, useValue: webhooks },
         { provide: QuotasService, useValue: quotas },
         { provide: StatusTokenService, useValue: statusTokens },
+        { provide: CustomStepsService, useValue: customSteps },
       ],
     }).compile();
 
@@ -114,7 +132,7 @@ describe('TenantsService', () => {
   });
 
   describe('create', () => {
-    it('reuses existing plan and publishes tenant.requested', async () => {
+    it('reuses existing plan and sends tenant.requested to db-provisioner', async () => {
       prisma.plan.findUnique.mockResolvedValueOnce({ id: 'starter' });
       prisma.tenant.create.mockImplementationOnce(({ data }) =>
         Promise.resolve({
@@ -142,9 +160,10 @@ describe('TenantsService', () => {
       expect(createArgs.data.ownerId).toBe('owner-1');
       // The schema carries the organisation handle so two companies' "acme" never share one.
       expect(createArgs.data.schemaName).toBe('tenant_acme_corp_acme');
+      // Straight to the worker's queue: tenant-service decides what runs next.
       expect(amqp.publish).toHaveBeenCalledWith(
-        'provisioning.direct',
-        'tenant.requested',
+        '',
+        'db-provisioner-queue',
         {
           tenantId: 'tenant-1',
           subdomain: 'acme',
@@ -153,6 +172,10 @@ describe('TenantsService', () => {
         },
         { timeout: 5_000 },
       );
+      expect(prisma.tenant.updateMany).toHaveBeenCalledWith({
+        where: { id: 'tenant-1' },
+        data: { stepModes: { database: 'builtin' } },
+      });
       expect(result.id).toBe('tenant-1');
       expect(result.address).toBe('acme.liftoff.ojusentinel.com');
       expect(quotas.assertCanProvision).toHaveBeenCalledWith('org-1');
@@ -178,8 +201,8 @@ describe('TenantsService', () => {
       expect(quotas.assertCanProvision).not.toHaveBeenCalled();
       expect(quotas.record).not.toHaveBeenCalled();
       expect(amqp.publish).toHaveBeenCalledWith(
-        'provisioning.direct',
-        'tenant.requested',
+        '',
+        'db-provisioner-queue',
         expect.objectContaining({ tenantId: 'tenant-t', test: true }),
         { timeout: 5_000 },
       );
@@ -237,12 +260,14 @@ describe('TenantsService', () => {
         planId: 'starter',
         schemaName: 'tenant_acme_corp_acme',
       });
-      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+      prisma.tenant.updateMany.mockResolvedValue({ count: 1 });
       amqp.publish.mockRejectedValueOnce(new Error('timeout'));
 
-      await expect(service.create(baseDto, creator)).rejects.toThrow('timeout');
+      await expect(service.create(baseDto, creator)).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
 
-      const [[{ data }]] = prisma.tenant.updateMany.mock.calls;
+      const [{ data }] = prisma.tenant.updateMany.mock.calls.at(-1)!;
       expect(data).toEqual({
         status: TenantStatus.FAILED,
         dbStatus: StepStatus.FAILED,
@@ -1773,7 +1798,7 @@ describe('TenantsService', () => {
       await expect(service.retry('t', 'org-1')).rejects.toBeInstanceOf(
         ServiceUnavailableException,
       );
-      const [, [{ data }]] = prisma.tenant.updateMany.mock.calls;
+      const [{ data }] = prisma.tenant.updateMany.mock.calls.at(-1)!;
       expect(data).toEqual({
         status: TenantStatus.FAILED,
         billingStatus: StepStatus.FAILED,
