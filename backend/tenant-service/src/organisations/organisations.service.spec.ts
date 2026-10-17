@@ -26,6 +26,8 @@ const row = {
   webhookUrl: null as string | null,
   webhookSecret: null as string | null,
   baseDomain: null as string | null,
+  maxActiveTenants: 10,
+  maxProvisionsPerDay: 50,
   createdAt: new Date('2026-10-17T00:00:00Z'),
   updatedAt: new Date('2026-10-17T00:00:00Z'),
 };
@@ -72,6 +74,7 @@ describe('OrganisationsService', () => {
         webhookUrl: 'https://hooks.acme.com/liftoff',
         webhookConfigured: true,
         baseDomain: null,
+        limits: { maxActiveTenants: 10, maxProvisionsPerDay: 50 },
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       });

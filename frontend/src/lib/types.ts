@@ -29,6 +29,8 @@ export interface Organisation {
     webhookUrl: string | null;
     webhookConfigured: boolean;
     baseDomain: string | null;
+    // Quotas on adding customers; test customers don't count. Raised by support on request.
+    limits: { maxActiveTenants: number; maxProvisionsPerDay: number };
     createdAt: string;
     updatedAt: string;
 }

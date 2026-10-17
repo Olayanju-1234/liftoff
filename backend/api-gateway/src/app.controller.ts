@@ -143,6 +143,11 @@ export class AppController {
     status: 422,
     description: 'Idempotency-Key reused with a different body',
   })
+  @ApiResponse({
+    status: 429,
+    description:
+      'Rate limited (10/min per IP), or the organisation is at its quota (10 active tenants, 50 provisions per rolling day by default). Retry-After says how long to wait',
+  })
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.ACCEPTED)
   @Post('tenants')
@@ -248,7 +253,11 @@ export class AppController {
 
   @ApiTags('Organisation')
   @ApiBearerAuth('bearer')
-  @ApiOperation({ summary: "Get the caller's company" })
+  @ApiOperation({
+    summary: "Get the caller's company",
+    description:
+      'Includes limits: maxActiveTenants and maxProvisionsPerDay (defaults 10 and 50). Raised by support on request.',
+  })
   @Get('organisation')
   getOrganisation(@Headers('authorization') auth: string) {
     return this.appService.getOrganisation(auth);

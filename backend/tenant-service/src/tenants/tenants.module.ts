@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma.service';
 import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
 import { ProvisioningTimeoutService } from './provisioning-timeout.service';
 import { IdempotencyService } from './idempotency.service';
+import { QuotasService } from './quotas.service';
 import { DEAD_LETTER_EXCHANGE, DEAD_LETTER_QUEUE } from './dead-letters';
 import { WebhooksModule } from '../webhooks/webhooks.module';
 
@@ -48,6 +49,7 @@ import { WebhooksModule } from '../webhooks/webhooks.module';
     PrismaService,
     ProvisioningTimeoutService,
     IdempotencyService,
+    QuotasService,
   ],
   exports: [TenantsService],
 })

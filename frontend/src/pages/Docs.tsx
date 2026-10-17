@@ -143,7 +143,7 @@ const ERRORS: [string, string, string][] = [
     ['401', 'Unauthorized', 'No Authorization header, or the token is invalid or expired. Access tokens last 15 minutes; use POST /auth/refresh or sign in again.'],
     ['404', 'Not found', 'No tenant with that ID belongs to your account. Another account’s tenant also answers 404, never 403.'],
     ['409', 'Conflict', 'The tenant name or subdomain is already used by another of your tenants (another company may use the same one), or at sign-up the email or handle is taken.'],
-    ['429', 'Too many requests', 'You hit a rate limit (next section). Wait for the minute to roll over; the response is not retried for you.'],
+    ['429', 'Too many requests', 'You hit a rate limit or a quota (next section). Retry-After says how many seconds to wait; the message says which limit and what to do.'],
     ['422', 'Unprocessable', 'An Idempotency-Key was reused with a different body. Use a new key for a new request.'],
     ['502 / 503', 'Upstream unavailable', 'The gateway could not reach the tenant service, usually during a deploy. Safe to retry after a few seconds; send the same Idempotency-Key on POST /tenants so the retry cannot create a second tenant.'],
 ];
@@ -355,8 +355,18 @@ export default function Docs() {
                     </div>
                 </DocSection>
 
-                <DocSection id="limits" n="08" title="Rate limits">
-                    <p>Limits are per client IP and per minute. Over the limit you get a 429 and nothing is queued; wait for the window to pass.</p>
+                <DocSection id="limits" n="08" title="Rate limits and quotas">
+                    <p>
+                        Two kinds. <strong className="font-medium text-ink">Quotas</strong> are per company: 10 active tenants (provisioning or ready) and 50 new tenants per
+                        rolling 24 hours on the free tier. Over either, <Code>POST /tenants</Code> answers 429 with a message naming the limit and a{' '}
+                        <Code>Retry-After</Code> in seconds: until the oldest of the day’s provisions leaves the window, or an hour for the active-tenant limit, which only
+                        frees up when you delete or cancel a tenant. Test tenants never count. Your current limits are in <Code>GET /organisation</Code> and on the
+                        Settings page; ask support to raise them.
+                    </p>
+                    <p>
+                        <strong className="font-medium text-ink">Rate limits</strong> are per client IP and per minute. Over the limit you get a 429 and nothing is queued;
+                        wait for the window to pass.
+                    </p>
                     <div className="overflow-hidden rounded-md border border-rule bg-card">
                         <ul className="divide-y divide-rule">
                             {LIMITS.map(([route, limit, scope]) => (
