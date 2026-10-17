@@ -1,5 +1,6 @@
 import axios from 'axios';
-import type { Tenant, EventLog, Organisation, PlanId, UserSettings } from './types';
+import type { ApiKey, CreatedApiKey, Tenant, EventLog, Organisation, PlanId, UpdatedOrganisation, UserSettings } from './types';
+import type { SessionUser } from './session';
 
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_URL,
@@ -43,16 +44,30 @@ export const saveSettings = async (settings: Partial<UserSettings>): Promise<Use
     return response.data;
 };
 
+// The signed-in user as the API sees them now (emailVerified can be newer than the stored session).
+export const getMe = () => api.get<SessionUser>('/auth/me').then((res) => res.data);
+
 // Organisation APIs
 export const getOrganisation = () => api.get<Organisation>('/organisation').then((res) => res.data);
 export interface OrganisationPatch {
     name?: string;
     baseDomain?: string | null;
+    // Where tenant.active, tenant.failed and tenant.deleted are POSTed; null turns deliveries off.
+    // A new URL comes back with webhookSecret, once.
+    webhookUrl?: string | null;
+    rotateWebhookSecret?: boolean;
     // The company's Stripe secret key; null disconnects. Never comes back in a response.
     stripeSecretKey?: string | null;
     stripePrices?: Partial<Record<PlanId, string | null>> | null;
+    // Hides the finished onboarding checklist for good.
+    dismissOnboarding?: boolean;
 }
-export const updateOrganisation = (patch: OrganisationPatch) => api.put<Organisation>('/organisation', patch).then((res) => res.data);
+export const updateOrganisation = (patch: OrganisationPatch) => api.put<UpdatedOrganisation>('/organisation', patch).then((res) => res.data);
+
+// API keys. The key itself is only in the create response.
+export const getApiKeys = () => api.get<ApiKey[]>('/api-keys').then((res) => res.data);
+export const createApiKey = (name: string) => api.post<CreatedApiKey>('/api-keys', { name }).then((res) => res.data);
+export const revokeApiKey = (id: string) => api.delete(`/api-keys/${id}`).then(() => undefined);
 
 // Email verification and password reset
 export const verifyEmail = (token: string) =>

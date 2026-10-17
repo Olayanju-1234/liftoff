@@ -251,7 +251,11 @@ export default function Docs() {
 
                     <QuickStep n="3" title="Receive the webhook">
                         <p>
-                            Set a webhook URL with <Code>PUT /organisation</Code> and Liftoff POSTs <Code>tenant.active</Code> when all five steps succeed, or{' '}
+                            Set a webhook URL with <Code>PUT /organisation</Code> (or under{' '}
+                            <Link to="/settings#webhook" className="link">
+                                Settings → Webhook
+                            </Link>
+                            ) and Liftoff POSTs <Code>tenant.active</Code> when all five steps succeed, or{' '}
                             <Code>tenant.failed</Code> when one fails for good. The body is the same tenant object you got in step 2, with final statuses. Verify the signature before trusting it; see{' '}
                             <a href="#webhooks" className="link">
                                 Webhooks and signatures
@@ -264,8 +268,11 @@ export default function Docs() {
 
                 <DocSection id="auth" n="02" title="Authentication">
                     <p>
-                        Services authenticate with a company API key. Keys start with <Code>lk_</Code>, are created with <Code>POST /api-keys</Code> while signed in, and are shown
-                        once. Send one as <Code>Authorization: Bearer lk_…</Code> or in an <Code>x-api-key</Code> header. A key acts for your whole company, never expires, and is
+                        Services authenticate with a company API key. Keys start with <Code>lk_</Code>, are created with <Code>POST /api-keys</Code> while signed in (or under{' '}
+                        <Link to="/settings#api-keys" className="link">
+                            Settings → API keys
+                        </Link>
+                        ), and are shown once. Send one as <Code>Authorization: Bearer lk_…</Code> or in an <Code>x-api-key</Code> header. A key acts for your whole company, never expires, and is
                         accepted on <Code>POST /tenants</Code> and <Code>GET /tenants/:id</Code>; every other route needs a signed-in user and answers 401 to a key.{' '}
                         <Code>GET /api-keys</Code> lists your keys by name and prefix, <Code>DELETE /api-keys/:id</Code> revokes one at once.
                     </p>
