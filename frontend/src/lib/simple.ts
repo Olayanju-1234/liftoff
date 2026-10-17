@@ -1,4 +1,4 @@
-import { STAGES } from './pipeline';
+import { STAGES, billingSkip, stepMode } from './pipeline';
 import type { Condition, Stage, StageState, StepKey } from './pipeline';
 import type { EventLog, Tenant } from './types';
 import type { Tone } from './ui';
@@ -55,6 +55,24 @@ export const SIMPLE_STEP_STATE: Record<StageState, { label: string; tone: Tone }
     CANCELLED: { label: 'Cancelled', tone: 'scrub' },
     SKIPPED: { label: 'Skipped', tone: 'scrub' },
 };
+
+// A step as the Simple customer page reads it, given who ran it.
+export function simpleStepLabel(t: Tenant, stage: Stage, state: StageState): string {
+    const mode = stepMode(t, stage.api);
+    if (mode === 'custom' && state === 'IN_PROGRESS') return 'Waiting on your system';
+    if (mode === 'skipped' && state === 'SKIPPED') return 'Skipped';
+    if (stage.key === 'billingStatus' && billingSkip(t) === 'not-connected') return 'Not connected';
+    if (stage.key === 'notificationStatus' && state === 'SKIPPED') return 'Not emailed';
+    return SIMPLE_STEP_STATE[state].label;
+}
+
+// The secondary line under a step: the event that finished it, or who it was left to.
+export function simpleStepSource(t: Tenant, stage: Stage): string {
+    const mode = stepMode(t, stage.api);
+    if (mode === 'custom') return 'Your system · step.requested';
+    if (mode === 'skipped') return 'Skipped in your settings';
+    return stage.emits;
+}
 
 export const TRIAL_DAYS = 14;
 

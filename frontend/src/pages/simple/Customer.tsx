@@ -8,12 +8,14 @@ import { getTenant, getTenantEvents } from '../../lib/api';
 import { useNow, useResource } from '../../lib/hooks';
 import { useTenantActions } from '../../lib/useTenantActions';
 import {
+    STAGES,
     TEARDOWN,
     TEARDOWN_SLOW_MS,
     activeStage,
     billingSkip,
     cancelReasonFrom,
     condition,
+    customStep,
     eventErrorText,
     failedStage,
     isStepTimeout,
@@ -22,10 +24,12 @@ import {
     quietFor,
     stageState,
     stageTimings,
+    stepMode,
     stepTimeoutAt,
     sweepAt,
     teardownFailed,
     teardownStuck,
+    waitingOnCompany,
 } from '../../lib/pipeline';
 import type { Condition, Stage } from '../../lib/pipeline';
 import {
@@ -34,12 +38,14 @@ import {
     SIMPLE_STEP_STATE,
     TRIAL_DAYS,
     simpleStatus,
+    simpleStepLabel,
+    simpleStepSource,
     stepName,
     tenantHost,
     tenantUrl,
     trialEndsAt,
 } from '../../lib/simple';
-import { fmtDate, fmtDuration, fmtStamp } from '../../lib/time';
+import { fmtClock, fmtDate, fmtDuration, fmtStamp } from '../../lib/time';
 import { TONE_TEXT } from '../../lib/ui';
 import type { Tone } from '../../lib/ui';
 import { cn } from '../../lib/cn';
@@ -167,7 +173,7 @@ export default function Customer() {
 
             <Panel
                 title="Setup progress"
-                meta={cond === 'active' ? (billingSkip(tenant) ? 'four steps finished, billing skipped' : 'all five steps finished') : undefined}
+                meta={cond === 'active' ? readyMeta(tenant) : undefined}
                 flush
             >
                 <ol className="divide-y divide-rule">
@@ -176,20 +182,17 @@ export default function Customer() {
                         const meta = SIMPLE_STEP_STATE[state];
                         const { start, end } = timeline.stages[i];
                         const took = state === 'SUCCESS' && start !== undefined && end !== undefined ? fmtDuration(end - start) : undefined;
+                        const custom = stepMode(tenant, stage.api) === 'custom';
                         return (
                             <li key={stage.key} className="flex items-center gap-4 px-4 py-3.5 sm:px-5">
                                 <StepMark state={state} index={i} />
                                 <div className="min-w-0 flex-1">
                                     <p className={cn('text-[15px] font-medium', state === 'PENDING' ? 'text-ink-3' : 'text-ink')}>{stepName(stage)}</p>
-                                    <p className="truncate font-mono text-[11px] text-ink-4">{stage.emits}</p>
+                                    <p className={cn('truncate font-mono text-[11px]', custom ? 'text-blueprint' : 'text-ink-4')}>{simpleStepSource(tenant, stage)}</p>
                                 </div>
                                 <div className="text-right">
                                     <p className={cn('text-[13.5px] font-medium', TONE_TEXT[meta.tone], state === 'PENDING' && 'text-ink-4')}>
-                                        {stage.key === 'billingStatus' && billingSkip(tenant) === 'not-connected'
-                                            ? 'Not connected'
-                                            : stage.key === 'notificationStatus' && state === 'SKIPPED'
-                                              ? 'Not emailed'
-                                              : meta.label}
+                                        {simpleStepLabel(tenant, stage, state)}
                                     </p>
                                     {took && <p className="num font-mono text-[11px] text-ink-3">took {took}</p>}
                                 </div>
@@ -255,9 +258,18 @@ function StepMark({ state, index }: { state: ReturnType<typeof stageState>; inde
     }
 }
 
+function readyMeta(tenant: Tenant): string {
+    const skipped = STAGES.filter((s) => tenant[s.key] === 'SKIPPED').length;
+    const custom = STAGES.filter((s) => stepMode(tenant, s.api) === 'custom').length;
+    const parts = [custom && `${custom} by your system`, skipped && `${skipped} skipped`].filter(Boolean);
+    return parts.length ? `all five steps finished · ${parts.join(' · ')}` : 'all five steps finished';
+}
+
 function ReadyPanel({ tenant, events, tookMs }: { tenant: Tenant; events: EventLog[]; tookMs?: number }) {
     const trialEnd = trialEndsAt(tenant, events);
     const skip = billingSkip(tenant);
+    const keyMode = stepMode(tenant, 'credentials');
+    const billingCustom = stepMode(tenant, 'billing') === 'custom';
     return (
         <Panel title="This customer is ready" meta={tookMs ? `set up in ${fmtDuration(tookMs)}` : undefined} className="mb-6 border-go/40">
             <dl className="grid gap-5 lg:grid-cols-3">
@@ -273,19 +285,37 @@ function ReadyPanel({ tenant, events, tookMs }: { tenant: Tenant; events: EventL
                     <dd>
                         <div className="flex h-10 items-center gap-2 rounded border border-rule-strong bg-paper/60 px-3 font-mono text-[13.5px] text-ink">
                             <KeyRound size={14} className="shrink-0 text-ink-3" />
-                            <span className="truncate">sk_live_••••••••••••••••</span>
+                            <span className="truncate">{keyMode === 'builtin' ? 'sk_live_••••••••••••••••' : keyMode === 'custom' ? 'By your system' : 'None: skipped'}</span>
                         </div>
-                        <p className="mt-1.5 text-[13px] text-ink-3">Generated and stored securely. It isn't shown in the dashboard.</p>
+                        <p className="mt-1.5 text-[13px] text-ink-3">
+                            {keyMode === 'builtin'
+                                ? "Generated and stored securely. It isn't shown in the dashboard."
+                                : keyMode === 'custom'
+                                  ? 'Your system created their credentials; Liftoff never saw them.'
+                                  : 'This step is skipped in Settings → Provisioning.'}
+                        </p>
                     </dd>
                 </div>
                 <div className="min-w-0">
-                    <dt className="label mb-1.5">{skip === 'not-connected' ? 'Billing' : 'Trial'}</dt>
+                    <dt className="label mb-1.5">{skip || billingCustom ? 'Billing' : 'Trial'}</dt>
                     <dd>
                         <div className="flex h-10 items-center rounded border border-rule-strong bg-paper/60 px-3 text-[14px] text-ink">
-                            {skip === 'test' ? 'None: test customer' : skip === 'not-connected' ? 'Not connected' : `Ends ${fmtDate(trialEnd)}`}
+                            {billingCustom
+                                ? 'By your system'
+                                : skip === 'configured'
+                                  ? 'Skipped'
+                                  : skip === 'test'
+                                    ? 'None: test customer'
+                                    : skip === 'not-connected'
+                                      ? 'Not connected'
+                                      : `Ends ${fmtDate(trialEnd)}`}
                         </div>
                         <p className="mt-1.5 text-[13px] text-ink-3">
-                            {skip === 'test' ? (
+                            {billingCustom ? (
+                                'Your system set up their billing; Liftoff created no subscription.'
+                            ) : skip === 'configured' ? (
+                                'Billing is skipped in Settings → Provisioning, so nothing starts and nothing is charged.'
+                            ) : skip === 'test' ? (
                                 'Billing was skipped, so nothing starts and nothing is charged.'
                             ) : skip === 'not-connected' ? (
                                 <>
@@ -365,13 +395,25 @@ const TEARDOWN_STATE: Record<string, { label: string; tone: Tone }> = {
     FAILED: { label: 'Failed', tone: 'abort' },
 };
 
+// Parts the company's system tears down read as its own; address and welcome only appear
+// when they ran custom, since Liftoff has nothing to undo for them.
 function TeardownList({ tenant }: { tenant: Tenant }) {
+    const parts = [
+        ...TEARDOWN.map((part) => {
+            const custom = stepMode(tenant, part.step) === 'custom';
+            return { id: part.key, plain: custom ? `Your system: ${part.plain.charAt(0).toLowerCase()}${part.plain.slice(1)}` : part.plain, status: tenant[part.key] };
+        }),
+        ...(['address', 'welcome'] as const)
+            .map((step) => customStep(tenant, step, 'teardown'))
+            .filter((call) => call !== undefined)
+            .map((call) => ({ id: call.step, plain: `Your system: undoing ${call.step === 'address' ? 'their address' : 'the welcome step'}`, status: call.status })),
+    ];
     return (
         <span className="mt-2 grid gap-1 text-[13.5px]">
-            {TEARDOWN.map((part) => {
-                const state = TEARDOWN_STATE[tenant[part.key] ?? ''] ?? { label: 'Waiting', tone: 'scrub' as Tone };
+            {parts.map((part) => {
+                const state = TEARDOWN_STATE[part.status ?? ''] ?? { label: 'Waiting', tone: 'scrub' as Tone };
                 return (
-                    <span key={part.key} className="flex items-center gap-2">
+                    <span key={part.id} className="flex items-center gap-2">
                         <Swatch tone={state.tone} live={state.tone === 'ignite'} />
                         <span className="text-ink-2">{part.plain}</span>
                         <span className={cn('ml-auto font-medium', TONE_TEXT[state.tone])}>{state.label}</span>
@@ -392,9 +434,17 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
     const timeoutIn = stepTimeoutAt(tenant) - now;
     const autoFail = timeoutIn > 0 ? `in about ${fmtDuration(timeoutIn)}` : 'shortly';
 
+    const waiting = waitingOnCompany(tenant);
+    const request = waiting && customStep(tenant, waiting.api);
+
     switch (cond) {
         case 'running':
             tone = 'ignite';
+            if (waiting) {
+                head = `Waiting on your system: ${lower(waiting)}.`;
+                body = `We asked your system to do this step${request ? ` and it has until ${fmtClock(Date.parse(request.deadlineAt))} to tell us it's done` : ''}. Setup carries on as soon as it does; if it doesn't, the step fails and you can retry it.`;
+                break;
+            }
             head = stage ? `${stepName(stage)}.` : 'Setting this customer up.';
             body = "This usually takes less than a minute. You'll get an email when they're ready; welcoming the customer is yours to do from the tenant.active webhook.";
             break;

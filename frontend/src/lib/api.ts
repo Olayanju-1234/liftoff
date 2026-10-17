@@ -1,5 +1,17 @@
 import axios from 'axios';
-import type { ApiKey, CreatedApiKey, CustomerPlan, Tenant, EventLog, Organisation, PublicTenantStatus, UpdatedOrganisation, UserSettings } from './types';
+import type {
+    ApiKey,
+    CreatedApiKey,
+    CustomerPlan,
+    Tenant,
+    EventLog,
+    Organisation,
+    PublicTenantStatus,
+    StepMode,
+    StepName,
+    UpdatedOrganisation,
+    UserSettings,
+} from './types';
 import type { SessionUser } from './session';
 
 const api = axios.create({
@@ -67,6 +79,8 @@ export interface OrganisationPatch {
     plans?: CustomerPlan[] | null;
     // Hides the finished onboarding checklist for good.
     dismissOnboarding?: boolean;
+    // Per step, merged; a step's entry replaces its mode and keeps a url or timeout left out.
+    stepConfig?: Partial<Record<StepName, { mode: StepMode; url?: string; timeoutMs?: number } | null>> | null;
 }
 export const updateOrganisation = (patch: OrganisationPatch) => api.put<UpdatedOrganisation>('/organisation', patch).then((res) => res.data);
 

@@ -31,6 +31,10 @@ export interface Tenant {
     teardownDbStatus?: StepStatus | null;
     teardownCredentialsStatus?: StepStatus | null;
     teardownBillingStatus?: StepStatus | null;
+    // How each step ran, set as it starts. Missing on older tenants: every step was builtin.
+    stepModes?: Partial<Record<StepName, StepMode>>;
+    // GET /tenants/:id only: the latest request to the company's system per custom step.
+    customSteps?: CustomStepView[];
     deletedAt?: string | null;
     createdAt: string;
     updatedAt: string;
@@ -53,6 +57,8 @@ export interface Organisation {
     limits: { maxActiveTenants: number; maxProvisionsPerDay: number };
     // Set once the finished onboarding checklist was dismissed; it never shows again after.
     onboardingDismissedAt: string | null;
+    // How each provisioning step runs. Missing on an API from before custom steps.
+    stepConfig?: StepConfig;
     createdAt: string;
     updatedAt: string;
 }
@@ -96,6 +102,36 @@ export const MAX_PLANS = 12;
 // The company's plans, or the defaults when the API predates them or returned none.
 export const organisationPlans = (o: Pick<Organisation, 'plans'> | undefined): CustomerPlan[] =>
     Array.isArray(o?.plans) && o.plans.length > 0 ? o.plans : DEFAULT_PLANS;
+
+// The five provisioning steps by the names the API and the company's system use.
+export type StepName = 'database' | 'address' | 'credentials' | 'billing' | 'welcome';
+// builtin: Liftoff runs it. skipped: marked SKIPPED, the next step starts. custom: the company's own system runs it.
+export type StepMode = 'builtin' | 'skipped' | 'custom';
+
+export interface StepConfigEntry {
+    mode: StepMode;
+    url: string | null;
+    timeoutMs: number;
+}
+export type StepConfig = Record<StepName, StepConfigEntry>;
+
+export const CUSTOM_STEP_DEFAULT_TIMEOUT_MS = 10 * 60_000;
+export const CUSTOM_STEP_MIN_TIMEOUT_MS = 60_000;
+export const CUSTOM_STEP_MAX_TIMEOUT_MS = 24 * 60 * 60_000;
+
+// One request to the company's system: step.requested (provision) or step.teardown.
+export interface CustomStepView {
+    step: StepName;
+    action: 'provision' | 'teardown';
+    requestId: string;
+    status: StepStatus;
+    url: string;
+    requestedAt: string;
+    deadlineAt: string;
+    completedAt: string | null;
+    error: string | null;
+    output: Record<string, unknown> | null;
+}
 
 export type TenantStatus = 'PROVISIONING' | 'ACTIVE' | 'SUSPENDED' | 'FAILED' | 'CANCELLED' | 'DEPROVISIONING' | 'DELETED';
 export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'SKIPPED';
