@@ -129,6 +129,11 @@ export function teardownFailed(t: Tenant) {
     return TEARDOWN.some((p) => t[p.key] === 'FAILED');
 }
 
+// A removal worth retrying: a part dead-lettered, or nothing has moved for a while.
+export function teardownStuck(t: Tenant, now: number) {
+    return t.status === 'DEPROVISIONING' && (teardownFailed(t) || now - Date.parse(t.updatedAt) > TEARDOWN_SLOW_MS);
+}
+
 export function schemaName(subdomain: string) {
     return `tenant_${subdomain.replace(/[^a-zA-Z0-9]/g, '_')}`;
 }

@@ -25,6 +25,7 @@ import {
     stepTimeoutAt,
     sweepAt,
     teardownFailed,
+    teardownStuck,
 } from '../../lib/pipeline';
 import type { Condition, Stage } from '../../lib/pipeline';
 import {
@@ -132,9 +133,11 @@ export default function Customer() {
                             </Button>
                         )}
                         {tenant.status === 'DEPROVISIONING' ? (
-                            <Button onClick={() => actions.requestDelete(tenant)}>
-                                <RotateCcw size={14} /> Retry removal
-                            </Button>
+                            teardownStuck(tenant, now) && (
+                                <Button onClick={() => actions.requestDelete(tenant)}>
+                                    <RotateCcw size={14} /> Retry removal
+                                </Button>
+                            )
                         ) : (
                             tenant.status !== 'DELETED' && (
                                 <Button variant="danger" onClick={() => actions.requestDelete(tenant)}>
