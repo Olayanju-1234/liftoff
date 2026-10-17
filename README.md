@@ -97,7 +97,7 @@ Core orchestration service. Manages the provisioning state machine and subscribe
 
 Provisioning states: `PROVISIONING → ACTIVE | FAILED | CANCELLED`
 
-Step statuses: `PENDING → IN_PROGRESS → SUCCESS | FAILED | CANCELLED`
+Step statuses: `PENDING → IN_PROGRESS → SUCCESS | FAILED | CANCELLED | SKIPPED` (`SKIPPED` is billing on a test tenant)
 
 Steps never move backwards. Each worker consumes its event in parallel with tenant-service, so a step can finish before tenant-service records its start. tenant-service therefore marks a step `IN_PROGRESS` only while it is still `PENDING`.
 
@@ -320,6 +320,8 @@ The organisation is the company that signed up. Every user in it sees the same t
 ### Tenants
 
 Tenants are the organisation's customers. `POST /tenants` files the new tenant under the caller's organisation (and records the user who clicked, when there is one). Every tenant endpoint only returns or changes that organisation's tenants: another company's tenant answers 404, so its ID can't be probed.
+
+Test mode: `POST /tenants` with `"test": true` provisions the tenant like any other (schema, address, API key, webhook) but the billing step is `SKIPPED` and never calls Stripe, the tenant carries `isTest: true`, it is excluded from the quotas, and it can be deleted at any time.
 
 Quotas: an organisation may have 10 active tenants (`PROVISIONING` or `ACTIVE`) and start 50 per rolling 24 hours by default (`Organisation.maxActiveTenants` / `maxProvisionsPerDay`, raised by hand in SQL). Over either, `POST /tenants` answers 429 with a message naming the limit and a `Retry-After` header. Provisions are counted in `ProvisionLog`, so deleting tenants does not reset the daily count.
 
