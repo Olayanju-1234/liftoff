@@ -61,6 +61,10 @@ export class AppService {
   public async handleTenantCredentialsReady(
     payload: sharedTypes.TenantCredentialsReadyPayload,
   ) {
+    if (payload.test) {
+      return this.skipBilling(payload);
+    }
+
     this.logger.log(
       `Creating Stripe subscription for tenant ${payload.tenantId}, plan=${payload.planId}`,
     );
@@ -131,6 +135,39 @@ export class AppService {
       this.logger.error(
         `Failed to create Stripe subscription for tenant ${payload.tenantId}: ${err?.message ?? String(error)}`,
         err?.stack,
+      );
+      return new Nack(false);
+    }
+  }
+
+  // A test tenant is never billed, real Stripe key or not. The saga still moves on.
+  private async skipBilling(
+    payload: sharedTypes.TenantCredentialsReadyPayload,
+  ): Promise<Nack | undefined> {
+    const skipped: sharedTypes.TenantBillingActivePayload = {
+      tenantId: payload.tenantId,
+      subdomain: payload.subdomain,
+      planId: payload.planId,
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      subscriptionStatus: 'skipped',
+      trialEnd: null,
+      skipped: true,
+      test: true,
+    };
+    try {
+      await this.amqpConnection.publish(
+        'provisioning.direct',
+        'tenant.billing.active',
+        skipped,
+      );
+      this.logger.log(
+        `Billing skipped for test tenant ${payload.tenantId}, plan=${payload.planId}`,
+      );
+      return undefined;
+    } catch (error) {
+      this.logger.error(
+        `Failed to publish the skipped billing for test tenant ${payload.tenantId}: ${error instanceof Error ? error.message : String(error)}`,
       );
       return new Nack(false);
     }
