@@ -9,7 +9,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.INTERNAL_TOKEN_HEADER = exports.DEPROVISION_PARTS = exports.isLiveTenant = exports.LIVE_TENANT_STATUSES = exports.STATUS_TOKEN_PATTERN = exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.IsStripePriceMap = exports.UniqueCustomerPlanIds = exports.CustomerPlanDto = exports.DEFAULT_CUSTOMER_PLANS = exports.MAX_CUSTOMER_PLANS = exports.CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH = exports.CUSTOMER_PLAN_NAME_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_PATTERN = exports.STRIPE_PRICE_ID_PATTERN = exports.STRIPE_SECRET_KEY_MAX_LENGTH = exports.STRIPE_SECRET_KEY_PATTERN = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = exports.VerifyEmailDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
+exports.INTERNAL_TOKEN_HEADER = exports.DEPROVISION_PARTS = exports.isLiveTenant = exports.LIVE_TENANT_STATUSES = exports.STATUS_TOKEN_PATTERN = exports.PLAN_IDS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.StepConfigDto = exports.StepConfigEntryDto = exports.CUSTOM_STEP_URL_MAX_LENGTH = exports.CUSTOM_STEP_MAX_TIMEOUT_MS = exports.CUSTOM_STEP_MIN_TIMEOUT_MS = exports.CUSTOM_STEP_DEFAULT_TIMEOUT_MS = exports.STEP_MODES = exports.PROVISIONING_STEP_NAMES = exports.IsStripePriceMap = exports.UniqueCustomerPlanIds = exports.CustomerPlanDto = exports.DEFAULT_CUSTOMER_PLANS = exports.MAX_CUSTOMER_PLANS = exports.CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH = exports.CUSTOMER_PLAN_NAME_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_PATTERN = exports.STRIPE_PRICE_ID_PATTERN = exports.STRIPE_SECRET_KEY_MAX_LENGTH = exports.STRIPE_SECRET_KEY_PATTERN = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = exports.VerifyEmailDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
 const swagger_1 = require("@nestjs/swagger");
 const class_transformer_1 = require("class-transformer");
 const class_validator_1 = require("class-validator");
@@ -339,6 +339,96 @@ exports.IsStripePriceMap = IsStripePriceMap;
 exports.IsStripePriceMap = IsStripePriceMap = __decorate([
     (0, class_validator_1.ValidatorConstraint)({ name: 'stripePriceMap', async: false })
 ], IsStripePriceMap);
+exports.PROVISIONING_STEP_NAMES = [
+    'database',
+    'address',
+    'credentials',
+    'billing',
+    'welcome',
+];
+exports.STEP_MODES = ['builtin', 'skipped', 'custom'];
+exports.CUSTOM_STEP_DEFAULT_TIMEOUT_MS = 10 * 60_000;
+exports.CUSTOM_STEP_MIN_TIMEOUT_MS = 60_000;
+exports.CUSTOM_STEP_MAX_TIMEOUT_MS = 24 * 60 * 60_000;
+exports.CUSTOM_STEP_URL_MAX_LENGTH = 2000;
+class StepConfigEntryDto {
+}
+exports.StepConfigEntryDto = StepConfigEntryDto;
+__decorate([
+    (0, swagger_1.ApiProperty)({
+        enum: exports.STEP_MODES,
+        example: 'custom',
+        description: 'builtin: Liftoff runs the step. skipped: the step is marked SKIPPED and the next one starts. custom: Liftoff POSTs step.requested to url and waits for your callback.',
+    }),
+    (0, class_validator_1.IsIn)(exports.STEP_MODES),
+    __metadata("design:type", String)
+], StepConfigEntryDto.prototype, "mode", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        example: 'https://api.acme.com/liftoff/steps',
+        maxLength: exports.CUSTOM_STEP_URL_MAX_LENGTH,
+        description: 'Your endpoint for this step: step.requested (and step.teardown when the customer is removed) are POSTed here. Required for custom; must be a public http(s) URL.',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsUrl)({
+        protocols: ['http', 'https'],
+        require_protocol: true,
+        require_tld: false,
+    }),
+    (0, class_validator_1.MaxLength)(exports.CUSTOM_STEP_URL_MAX_LENGTH),
+    __metadata("design:type", String)
+], StepConfigEntryDto.prototype, "url", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        minimum: exports.CUSTOM_STEP_MIN_TIMEOUT_MS,
+        maximum: exports.CUSTOM_STEP_MAX_TIMEOUT_MS,
+        default: exports.CUSTOM_STEP_DEFAULT_TIMEOUT_MS,
+        description: 'How long Liftoff waits for your callback before the step fails, in milliseconds: 1 minute to 24 hours, 10 minutes by default.',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(exports.CUSTOM_STEP_MIN_TIMEOUT_MS),
+    (0, class_validator_1.Max)(exports.CUSTOM_STEP_MAX_TIMEOUT_MS),
+    __metadata("design:type", Number)
+], StepConfigEntryDto.prototype, "timeoutMs", void 0);
+class StepConfigDto {
+}
+exports.StepConfigDto = StepConfigDto;
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ type: () => StepConfigEntryDto, nullable: true }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateNested)(),
+    (0, class_transformer_1.Type)(() => StepConfigEntryDto),
+    __metadata("design:type", StepConfigEntryDto)
+], StepConfigDto.prototype, "database", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ type: () => StepConfigEntryDto, nullable: true }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateNested)(),
+    (0, class_transformer_1.Type)(() => StepConfigEntryDto),
+    __metadata("design:type", StepConfigEntryDto)
+], StepConfigDto.prototype, "address", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ type: () => StepConfigEntryDto, nullable: true }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateNested)(),
+    (0, class_transformer_1.Type)(() => StepConfigEntryDto),
+    __metadata("design:type", StepConfigEntryDto)
+], StepConfigDto.prototype, "credentials", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ type: () => StepConfigEntryDto, nullable: true }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateNested)(),
+    (0, class_transformer_1.Type)(() => StepConfigEntryDto),
+    __metadata("design:type", StepConfigEntryDto)
+], StepConfigDto.prototype, "billing", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({ type: () => StepConfigEntryDto, nullable: true }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateNested)(),
+    (0, class_transformer_1.Type)(() => StepConfigEntryDto),
+    __metadata("design:type", StepConfigEntryDto)
+], StepConfigDto.prototype, "welcome", void 0);
 class UpdateOrganisationDto {
 }
 exports.UpdateOrganisationDto = UpdateOrganisationDto;
@@ -432,6 +522,18 @@ __decorate([
     (0, class_validator_1.Validate)(UniqueCustomerPlanIds),
     __metadata("design:type", Array)
 ], UpdateOrganisationDto.prototype, "plans", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        type: () => StepConfigDto,
+        nullable: true,
+        description: 'How each provisioning step runs: builtin (Liftoff does it), skipped (marked SKIPPED, the next step starts) or custom (Liftoff POSTs step.requested to your URL, signed with your webhook secret, and waits for your callback). Merged per step: a step you leave out keeps its setting, null puts it back to builtin. null for the whole object puts every step back to builtin. Custom steps need a webhook URL first, because they are signed with its secret.',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.ValidateIf)((dto) => dto.stepConfig !== null),
+    (0, class_validator_1.ValidateNested)(),
+    (0, class_transformer_1.Type)(() => StepConfigDto),
+    __metadata("design:type", StepConfigDto)
+], UpdateOrganisationDto.prototype, "stepConfig", void 0);
 __decorate([
     (0, swagger_1.ApiPropertyOptional)({
         description: 'true hides the finished onboarding checklist on the dashboard for good (onboardingDismissedAt is set once and kept).',

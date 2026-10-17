@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -6,7 +7,12 @@ import {
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { Prisma } from '.prisma/tenant-client';
-import type { CustomerPlan, StripePrices } from '@liftoff/shared-types';
+import {
+  PROVISIONING_STEP_NAMES,
+  type CustomerPlan,
+  type EffectiveStepConfig,
+  type StripePrices,
+} from '@liftoff/shared-types';
 import { PrismaService } from '../prisma.service';
 import { parseWebhookUrl } from '../webhooks/destination';
 import { UpdateOrganisationDto } from './dto/update-organisation.dto';
@@ -17,6 +23,13 @@ import {
   storedPrices,
   toStoredPlans,
 } from './customer-plans';
+import {
+  customStepNames,
+  effectiveStepConfig,
+  mergeStepConfig,
+  storedStepConfig,
+  type StoredStepConfig,
+} from './step-config';
 
 export interface OrganisationResponse {
   id: string;
@@ -32,6 +45,8 @@ export interface OrganisationResponse {
   // The company's customer plans (the defaults when it defined none) and a price per plan.
   plans: CustomerPlan[];
   stripePrices: StripePrices;
+  // How each provisioning step runs, every step listed with the defaults filled in.
+  stepConfig: EffectiveStepConfig;
   // Quotas on POST /tenants. Raised by hand for a company that needs more.
   limits: { maxActiveTenants: number; maxProvisionsPerDay: number };
   // When the finished onboarding checklist was dismissed; null while it still shows.
@@ -54,6 +69,7 @@ const publicFields = {
   stripeSecretKeyEncrypted: true,
   stripePrices: true,
   plans: true,
+  stepConfig: true,
   maxActiveTenants: true,
   maxProvisionsPerDay: true,
   onboardingDismissedAt: true,
@@ -81,10 +97,11 @@ export class OrganisationsService {
     return (await this.load(organisationId)).response;
   }
 
-  // The update path needs the stored price map as well as the per-plan view.
+  // The update path needs the stored price map and step config as well as the response.
   private async load(organisationId: string): Promise<{
     response: OrganisationResponse;
     stored: Record<string, string>;
+    steps: StoredStepConfig;
   }> {
     const organisation = await this.prisma.organisation.findUnique({
       where: { id: organisationId },
@@ -96,6 +113,7 @@ export class OrganisationsService {
     return {
       response: this.toResponse(organisation),
       stored: storedPrices(organisation.stripePrices),
+      steps: storedStepConfig(organisation.stepConfig),
     };
   }
 
@@ -103,7 +121,11 @@ export class OrganisationsService {
     organisationId: string,
     dto: UpdateOrganisationDto,
   ): Promise<UpdatedOrganisation> {
-    const { response: current, stored } = await this.load(organisationId);
+    const {
+      response: current,
+      stored,
+      steps: currentSteps,
+    } = await this.load(organisationId);
     const data: Prisma.OrganisationUpdateInput = {};
     if (dto.name !== undefined) {
       data.name = dto.name;
@@ -162,6 +184,29 @@ export class OrganisationsService {
       data.plans = toStoredPlans(dto.plans);
     }
 
+    let steps = currentSteps;
+    if (dto.stepConfig === null) {
+      steps = {};
+      data.stepConfig = Prisma.DbNull;
+    } else if (dto.stepConfig !== undefined) {
+      steps = checkedStepConfig(mergeStepConfig(currentSteps, dto.stepConfig));
+      data.stepConfig =
+        Object.keys(steps).length > 0
+          ? (steps as Prisma.InputJsonObject)
+          : Prisma.DbNull;
+    }
+    // Custom step requests are signed with the webhook secret, so one must outlive them.
+    const willHaveSecret =
+      dto.webhookUrl !== null &&
+      (secret !== undefined || current.webhookConfigured);
+    if (customStepNames(steps).length > 0 && !willHaveSecret) {
+      throw new BadRequestException(
+        dto.webhookUrl === null
+          ? 'Custom steps are signed with your webhook secret: switch them to builtin or skipped before removing the webhook.'
+          : 'Custom steps are signed with your webhook secret, like webhooks: set a webhook URL first.',
+      );
+    }
+
     // Dismissed once; a second click (another browser, another user) keeps the first time.
     if (dto.dismissOnboarding && !current.onboardingDismissedAt) {
       data.onboardingDismissedAt = new Date();
@@ -192,6 +237,8 @@ export class OrganisationsService {
               ? 'defaults'
               : dto.plans.length,
         onboardingDismissed: data.onboardingDismissedAt !== undefined,
+        customSteps:
+          dto.stepConfig === undefined ? 'unchanged' : customStepNames(steps),
       })}`,
     );
     return { ...this.toResponse(updated), webhookSecret: secret };
@@ -241,6 +288,7 @@ export class OrganisationsService {
       stripeSecretKeyEncrypted,
       stripePrices,
       plans,
+      stepConfig,
       maxActiveTenants,
       maxProvisionsPerDay,
       ...rest
@@ -253,7 +301,29 @@ export class OrganisationsService {
       stripeConfigured: stripeSecretKeyEncrypted !== null,
       plans: effective,
       stripePrices: pricesFor(effective, stored),
+      stepConfig: effectiveStepConfig(stepConfig),
       limits: { maxActiveTenants, maxProvisionsPerDay },
     };
   }
+}
+
+// Every URL must reach a public host (normalised as stored); a custom step needs one.
+function checkedStepConfig(config: StoredStepConfig): StoredStepConfig {
+  const checked: StoredStepConfig = {};
+  for (const step of PROVISIONING_STEP_NAMES) {
+    const entry = config[step];
+    if (!entry) {
+      continue;
+    }
+    const url = entry.url
+      ? parseWebhookUrl(entry.url, `stepConfig.${step}.url`).toString()
+      : undefined;
+    if (entry.mode === 'custom' && !url) {
+      throw new BadRequestException(
+        `stepConfig.${step}.url is required for a custom step`,
+      );
+    }
+    checked[step] = { ...entry, ...(url ? { url } : {}) };
+  }
+  return checked;
 }

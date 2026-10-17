@@ -363,6 +363,112 @@ describe('API Gateway (e2e)', () => {
     });
   });
 
+  describe('step config on PUT /organisation', () => {
+    const headers = { authorization: 'Bearer user.jwt.token' };
+
+    it('proxies per-step modes, URLs and timeouts, and null to reset a step', async () => {
+      http.put.mockReturnValueOnce(of({ data: { id: 'org-1' } }));
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/organisation',
+        headers,
+        payload: {
+          stepConfig: {
+            database: {
+              mode: 'custom',
+              url: 'https://steps.acme.com/db',
+              timeoutMs: 120000,
+            },
+            billing: { mode: 'skipped' },
+            welcome: null,
+          },
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [[, body]] = http.put.mock.calls as [[string, unknown]];
+      expect(JSON.parse(JSON.stringify(body))).toEqual({
+        stepConfig: {
+          database: {
+            mode: 'custom',
+            url: 'https://steps.acme.com/db',
+            timeoutMs: 120000,
+          },
+          billing: { mode: 'skipped' },
+          welcome: null,
+        },
+      });
+    });
+
+    it('proxies stepConfig: null (every step back to builtin)', async () => {
+      http.put.mockReturnValueOnce(of({ data: { id: 'org-1' } }));
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/organisation',
+        headers,
+        payload: { stepConfig: null },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(http.put).toHaveBeenCalledWith(
+        '/organisation',
+        { stepConfig: null },
+        { headers: { Authorization: 'Bearer user.jwt.token' } },
+      );
+    });
+
+    it.each([
+      ['an unknown step', { stepConfig: { dns: { mode: 'skipped' } } }],
+      ['an unknown mode', { stepConfig: { database: { mode: 'manual' } } }],
+      ['a missing mode', { stepConfig: { database: { url: 'https://a.io' } } }],
+      [
+        'a URL without a scheme',
+        { stepConfig: { database: { mode: 'custom', url: 'steps.acme.com' } } },
+      ],
+      [
+        'a timeout under a minute',
+        {
+          stepConfig: {
+            billing: {
+              mode: 'custom',
+              url: 'https://a.io/x',
+              timeoutMs: 5000,
+            },
+          },
+        },
+      ],
+      [
+        'a timeout over a day',
+        {
+          stepConfig: {
+            billing: {
+              mode: 'custom',
+              url: 'https://a.io/x',
+              timeoutMs: 86_400_001,
+            },
+          },
+        },
+      ],
+      [
+        'an unknown entry field',
+        { stepConfig: { welcome: { mode: 'skipped', secret: 'x' } } },
+      ],
+      ['a non-object', { stepConfig: 'custom' }],
+    ])('rejects %s with 400 before proxying', async (_what, payload) => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/organisation',
+        headers,
+        payload,
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(http.put).not.toHaveBeenCalled();
+    });
+  });
+
   describe('public status page', () => {
     const token = 'A'.repeat(43);
 

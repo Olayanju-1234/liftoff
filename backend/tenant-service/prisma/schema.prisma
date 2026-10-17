@@ -108,6 +108,9 @@ model Organisation {
   // The company's own customer plans, [{ id, name, description? }]; null means the three
   // defaults (starter, pro, enterprise). POST /tenants validates planId against them.
   plans                    Json?
+  // How each provisioning step runs, { <step>: { mode, url?, timeoutMs? } } with the API's
+  // step names; a step absent (or null here) is builtin.
+  stepConfig               Json?
 
   // Set when someone dismissed the finished onboarding checklist on the Simple home;
   // it is never shown to the company again.

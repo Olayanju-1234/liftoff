@@ -67,23 +67,24 @@ export function isBlockedHostname(hostname: string): boolean {
   return isIP(host) !== 0 && isBlockedAddress(host);
 }
 
-// Checks the URL shape and any literal address. Runs when the URL is saved.
-export function parseWebhookUrl(raw: string): URL {
+// Checks the URL shape and any literal address. Runs when the URL is saved; field names
+// the setting in the 400 (custom step URLs go through here too).
+export function parseWebhookUrl(raw: string, field = 'webhookUrl'): URL {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    throw new BadRequestException('webhookUrl is not a valid URL');
+    throw new BadRequestException(`${field} is not a valid URL`);
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new BadRequestException('webhookUrl must use http or https');
+    throw new BadRequestException(`${field} must use http or https`);
   }
   if (url.username || url.password) {
-    throw new BadRequestException('webhookUrl must not embed credentials');
+    throw new BadRequestException(`${field} must not embed credentials`);
   }
   if (isBlockedHostname(url.hostname)) {
     throw new BadRequestException(
-      'webhookUrl must point at a public host, not a private or loopback address',
+      `${field} must point at a public host, not a private or loopback address`,
     );
   }
   return url;

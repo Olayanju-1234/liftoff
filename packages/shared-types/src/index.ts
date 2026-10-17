@@ -8,12 +8,16 @@ import {
   IsBoolean,
   IsEmail,
   IsFQDN,
+  IsIn,
+  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUrl,
   Matches,
+  Max,
   MaxLength,
+  Min,
   MinLength,
   Validate,
   ValidateIf,
@@ -357,6 +361,122 @@ export class IsStripePriceMap implements ValidatorConstraintInterface {
   }
 }
 
+// ----------------------------------------------------------------------------
+// Provisioning steps: each one is run by Liftoff (builtin), skipped, or handed to the
+// company's own system (custom), per organisation.
+// ----------------------------------------------------------------------------
+
+// The five steps in saga order, by the names the API and the company's system use.
+export const PROVISIONING_STEP_NAMES = [
+  'database',
+  'address',
+  'credentials',
+  'billing',
+  'welcome',
+] as const;
+export type ProvisioningStepName = (typeof PROVISIONING_STEP_NAMES)[number];
+
+export const STEP_MODES = ['builtin', 'skipped', 'custom'] as const;
+export type StepMode = (typeof STEP_MODES)[number];
+
+export const CUSTOM_STEP_DEFAULT_TIMEOUT_MS = 10 * 60_000;
+export const CUSTOM_STEP_MIN_TIMEOUT_MS = 60_000;
+export const CUSTOM_STEP_MAX_TIMEOUT_MS = 24 * 60 * 60_000;
+export const CUSTOM_STEP_URL_MAX_LENGTH = 2000;
+
+export interface StepConfigEntry {
+  mode: StepMode;
+  // Where a custom step's requests go. Kept while the step is builtin or skipped, so
+  // switching back to custom needs no retyping.
+  url?: string;
+  timeoutMs?: number;
+}
+
+// GET /organisation: every step, with the defaults filled in.
+export interface EffectiveStepConfigEntry {
+  mode: StepMode;
+  url: string | null;
+  timeoutMs: number;
+}
+export type EffectiveStepConfig = Record<
+  ProvisioningStepName,
+  EffectiveStepConfigEntry
+>;
+
+export class StepConfigEntryDto implements StepConfigEntry {
+  @ApiProperty({
+    enum: STEP_MODES,
+    example: 'custom',
+    description:
+      'builtin: Liftoff runs the step. skipped: the step is marked SKIPPED and the next one starts. custom: Liftoff POSTs step.requested to url and waits for your callback.',
+  })
+  @IsIn(STEP_MODES)
+  mode: StepMode;
+
+  @ApiPropertyOptional({
+    example: 'https://api.acme.com/liftoff/steps',
+    maxLength: CUSTOM_STEP_URL_MAX_LENGTH,
+    description:
+      'Your endpoint for this step: step.requested (and step.teardown when the customer is removed) are POSTed here. Required for custom; must be a public http(s) URL.',
+  })
+  @IsOptional()
+  @IsUrl({
+    protocols: ['http', 'https'],
+    require_protocol: true,
+    require_tld: false,
+  })
+  @MaxLength(CUSTOM_STEP_URL_MAX_LENGTH)
+  url?: string;
+
+  @ApiPropertyOptional({
+    minimum: CUSTOM_STEP_MIN_TIMEOUT_MS,
+    maximum: CUSTOM_STEP_MAX_TIMEOUT_MS,
+    default: CUSTOM_STEP_DEFAULT_TIMEOUT_MS,
+    description:
+      'How long Liftoff waits for your callback before the step fails, in milliseconds: 1 minute to 24 hours, 10 minutes by default.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(CUSTOM_STEP_MIN_TIMEOUT_MS)
+  @Max(CUSTOM_STEP_MAX_TIMEOUT_MS)
+  timeoutMs?: number;
+}
+
+// One optional entry per step; null puts that step back to builtin.
+export class StepConfigDto implements Partial<
+  Record<ProvisioningStepName, StepConfigEntryDto | null>
+> {
+  @ApiPropertyOptional({ type: () => StepConfigEntryDto, nullable: true })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => StepConfigEntryDto)
+  database?: StepConfigEntryDto | null;
+
+  @ApiPropertyOptional({ type: () => StepConfigEntryDto, nullable: true })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => StepConfigEntryDto)
+  address?: StepConfigEntryDto | null;
+
+  @ApiPropertyOptional({ type: () => StepConfigEntryDto, nullable: true })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => StepConfigEntryDto)
+  credentials?: StepConfigEntryDto | null;
+
+  @ApiPropertyOptional({ type: () => StepConfigEntryDto, nullable: true })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => StepConfigEntryDto)
+  billing?: StepConfigEntryDto | null;
+
+  @ApiPropertyOptional({ type: () => StepConfigEntryDto, nullable: true })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => StepConfigEntryDto)
+  welcome?: StepConfigEntryDto | null;
+}
+
 export class UpdateOrganisationDto {
   @ApiPropertyOptional({ example: 'Acme Corp', maxLength: 100 })
   @IsOptional()
@@ -448,6 +568,18 @@ export class UpdateOrganisationDto {
   @Type(() => CustomerPlanDto)
   @Validate(UniqueCustomerPlanIds)
   plans?: CustomerPlanDto[] | null;
+
+  @ApiPropertyOptional({
+    type: () => StepConfigDto,
+    nullable: true,
+    description:
+      'How each provisioning step runs: builtin (Liftoff does it), skipped (marked SKIPPED, the next step starts) or custom (Liftoff POSTs step.requested to your URL, signed with your webhook secret, and waits for your callback). Merged per step: a step you leave out keeps its setting, null puts it back to builtin. null for the whole object puts every step back to builtin. Custom steps need a webhook URL first, because they are signed with its secret.',
+  })
+  @IsOptional()
+  @ValidateIf((dto: UpdateOrganisationDto) => dto.stepConfig !== null)
+  @ValidateNested()
+  @Type(() => StepConfigDto)
+  stepConfig?: StepConfigDto | null;
 
   @ApiPropertyOptional({
     description:

@@ -72,6 +72,37 @@ export declare class IsStripePriceMap implements ValidatorConstraintInterface {
     validate(value: unknown): boolean;
     defaultMessage(): string;
 }
+export declare const PROVISIONING_STEP_NAMES: readonly ["database", "address", "credentials", "billing", "welcome"];
+export type ProvisioningStepName = (typeof PROVISIONING_STEP_NAMES)[number];
+export declare const STEP_MODES: readonly ["builtin", "skipped", "custom"];
+export type StepMode = (typeof STEP_MODES)[number];
+export declare const CUSTOM_STEP_DEFAULT_TIMEOUT_MS: number;
+export declare const CUSTOM_STEP_MIN_TIMEOUT_MS = 60000;
+export declare const CUSTOM_STEP_MAX_TIMEOUT_MS: number;
+export declare const CUSTOM_STEP_URL_MAX_LENGTH = 2000;
+export interface StepConfigEntry {
+    mode: StepMode;
+    url?: string;
+    timeoutMs?: number;
+}
+export interface EffectiveStepConfigEntry {
+    mode: StepMode;
+    url: string | null;
+    timeoutMs: number;
+}
+export type EffectiveStepConfig = Record<ProvisioningStepName, EffectiveStepConfigEntry>;
+export declare class StepConfigEntryDto implements StepConfigEntry {
+    mode: StepMode;
+    url?: string;
+    timeoutMs?: number;
+}
+export declare class StepConfigDto implements Partial<Record<ProvisioningStepName, StepConfigEntryDto | null>> {
+    database?: StepConfigEntryDto | null;
+    address?: StepConfigEntryDto | null;
+    credentials?: StepConfigEntryDto | null;
+    billing?: StepConfigEntryDto | null;
+    welcome?: StepConfigEntryDto | null;
+}
 export declare class UpdateOrganisationDto {
     name?: string;
     webhookUrl?: string | null;
@@ -80,6 +111,7 @@ export declare class UpdateOrganisationDto {
     stripeSecretKey?: string | null;
     stripePrices?: StripePrices | null;
     plans?: CustomerPlanDto[] | null;
+    stepConfig?: StepConfigDto | null;
     dismissOnboarding?: boolean;
 }
 export type StripePrices = Record<string, string | null>;

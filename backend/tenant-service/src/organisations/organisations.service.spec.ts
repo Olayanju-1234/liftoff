@@ -8,7 +8,10 @@ import { Test } from '@nestjs/testing';
 import { Prisma } from '.prisma/tenant-client';
 
 import { OrganisationsService } from './organisations.service';
-import { DEFAULT_CUSTOMER_PLANS } from '@liftoff/shared-types';
+import {
+  CUSTOM_STEP_DEFAULT_TIMEOUT_MS,
+  DEFAULT_CUSTOMER_PLANS,
+} from '@liftoff/shared-types';
 import { OrgSecretsService } from './org-secrets.service';
 import { PrismaService } from '../prisma.service';
 
@@ -32,6 +35,7 @@ const row = {
   stripeSecretKeyEncrypted: null as string | null,
   stripePrices: null as Prisma.JsonValue | null,
   plans: null as Prisma.JsonValue | null,
+  stepConfig: null as Prisma.JsonValue | null,
   maxActiveTenants: 10,
   maxProvisionsPerDay: 50,
   onboardingDismissedAt: null as Date | null,
@@ -40,6 +44,19 @@ const row = {
 };
 
 const noPrices = { starter: null, pro: null, enterprise: null };
+
+const builtin = {
+  mode: 'builtin',
+  url: null,
+  timeoutMs: CUSTOM_STEP_DEFAULT_TIMEOUT_MS,
+};
+const allBuiltin = {
+  database: builtin,
+  address: builtin,
+  credentials: builtin,
+  billing: builtin,
+  welcome: builtin,
+};
 
 describe('OrganisationsService', () => {
   let service: OrganisationsService;
@@ -93,6 +110,7 @@ describe('OrganisationsService', () => {
         stripeConfigured: false,
         plans: DEFAULT_CUSTOMER_PLANS,
         stripePrices: noPrices,
+        stepConfig: allBuiltin,
         limits: { maxActiveTenants: 10, maxProvisionsPerDay: 50 },
         onboardingDismissedAt: null,
         createdAt: row.createdAt,
@@ -498,6 +516,216 @@ describe('OrganisationsService', () => {
       expect(result.prices).toEqual({
         growth: 'price_growth',
         legacy: 'price_legacy',
+      });
+    });
+  });
+
+  describe('step config', () => {
+    const withWebhook = {
+      ...row,
+      webhookUrl: 'https://hooks.acme.com/liftoff',
+      webhookSecret: 'whsec_old',
+    };
+
+    it('lists every step as builtin until the company configures one', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(row);
+
+      expect((await service.get('org-1')).stepConfig).toEqual(allBuiltin);
+    });
+
+    it('stores a custom step with its URL normalised and answers with every step', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(withWebhook);
+
+      const result = await service.update('org-1', {
+        stepConfig: {
+          database: {
+            mode: 'custom',
+            url: 'https://Steps.Acme.com/db',
+            timeoutMs: 120_000,
+          },
+          billing: { mode: 'skipped' },
+        },
+      });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data).toEqual({
+        stepConfig: {
+          database: {
+            mode: 'custom',
+            url: 'https://steps.acme.com/db',
+            timeoutMs: 120_000,
+          },
+          billing: { mode: 'skipped' },
+        },
+      });
+      expect(result.stepConfig).toEqual({
+        ...allBuiltin,
+        database: {
+          mode: 'custom',
+          url: 'https://steps.acme.com/db',
+          timeoutMs: 120_000,
+        },
+        billing: { ...builtin, mode: 'skipped' },
+      });
+      expect(result.webhookSecret).toBeUndefined();
+    });
+
+    it('merges per step: the others keep their setting, null puts one back to builtin', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...withWebhook,
+        stepConfig: {
+          database: { mode: 'custom', url: 'https://steps.acme.com/db' },
+          billing: { mode: 'skipped' },
+        },
+      });
+
+      await service.update('org-1', {
+        stepConfig: { billing: null, welcome: { mode: 'skipped' } },
+      });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data.stepConfig).toEqual({
+        database: { mode: 'custom', url: 'https://steps.acme.com/db' },
+        welcome: { mode: 'skipped' },
+      });
+    });
+
+    it('keeps a custom URL while the step is switched to builtin, ready for later', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...withWebhook,
+        stepConfig: {
+          address: { mode: 'custom', url: 'https://steps.acme.com/dns' },
+        },
+      });
+
+      const result = await service.update('org-1', {
+        stepConfig: { address: { mode: 'builtin' } },
+      });
+
+      expect(result.stepConfig.address).toEqual({
+        ...builtin,
+        url: 'https://steps.acme.com/dns',
+      });
+    });
+
+    it('puts every step back to builtin with stepConfig: null', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...row,
+        stepConfig: { billing: { mode: 'skipped' } },
+      });
+
+      const result = await service.update('org-1', { stepConfig: null });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data).toEqual({ stepConfig: Prisma.DbNull });
+      expect(result.stepConfig).toEqual(allBuiltin);
+    });
+
+    it('stores null rather than an empty object once nothing is configured', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...row,
+        stepConfig: { billing: { mode: 'skipped' } },
+      });
+
+      await service.update('org-1', { stepConfig: { billing: null } });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data).toEqual({ stepConfig: Prisma.DbNull });
+    });
+
+    it('lets skipped and builtin steps be set without a webhook', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(row);
+
+      await service.update('org-1', {
+        stepConfig: { billing: { mode: 'skipped' } },
+      });
+
+      expect(prisma.organisation.update).toHaveBeenCalled();
+    });
+
+    it('refuses a custom step without a URL, sent or stored', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(withWebhook);
+
+      await expect(
+        service.update('org-1', {
+          stepConfig: { credentials: { mode: 'custom' } },
+        }),
+      ).rejects.toThrow('stepConfig.credentials.url is required');
+      expect(prisma.organisation.update).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'http://localhost:4000/steps',
+      'https://10.1.2.3/steps',
+      'https://169.254.169.254/latest',
+      'https://user:pass@steps.acme.com/x',
+    ])('refuses %s as a step URL', async (url) => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(withWebhook);
+
+      await expect(
+        service.update('org-1', {
+          stepConfig: { database: { mode: 'custom', url } },
+        }),
+      ).rejects.toThrow(/^stepConfig\.database\.url /);
+      expect(prisma.organisation.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses a custom step while there is no webhook secret to sign it with', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(row);
+
+      await expect(
+        service.update('org-1', {
+          stepConfig: {
+            database: { mode: 'custom', url: 'https://steps.acme.com/db' },
+          },
+        }),
+      ).rejects.toThrow('set a webhook URL first');
+      expect(prisma.organisation.update).not.toHaveBeenCalled();
+    });
+
+    it('accepts a custom step in the same request that sets the webhook URL', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce(row);
+
+      const result = await service.update('org-1', {
+        webhookUrl: 'https://hooks.acme.com/liftoff',
+        stepConfig: {
+          database: { mode: 'custom', url: 'https://steps.acme.com/db' },
+        },
+      });
+
+      expect(result.webhookSecret).toMatch(/^whsec_/);
+      expect(result.stepConfig.database.mode).toBe('custom');
+    });
+
+    it('refuses to remove the webhook while a step is custom', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...withWebhook,
+        stepConfig: {
+          welcome: { mode: 'custom', url: 'https://steps.acme.com/hi' },
+        },
+      });
+
+      await expect(
+        service.update('org-1', { webhookUrl: null }),
+      ).rejects.toThrow('before removing the webhook');
+      expect(prisma.organisation.update).not.toHaveBeenCalled();
+    });
+
+    it('removes the webhook when the custom steps go back to builtin in the same request', async () => {
+      prisma.organisation.findUnique.mockResolvedValueOnce({
+        ...withWebhook,
+        stepConfig: {
+          welcome: { mode: 'custom', url: 'https://steps.acme.com/hi' },
+        },
+      });
+
+      await service.update('org-1', { webhookUrl: null, stepConfig: null });
+
+      const [[{ data }]] = prisma.organisation.update.mock.calls;
+      expect(data).toEqual({
+        webhookUrl: null,
+        webhookSecret: null,
+        stepConfig: Prisma.DbNull,
       });
     });
   });
