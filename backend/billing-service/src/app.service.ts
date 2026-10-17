@@ -150,4 +150,96 @@ export class AppService {
       return new Nack(false);
     }
   }
+
+  // Cancels the tenant's subscription in the company's Stripe. Safe to replay: a
+  // subscription that is already cancelled or gone counts as done.
+  @RabbitSubscribe({
+    exchange: 'provisioning.direct',
+    routingKey: 'tenant.deprovision',
+    queue: 'billing-deprovision-queue',
+    queueOptions: {
+      durable: true,
+      deadLetterExchange: 'dlx.provisioning',
+      deadLetterRoutingKey: 'billing.deprovision.failed',
+    },
+  })
+  public async handleTenantDeprovision(
+    payload: sharedTypes.TenantDeprovisionPayload,
+  ) {
+    const { tenantId, stripeSubscriptionId: subscriptionId } = payload;
+    try {
+      const done = subscriptionId
+        ? await this.cancelSubscription(tenantId, subscriptionId)
+        : {
+            tenantId,
+            part: 'billing' as const,
+            skipped: true,
+            detail: 'No subscription to cancel',
+          };
+      await this.amqpConnection.publish(
+        'provisioning.direct',
+        'tenant.deprovision.done',
+        done,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to cancel the subscription of tenant ${tenantId}: ${errorMessage(error)}`,
+      );
+      return new Nack(false);
+    }
+  }
+
+  private async cancelSubscription(
+    tenantId: string,
+    subscriptionId: string,
+  ): Promise<sharedTypes.TenantDeprovisionDonePayload> {
+    const config = await this.internalApi.billingConfig(tenantId);
+    if (!config.configured || !config.stripeSecretKey) {
+      // Blocking the removal forever would not help; the company is told what is left.
+      return {
+        tenantId,
+        part: 'billing',
+        skipped: true,
+        warning: `Stripe is no longer connected, so subscription ${subscriptionId} was not cancelled. Cancel it in your Stripe dashboard.`,
+      };
+    }
+    const stripe = new Stripe(config.stripeSecretKey, {
+      apiVersion: STRIPE_API_VERSION,
+    });
+    try {
+      const cancelled = await stripe.subscriptions.cancel(subscriptionId);
+      this.logger.log(
+        `Cancelled Stripe subscription ${subscriptionId} (status=${cancelled.status}) for tenant ${tenantId}`,
+      );
+      return {
+        tenantId,
+        part: 'billing',
+        skipped: false,
+        detail: subscriptionId,
+      };
+    } catch (error) {
+      if (isMissing(error)) {
+        return {
+          tenantId,
+          part: 'billing',
+          skipped: true,
+          detail: `Subscription ${subscriptionId} no longer exists in Stripe`,
+        };
+      }
+      // Cancelling twice is an error in Stripe; an already-cancelled subscription is done.
+      const current = await stripe.subscriptions.retrieve(subscriptionId);
+      if (current.status === 'canceled') {
+        return {
+          tenantId,
+          part: 'billing',
+          skipped: false,
+          detail: subscriptionId,
+        };
+      }
+      throw error;
+    }
+  }
 }
+
+const isMissing = (error: unknown) =>
+  (error as { code?: string } | null)?.code === 'resource_missing';

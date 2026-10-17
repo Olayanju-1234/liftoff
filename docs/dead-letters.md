@@ -12,8 +12,17 @@ header that names the rejecting queue, the reason and the original routing key.
 | `credentials.failed` | `credentials-queue` | `tenant.dns.ready` | `credentialsStatus` |
 | `billing.failed` | `billing-queue` | `tenant.credentials.ready` | `billingStatus` |
 | `notification.failed` | `notification-queue` | `tenant.billing.active` | `notificationStatus` |
+| `db-provisioner.deprovision.failed` | `db-provisioner-deprovision-queue` | `tenant.deprovision` | `teardownDbStatus` |
+| `credentials.deprovision.failed` | `credentials-deprovision-queue` | `tenant.deprovision` | `teardownCredentialsStatus` |
+| `billing.deprovision.failed` | `billing-deprovision-queue` | `tenant.deprovision` | `teardownBillingStatus` |
 
-tenant-service binds two durable queues to all five keys, so each dead letter
+The last three come from removal (`DELETE /tenants/:id`). A teardown dead letter
+marks only that teardown `FAILED`; the tenant stays `DEPROVISIONING`, and calling
+`DELETE /tenants/:id` again (or **Retry removal** in the dashboard) republishes
+`tenant.deprovision`. Every teardown is idempotent, so there is nothing to replay by
+hand.
+
+tenant-service binds two durable queues to all eight keys, so each dead letter
 lands in both:
 
 - **`provisioning.dead-letters`** is the parking lot. Nothing consumes it, so

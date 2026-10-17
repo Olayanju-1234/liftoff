@@ -279,7 +279,10 @@ export class AppController {
   @ApiTags('Tenants')
   @ApiBearerAuth('bearer')
   @ApiOperation({
-    summary: 'Delete a tenant (cascades to events and emits cleanup event)',
+    summary:
+      'Remove a tenant: drop its schema, revoke its API key, cancel its Stripe subscription',
+    description:
+      'Answers with the tenant in DEPROVISIONING (a test tenant reads DELETED at once). It becomes DELETED, soft: hidden from GET /tenants but still readable by id with its events, once every part is torn down, and tenant.deleted is sent to the webhook. Calling it again resumes a teardown that failed; once DELETED it changes nothing.',
   })
   @Delete('tenants/:id')
   deleteTenant(
@@ -291,10 +294,14 @@ export class AppController {
 
   @ApiTags('Tenants')
   @ApiBearerAuth('bearer')
-  @ApiOperation({ summary: 'Cancel an in-progress provisioning pipeline' })
+  @ApiOperation({
+    summary: 'Cancel a tenant',
+    description:
+      'From PROVISIONING: stops the pipeline (CANCELLED), finished steps are kept. From ACTIVE or FAILED: removes it like DELETE /tenants/:id and records the reason.',
+  })
   @ApiResponse({
     status: 400,
-    description: 'Tenant is not in PROVISIONING state',
+    description: 'Tenant is CANCELLED, being removed or already removed',
   })
   @ApiResponse({ status: 404, description: 'Tenant not found' })
   @Post('tenants/:id/cancel')
@@ -325,7 +332,7 @@ export class AppController {
   @ApiOperation({
     summary: "Update the caller's company",
     description:
-      'Setting webhookUrl (or rotateWebhookSecret) returns webhookSecret once. tenant.active and tenant.failed are POSTed there, signed with it in x-liftoff-signature. stripeSecretKey connects the company’s own Stripe account (stored encrypted, never returned: the response says stripeConfigured; null disconnects) and stripePrices maps customer plans to Stripe Price IDs.',
+      'Setting webhookUrl (or rotateWebhookSecret) returns webhookSecret once. tenant.active, tenant.failed and tenant.deleted are POSTed there, signed with it in x-liftoff-signature. stripeSecretKey connects the company’s own Stripe account (stored encrypted, never returned: the response says stripeConfigured; null disconnects) and stripePrices maps customer plans to Stripe Price IDs.',
   })
   @ApiResponse({ status: 400, description: 'Private or loopback webhookUrl' })
   @ApiResponse({

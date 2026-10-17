@@ -7,7 +7,11 @@ import {
 import { PrismaService } from './prisma.service';
 import { Prisma } from '.prisma/credentials-client';
 import * as crypto from 'crypto';
-import type { TenantDnsReadyPayload } from '@liftoff/shared-types';
+import type {
+  TenantDeprovisionDonePayload,
+  TenantDeprovisionPayload,
+  TenantDnsReadyPayload,
+} from '@liftoff/shared-types';
 
 @Injectable()
 export class AppService {
@@ -79,6 +83,49 @@ export class AppService {
         );
         return new Nack(false);
       }
+    }
+  }
+
+  // Revoking deletes the key outright: nothing keeps a revoked secret around.
+  @RabbitSubscribe({
+    exchange: 'provisioning.direct',
+    routingKey: 'tenant.deprovision',
+    queue: 'credentials-deprovision-queue',
+    queueOptions: {
+      durable: true,
+      deadLetterExchange: 'dlx.provisioning',
+      deadLetterRoutingKey: 'credentials.deprovision.failed',
+    },
+  })
+  public async handleTenantDeprovision(payload: TenantDeprovisionPayload) {
+    try {
+      const { count } = await this.prisma.credential.deleteMany({
+        where: { tenantId: payload.tenantId },
+      });
+      const done: TenantDeprovisionDonePayload = {
+        tenantId: payload.tenantId,
+        part: 'credentials',
+        skipped: count === 0,
+        detail: count === 0 ? 'No key to revoke' : `Revoked ${count} key(s)`,
+      };
+      this.logger.log(
+        { tenantId: payload.tenantId, revoked: count },
+        `Revoked credentials for ${payload.tenantId}`,
+      );
+      await this.amqpConnection.publish(
+        'provisioning.direct',
+        'tenant.deprovision.done',
+        done,
+      );
+    } catch (error) {
+      this.logger.error(
+        {
+          err: error instanceof Error ? error.message : String(error),
+          payload,
+        },
+        `FAILED to revoke credentials for ${payload.tenantId}.`,
+      );
+      return new Nack(false);
     }
   }
 }

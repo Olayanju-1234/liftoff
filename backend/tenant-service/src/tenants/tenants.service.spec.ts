@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { AmqpConnection, RABBIT_HANDLER } from '@golevelup/nestjs-rabbitmq';
@@ -30,6 +31,7 @@ type MockPrisma = {
       [Prisma.TenantUpdateManyArgs]
     >;
     delete: jest.Mock;
+    count: jest.Mock;
   };
   eventLog: { create: jest.Mock; findMany: jest.Mock };
   organisation: { findUnique: jest.Mock };
@@ -48,6 +50,7 @@ const buildPrisma = (): MockPrisma => ({
       [Prisma.TenantUpdateManyArgs]
     >(),
     delete: jest.fn(),
+    count: jest.fn().mockResolvedValue(0),
   },
   eventLog: { create: jest.fn().mockResolvedValue({}), findMany: jest.fn() },
   organisation: {
@@ -303,20 +306,36 @@ describe('TenantsService', () => {
     });
 
     it('handleProvisioningComplete sets ACTIVE via the enum (not a string literal)', async () => {
-      prisma.tenant.update.mockResolvedValueOnce({});
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
 
       await service.handleProvisioningComplete({
         tenantId: 't',
         subdomain: 's',
       });
 
-      const [[updateCall]] = prisma.tenant.update.mock.calls;
+      const [[updateCall]] = prisma.tenant.updateMany.mock.calls;
+      expect(updateCall.where).toEqual({
+        id: 't',
+        status: { in: [TenantStatus.PROVISIONING, TenantStatus.FAILED] },
+      });
       expect(updateCall.data.status).toBe(TenantStatus.ACTIVE);
       expect(updateCall.data.notificationStatus).toBe(StepStatus.SUCCESS);
     });
 
+    it('never brings a cancelled or removed tenant back to ACTIVE', async () => {
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await service.handleProvisioningComplete({
+        tenantId: 't',
+        subdomain: 's',
+      });
+
+      expect(webhooks.notify).not.toHaveBeenCalled();
+      expect(prisma.eventLog.create).not.toHaveBeenCalled();
+    });
+
     it('records notification as SKIPPED when notification-service sent nothing', async () => {
-      prisma.tenant.update.mockResolvedValueOnce({});
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
 
       await service.handleProvisioningComplete({
         tenantId: 't',
@@ -324,14 +343,14 @@ describe('TenantsService', () => {
         notification: { sent: false, recipients: 0, skipReason: 'no-provider' },
       });
 
-      const [[updateCall]] = prisma.tenant.update.mock.calls;
+      const [[updateCall]] = prisma.tenant.updateMany.mock.calls;
       expect(updateCall.data.status).toBe(TenantStatus.ACTIVE);
       expect(updateCall.data.notificationStatus).toBe(StepStatus.SKIPPED);
       expect(webhooks.notify).toHaveBeenCalledWith('t', 'tenant.active');
     });
 
     it('records notification as SUCCESS when the company was emailed', async () => {
-      prisma.tenant.update.mockResolvedValueOnce({});
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
 
       await service.handleProvisioningComplete({
         tenantId: 't',
@@ -339,12 +358,12 @@ describe('TenantsService', () => {
         notification: { sent: true, recipients: 1 },
       });
 
-      const [[updateCall]] = prisma.tenant.update.mock.calls;
+      const [[updateCall]] = prisma.tenant.updateMany.mock.calls;
       expect(updateCall.data.notificationStatus).toBe(StepStatus.SUCCESS);
     });
 
     it('notifies the company webhook once the tenant is ACTIVE', async () => {
-      prisma.tenant.update.mockResolvedValueOnce({});
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
 
       await service.handleProvisioningComplete({
         tenantId: 't',
@@ -355,7 +374,7 @@ describe('TenantsService', () => {
     });
 
     it('does not notify the webhook when activation fails', async () => {
-      prisma.tenant.update.mockRejectedValueOnce(new Error('gone'));
+      prisma.tenant.updateMany.mockRejectedValueOnce(new Error('gone'));
 
       await service.handleProvisioningComplete({
         tenantId: 't',
@@ -680,6 +699,9 @@ describe('TenantsService', () => {
           'credentials.failed',
           'billing.failed',
           'notification.failed',
+          'db-provisioner.deprovision.failed',
+          'credentials.deprovision.failed',
+          'billing.deprovision.failed',
         ],
         options: { durable: true, maxLength: 10_000 },
       });
@@ -787,6 +809,10 @@ describe('TenantsService', () => {
       prisma.tenant.update.mockImplementation(({ data }) =>
         Promise.resolve({ ...stored, ...data }),
       );
+      prisma.tenant.updateMany.mockResolvedValue({ count: 1 });
+      prisma.tenant.findUnique.mockImplementation(() =>
+        Promise.resolve(stored),
+      );
       prisma.tenant.delete.mockResolvedValue(stored);
     });
 
@@ -805,6 +831,7 @@ describe('TenantsService', () => {
       async (_name, call) => {
         await expect(call('org-2')).rejects.toBeInstanceOf(NotFoundException);
         expect(prisma.tenant.update).not.toHaveBeenCalled();
+        expect(prisma.tenant.updateMany).not.toHaveBeenCalled();
         expect(prisma.tenant.delete).not.toHaveBeenCalled();
         expect(amqp.publish).not.toHaveBeenCalled();
       },
@@ -834,13 +861,15 @@ describe('TenantsService', () => {
       );
     });
 
-    it("lists only the organisation's customer tenants", async () => {
+    it("lists only the organisation's customer tenants, without the removed ones", async () => {
       prisma.tenant.findMany.mockResolvedValueOnce([]);
 
       await service.findAll('org-1');
 
       expect(prisma.tenant.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: inOrg }),
+        expect.objectContaining({
+          where: { ...inOrg, status: { not: TenantStatus.DELETED } },
+        }),
       );
     });
 
@@ -869,6 +898,10 @@ describe('TenantsService', () => {
       notificationStatus: StepStatus.PENDING,
     };
 
+    beforeEach(() => {
+      prisma.tenant.findUnique.mockResolvedValue({ id: 't' });
+    });
+
     it('cancels in-progress + pending steps and publishes tenant.cancelled', async () => {
       prisma.tenant.findFirst.mockResolvedValueOnce(provisioningTenant);
       prisma.tenant.update.mockResolvedValueOnce({
@@ -880,8 +913,8 @@ describe('TenantsService', () => {
 
       const [[{ data: update }]] = prisma.tenant.update.mock.calls;
       expect(update.status).toBe(TenantStatus.CANCELLED);
-      // Already-SUCCESS steps stay SUCCESS, others go CANCELLED.
-      expect(update.dbStatus).toBe(StepStatus.SUCCESS);
+      // Already-SUCCESS steps are left alone, others go CANCELLED.
+      expect(update).not.toHaveProperty('dbStatus');
       expect(update.dnsStatus).toBe(StepStatus.CANCELLED);
       expect(update.credentialsStatus).toBe(StepStatus.CANCELLED);
       expect(update.billingStatus).toBe(StepStatus.CANCELLED);
@@ -903,17 +936,58 @@ describe('TenantsService', () => {
       expect(update.cancelReason).toBe('Cancelled by user');
     });
 
-    it('throws BadRequestException when tenant is not in PROVISIONING state', async () => {
+    it.each([
+      TenantStatus.CANCELLED,
+      TenantStatus.DEPROVISIONING,
+      TenantStatus.DELETED,
+    ])('throws BadRequestException for a %s tenant', async (status) => {
       prisma.tenant.findFirst.mockResolvedValueOnce({
         ...provisioningTenant,
-        status: TenantStatus.ACTIVE,
+        status,
       });
 
       await expect(service.cancel('t', 'org-1')).rejects.toBeInstanceOf(
         BadRequestException,
       );
       expect(prisma.tenant.update).not.toHaveBeenCalled();
+      expect(prisma.tenant.updateMany).not.toHaveBeenCalled();
+      expect(amqp.publish).not.toHaveBeenCalled();
     });
+
+    it.each([TenantStatus.ACTIVE, TenantStatus.FAILED])(
+      'deprovisions a %s tenant and records the reason',
+      async (status) => {
+        prisma.tenant.findFirst.mockResolvedValueOnce({
+          ...provisioningTenant,
+          status,
+          schemaName: 'tenant_acme_corp_acme',
+          stripeSubscriptionId: 'sub_1',
+          isTest: false,
+        });
+        prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+
+        await service.cancel('t', 'org-1', 'customer churned');
+
+        const [[{ where, data }]] = prisma.tenant.updateMany.mock.calls;
+        expect(where).toEqual({ id: 't', status });
+        expect(data).toMatchObject({
+          status: TenantStatus.DEPROVISIONING,
+          cancelReason: 'customer churned',
+          teardownBillingStatus: StepStatus.IN_PROGRESS,
+        });
+        expect(data.cancelledAt).toBeInstanceOf(Date);
+        expect(amqp.publish).toHaveBeenCalledWith(
+          'provisioning.direct',
+          'tenant.deprovision',
+          expect.objectContaining({
+            tenantId: 't',
+            reason: 'customer churned',
+            stripeSubscriptionId: 'sub_1',
+          }),
+          { timeout: 5_000 },
+        );
+      },
+    );
 
     it('lets the timeout sweeper cancel any tenant, in an organisation or not', async () => {
       prisma.tenant.findUnique.mockResolvedValueOnce({
@@ -941,21 +1015,359 @@ describe('TenantsService', () => {
     });
   });
 
-  describe('delete', () => {
-    it('emits tenant.deleted before removing the row (so consumers can clean up)', async () => {
-      prisma.tenant.findFirst.mockResolvedValueOnce({
-        id: 't',
-        subdomain: 'acme',
-        organisationId: 'org-1',
-      });
-      prisma.tenant.delete.mockResolvedValueOnce({ id: 't' });
+  describe('deprovisioning', () => {
+    const active = {
+      id: 't',
+      name: 'Acme',
+      subdomain: 'acme',
+      organisationId: 'org-1',
+      isWorkspace: false,
+      isTest: false,
+      status: TenantStatus.ACTIVE,
+      schemaName: 'tenant_acme_corp_acme',
+      stripeSubscriptionId: 'sub_1' as string | null,
+      dbStatus: StepStatus.SUCCESS,
+      dnsStatus: StepStatus.SUCCESS,
+      credentialsStatus: StepStatus.SUCCESS,
+      billingStatus: StepStatus.SUCCESS,
+      notificationStatus: StepStatus.SUCCESS,
+      teardownDbStatus: null as StepStatus | null,
+      teardownCredentialsStatus: null as StepStatus | null,
+      teardownBillingStatus: null as StepStatus | null,
+    };
+
+    beforeEach(() => {
+      prisma.tenant.updateMany.mockResolvedValue({ count: 1 });
+      prisma.tenant.findUnique.mockResolvedValue({ ...active });
+    });
+
+    it('publishes tenant.deprovision and leaves the tenant DEPROVISIONING; nothing is hard-deleted', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({ ...active });
 
       await service.delete('t', 'org-1');
 
-      // Order matters: publish must precede delete.
-      const publishOrder = amqp.publish.mock.invocationCallOrder[0];
-      const deleteOrder = prisma.tenant.delete.mock.invocationCallOrder[0];
-      expect(publishOrder).toBeLessThan(deleteOrder);
+      const [[{ where, data }]] = prisma.tenant.updateMany.mock.calls;
+      expect(where).toEqual({ id: 't', status: TenantStatus.ACTIVE });
+      expect(data).toEqual({
+        status: TenantStatus.DEPROVISIONING,
+        teardownDbStatus: StepStatus.IN_PROGRESS,
+        teardownCredentialsStatus: StepStatus.IN_PROGRESS,
+        teardownBillingStatus: StepStatus.IN_PROGRESS,
+      });
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision',
+        {
+          tenantId: 't',
+          subdomain: 'acme',
+          schemaName: 'tenant_acme_corp_acme',
+          stripeSubscriptionId: 'sub_1',
+          reason: 'Deleted by user',
+        },
+        { timeout: 5_000 },
+      );
+      expect(prisma.tenant.delete).not.toHaveBeenCalled();
+      expect(webhooks.notify).not.toHaveBeenCalled();
+    });
+
+    it('skips billing teardown up front when there is no subscription', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({
+        ...active,
+        stripeSubscriptionId: null,
+      });
+
+      await service.delete('t', 'org-1');
+
+      const [[{ data }]] = prisma.tenant.updateMany.mock.calls;
+      expect(data.teardownBillingStatus).toBe(StepStatus.SKIPPED);
+    });
+
+    it('stops a tenant that is still provisioning before tearing it down', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({
+        ...active,
+        status: TenantStatus.PROVISIONING,
+        dnsStatus: StepStatus.IN_PROGRESS,
+        credentialsStatus: StepStatus.PENDING,
+        billingStatus: StepStatus.PENDING,
+        notificationStatus: StepStatus.PENDING,
+        stripeSubscriptionId: null,
+      });
+
+      await service.delete('t', 'org-1');
+
+      const [[{ data }]] = prisma.tenant.updateMany.mock.calls;
+      expect(data).toMatchObject({
+        status: TenantStatus.DEPROVISIONING,
+        dnsStatus: StepStatus.CANCELLED,
+        credentialsStatus: StepStatus.CANCELLED,
+        notificationStatus: StepStatus.CANCELLED,
+      });
+      expect(data).not.toHaveProperty('dbStatus');
+    });
+
+    it('removes a test tenant at once: DELETED, the webhook, and teardown in the background', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({
+        ...active,
+        isTest: true,
+        stripeSubscriptionId: null,
+      });
+
+      await service.delete('t', 'org-1');
+
+      const [[{ data }]] = prisma.tenant.updateMany.mock.calls;
+      expect(data).toMatchObject({
+        status: TenantStatus.DELETED,
+        teardownBillingStatus: StepStatus.SKIPPED,
+      });
+      expect(data.deletedAt).toBeInstanceOf(Date);
+      // The name is only given back once the schema is dropped.
+      expect(data).not.toHaveProperty('live');
+      expect(webhooks.notify).toHaveBeenCalledWith('t', 'tenant.deleted');
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision',
+        expect.objectContaining({ test: true, stripeSubscriptionId: null }),
+        { timeout: 5_000 },
+      );
+    });
+
+    it('never drops a schema another tenant still uses', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({ ...active });
+      prisma.tenant.count.mockResolvedValueOnce(1);
+
+      await service.delete('t', 'org-1');
+
+      expect(prisma.tenant.count).toHaveBeenCalledWith({
+        where: {
+          id: { not: 't' },
+          schemaName: 'tenant_acme_corp_acme',
+          status: { not: TenantStatus.DELETED },
+        },
+      });
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision',
+        expect.objectContaining({ schemaName: null }),
+        { timeout: 5_000 },
+      );
+    });
+
+    it('drops the legacy tenant_<subdomain> schema for a row from before schema names', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({
+        ...active,
+        schemaName: null,
+      });
+
+      await service.delete('t', 'org-1');
+
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision',
+        expect.objectContaining({ schemaName: 'tenant_acme' }),
+        { timeout: 5_000 },
+      );
+    });
+
+    it('is a no-op on a tenant that is already DELETED', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({
+        ...active,
+        status: TenantStatus.DELETED,
+        teardownDbStatus: StepStatus.SUCCESS,
+        teardownCredentialsStatus: StepStatus.SUCCESS,
+        teardownBillingStatus: StepStatus.SKIPPED,
+      });
+
+      await service.delete('t', 'org-1');
+
+      expect(prisma.tenant.updateMany).not.toHaveBeenCalled();
+      expect(amqp.publish).not.toHaveBeenCalled();
+    });
+
+    it('resumes a teardown that failed: the failed part goes back to IN_PROGRESS and is republished', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({
+        ...active,
+        status: TenantStatus.DEPROVISIONING,
+        teardownDbStatus: StepStatus.SUCCESS,
+        teardownCredentialsStatus: StepStatus.SUCCESS,
+        teardownBillingStatus: StepStatus.FAILED,
+      });
+
+      await service.delete('t', 'org-1');
+
+      const [[{ where, data }]] = prisma.tenant.updateMany.mock.calls;
+      expect(where).toEqual({ id: 't', status: TenantStatus.DEPROVISIONING });
+      expect(data).toEqual({ teardownBillingStatus: StepStatus.IN_PROGRESS });
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision',
+        expect.anything(),
+        { timeout: 5_000 },
+      );
+      expect(prisma.eventLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'tenant.deprovision.retried',
+        }) as unknown,
+      });
+    });
+
+    it('starts one teardown when two DELETEs race', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({ ...active });
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await service.delete('t', 'org-1');
+
+      expect(amqp.publish).not.toHaveBeenCalled();
+    });
+
+    it('answers 503 when tenant.deprovision cannot be published, leaving it resumable', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({ ...active });
+      amqp.publish.mockRejectedValueOnce(new Error('broker down'));
+
+      await expect(service.delete('t', 'org-1')).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
+    });
+
+    describe('results', () => {
+      it('records each part and moves the tenant to DELETED once, when the last one lands', async () => {
+        type Row = Record<string, unknown>;
+        const row: Row = {
+          id: 't',
+          status: TenantStatus.DEPROVISIONING,
+          live: true,
+          teardownDbStatus: StepStatus.IN_PROGRESS,
+          teardownCredentialsStatus: StepStatus.IN_PROGRESS,
+          teardownBillingStatus: StepStatus.SKIPPED,
+        };
+        const matches = (where: Row) =>
+          Object.entries(where).every(([field, cond]) => {
+            const c = cond as { in?: unknown[] };
+            return (
+              c && typeof c === 'object' && 'in' in c ? c.in! : [cond]
+            ).includes(row[field]);
+          });
+        prisma.tenant.updateMany.mockImplementation(
+          ({ where = {}, data }: Prisma.TenantUpdateManyArgs) => {
+            if (!matches(where as Row)) {
+              return Promise.resolve({ count: 0 });
+            }
+            Object.assign(row, data);
+            return Promise.resolve({ count: 1 });
+          },
+        );
+
+        await service.handleDeprovisionDone({
+          tenantId: 't',
+          part: 'db',
+          skipped: false,
+        });
+        expect(row.status).toBe(TenantStatus.DEPROVISIONING);
+        expect(webhooks.notify).not.toHaveBeenCalled();
+
+        await service.handleDeprovisionDone({
+          tenantId: 't',
+          part: 'credentials',
+          skipped: true,
+        });
+        expect(row).toMatchObject({
+          status: TenantStatus.DELETED,
+          live: null,
+          teardownDbStatus: StepStatus.SUCCESS,
+          teardownCredentialsStatus: StepStatus.SKIPPED,
+        });
+        expect(row.deletedAt).toBeInstanceOf(Date);
+        expect(webhooks.notify).toHaveBeenCalledWith('t', 'tenant.deleted');
+
+        // A replayed result changes nothing and sends no second webhook.
+        await service.handleDeprovisionDone({
+          tenantId: 't',
+          part: 'credentials',
+          skipped: true,
+        });
+        expect(webhooks.notify).toHaveBeenCalledTimes(1);
+      });
+
+      it('gives a test tenant its name back once its schema is dropped', async () => {
+        prisma.tenant.updateMany
+          .mockResolvedValueOnce({ count: 1 })
+          .mockResolvedValueOnce({ count: 0 })
+          .mockResolvedValueOnce({ count: 1 });
+
+        await service.handleDeprovisionDone({
+          tenantId: 't',
+          part: 'db',
+          skipped: false,
+        });
+
+        expect(prisma.tenant.updateMany).toHaveBeenLastCalledWith({
+          where: {
+            id: 't',
+            status: TenantStatus.DELETED,
+            live: true,
+            teardownDbStatus: { in: [StepStatus.SUCCESS, StepStatus.SKIPPED] },
+          },
+          data: { live: null },
+        });
+      });
+
+      it('logs a Warning when something was left in place', async () => {
+        await service.handleDeprovisionDone({
+          tenantId: 't',
+          part: 'billing',
+          skipped: true,
+          warning: 'Stripe is no longer connected: sub_1 was left in place',
+        });
+
+        expect(prisma.eventLog.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            eventType: 'tenant.billing.cancelled.warning',
+            status: 'Warning',
+          }) as unknown,
+        });
+      });
+
+      it('ignores a result for a tenant that is not being removed', async () => {
+        prisma.tenant.updateMany.mockResolvedValueOnce({ count: 0 });
+
+        await service.handleDeprovisionDone({
+          tenantId: 't',
+          part: 'db',
+          skipped: false,
+        });
+
+        expect(prisma.tenant.updateMany).toHaveBeenCalledTimes(1);
+        expect(prisma.eventLog.create).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['db-provisioner.deprovision.failed', 'teardownDbStatus'],
+        ['credentials.deprovision.failed', 'teardownCredentialsStatus'],
+        ['billing.deprovision.failed', 'teardownBillingStatus'],
+      ])(
+        'marks the teardown FAILED for dead letter %s, leaving the tenant DEPROVISIONING',
+        async (routingKey, column) => {
+          await service.handleDeadLetter(
+            { tenantId: 't' },
+            { fields: { routingKey }, properties: {} },
+          );
+
+          const [[{ where, data }]] = prisma.tenant.updateMany.mock.calls;
+          expect(where).toEqual({
+            id: 't',
+            status: {
+              in: [TenantStatus.DEPROVISIONING, TenantStatus.DELETED],
+            },
+          });
+          expect(data).toEqual({ [column]: StepStatus.FAILED });
+          expect(webhooks.notify).not.toHaveBeenCalled();
+          expect(prisma.eventLog.create).toHaveBeenCalledWith({
+            data: expect.objectContaining({
+              eventType: 'tenant.deprovision.failed',
+              status: 'Error',
+            }) as unknown,
+          });
+        },
+      );
     });
   });
 });

@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { errorMessage } from '../common/error-message';
@@ -17,6 +18,8 @@ import {
 } from '.prisma/tenant-client';
 import type {
   ProvisioningCompletePayload,
+  TenantDeprovisionDonePayload,
+  TenantDeprovisionPayload,
   TenantFailedPayload,
   TenantRequestedPayload,
   TenantDbReadyPayload,
@@ -28,15 +31,56 @@ import {
   DEAD_LETTER_EXCHANGE,
   DEAD_LETTER_ROUTING_KEYS,
   STEP_BY_DEAD_LETTER_KEY,
+  TEARDOWN_BY_DEAD_LETTER_KEY,
+  TEARDOWN_STEP_BY_PART,
   describeDeadLetter,
   type DeadLetterMessage,
   type ProvisioningStep,
+  type TeardownStep,
 } from './dead-letters';
 import { WebhookService } from '../webhooks/webhook.service';
-import { schemaNameFor, withAddress } from './address';
+import { legacySchemaName, schemaNameFor, withAddress } from './address';
 import { QuotasService } from './quotas.service';
 
 const PUBLISH_TIMEOUT_MS = 5_000;
+
+const PROVISIONING_STEPS: ProvisioningStep[] = [
+  'dbStatus',
+  'dnsStatus',
+  'credentialsStatus',
+  'billingStatus',
+  'notificationStatus',
+];
+const TEARDOWN_STEPS: TeardownStep[] = Object.values(TEARDOWN_STEP_BY_PART);
+const TEARDOWN_FINISHED: StepStatus[] = [
+  StepStatus.SUCCESS,
+  StepStatus.SKIPPED,
+];
+
+const TEARDOWN_EVENT: Record<TenantDeprovisionDonePayload['part'], string> = {
+  db: 'tenant.schema.dropped',
+  credentials: 'tenant.credentials.revoked',
+  billing: 'tenant.billing.cancelled',
+};
+
+// Steps that have not finished stop where they are; finished ones keep their status.
+function cancelOpenSteps(tenant: Tenant): Prisma.TenantUpdateManyMutationInput {
+  const data: Prisma.TenantUpdateManyMutationInput = {};
+  for (const step of PROVISIONING_STEPS) {
+    if (
+      tenant[step] === StepStatus.PENDING ||
+      tenant[step] === StepStatus.IN_PROGRESS
+    ) {
+      data[step] = StepStatus.CANCELLED;
+    }
+  }
+  return data;
+}
+
+const teardownUnfinished = (tenant: Tenant) =>
+  TEARDOWN_STEPS.some(
+    (step) => !tenant[step] || !TEARDOWN_FINISHED.includes(tenant[step]),
+  );
 
 // Who a tenant is created for: the company, and the user who clicked (none for an API key).
 export interface TenantCreator {
@@ -371,15 +415,24 @@ export class TenantsService {
     // notification-service says whether the company was emailed; nothing sent is SKIPPED.
     const emailed = payload.notification?.sent !== false;
     try {
-      await this.prisma.tenant.update({
+      // FAILED stays eligible so a replayed step can finish the saga. A cancelled, removed
+      // or removing tenant is never brought back by a late message.
+      const { count } = await this.prisma.tenant.updateMany({
         where: {
           id: payload.tenantId,
+          status: { in: [TenantStatus.PROVISIONING, TenantStatus.FAILED] },
         },
         data: {
           status: TenantStatus.ACTIVE,
           notificationStatus: emailed ? StepStatus.SUCCESS : StepStatus.SKIPPED,
         },
       });
+      if (count === 0) {
+        this.logger.warn(
+          `provisioning.complete for tenant ${payload.tenantId} ignored: tenant is gone, cancelled or being removed`,
+        );
+        return;
+      }
 
       await this.logEvent(
         payload.tenantId,
@@ -417,6 +470,11 @@ export class TenantsService {
     const { routingKey } = message.fields;
     const step = STEP_BY_DEAD_LETTER_KEY[routingKey];
     const tenantId = payload?.tenantId;
+    const teardown = TEARDOWN_BY_DEAD_LETTER_KEY[routingKey];
+    if (teardown && tenantId) {
+      await this.failTeardown(tenantId, teardown, message);
+      return;
+    }
     if (!step || !tenantId) {
       this.logger.warn(
         `Ignoring dead letter on ${routingKey}: no step or tenantId ${JSON.stringify(payload)}`,
@@ -441,7 +499,11 @@ export class TenantsService {
     const [baseDomain, tenants] = await Promise.all([
       this.baseDomainOf(organisationId),
       this.prisma.tenant.findMany({
-        where: inOrganisation(organisationId),
+        // Removed customers leave the list; GET /tenants/:id still answers with DELETED.
+        where: {
+          ...inOrganisation(organisationId),
+          status: { not: TenantStatus.DELETED },
+        },
         include: { plan: true },
         orderBy: { createdAt: 'desc' },
       }),
@@ -510,12 +572,17 @@ export class TenantsService {
     });
   }
 
+  // From PROVISIONING this stops the saga (CANCELLED). From ACTIVE or FAILED the customer is
+  // churning, so everything provisioned is torn down and the tenant ends DELETED.
   async cancel(id: string, organisationId: string, reason?: string) {
-    const cancelled = await this.cancelTenant(
-      await this.findInOrganisation(id, organisationId),
-      reason || 'Cancelled by user',
-    );
-    return withAddress(cancelled, await this.baseDomainOf(organisationId));
+    const tenant = await this.findInOrganisation(id, organisationId);
+    const cancelReason = reason || 'Cancelled by user';
+    const result =
+      tenant.status === TenantStatus.ACTIVE ||
+      tenant.status === TenantStatus.FAILED
+        ? await this.deprovision(tenant, cancelReason, true)
+        : await this.cancelTenant(tenant, cancelReason);
+    return withAddress(result, await this.baseDomainOf(organisationId));
   }
 
   // The timeout sweeper acts for no user, so it looks the tenant up unscoped.
@@ -535,38 +602,13 @@ export class TenantsService {
       );
     }
 
-    // Update tenant status and all pending/in-progress steps to CANCELLED
     const updatedTenant = await this.prisma.tenant.update({
       where: { id },
       data: {
         status: TenantStatus.CANCELLED,
         cancelledAt: new Date(),
         cancelReason,
-        dbStatus:
-          tenant.dbStatus === StepStatus.PENDING ||
-          tenant.dbStatus === StepStatus.IN_PROGRESS
-            ? StepStatus.CANCELLED
-            : tenant.dbStatus,
-        dnsStatus:
-          tenant.dnsStatus === StepStatus.PENDING ||
-          tenant.dnsStatus === StepStatus.IN_PROGRESS
-            ? StepStatus.CANCELLED
-            : tenant.dnsStatus,
-        credentialsStatus:
-          tenant.credentialsStatus === StepStatus.PENDING ||
-          tenant.credentialsStatus === StepStatus.IN_PROGRESS
-            ? StepStatus.CANCELLED
-            : tenant.credentialsStatus,
-        billingStatus:
-          tenant.billingStatus === StepStatus.PENDING ||
-          tenant.billingStatus === StepStatus.IN_PROGRESS
-            ? StepStatus.CANCELLED
-            : tenant.billingStatus,
-        notificationStatus:
-          tenant.notificationStatus === StepStatus.PENDING ||
-          tenant.notificationStatus === StepStatus.IN_PROGRESS
-            ? StepStatus.CANCELLED
-            : tenant.notificationStatus,
+        ...cancelOpenSteps(tenant),
       },
       include: { plan: true },
     });
@@ -588,25 +630,247 @@ export class TenantsService {
 
   async delete(id: string, organisationId: string) {
     const tenant = await this.findInOrganisation(id, organisationId);
+    const removed = await this.deprovision(tenant, 'Deleted by user');
+    return withAddress(removed, await this.baseDomainOf(organisationId));
+  }
 
-    // Publish deletion event for other services to clean up resources (schemas, DNS, credentials, etc.)
-    await this.amqpConnection.publish('provisioning.direct', 'tenant.deleted', {
-      tenantId: id,
-      subdomain: tenant.subdomain,
-      schemaName: tenant.schemaName,
+  // Starts (or resumes) the teardown saga. Safe to call again: a finished removal is
+  // returned as it is, an unfinished one is published again for the parts still open.
+  private async deprovision(
+    tenant: Tenant,
+    reason: string,
+    cancelled = false,
+  ): Promise<Tenant> {
+    const { id } = tenant;
+    const resuming =
+      tenant.status === TenantStatus.DEPROVISIONING ||
+      tenant.status === TenantStatus.DELETED;
+    if (tenant.status === TenantStatus.DELETED && !teardownUnfinished(tenant)) {
+      return this.reload(id);
+    }
+
+    const data: Prisma.TenantUpdateManyMutationInput = {};
+    if (resuming) {
+      // A teardown that dead-lettered gets another go.
+      for (const step of TEARDOWN_STEPS) {
+        if (tenant[step] === StepStatus.FAILED || !tenant[step]) {
+          data[step] = StepStatus.IN_PROGRESS;
+        }
+      }
+    } else {
+      const now = new Date();
+      // A test tenant is removed at once: it reads DELETED while the workers clean up.
+      Object.assign(data, cancelOpenSteps(tenant), {
+        status: tenant.isTest
+          ? TenantStatus.DELETED
+          : TenantStatus.DEPROVISIONING,
+        ...(tenant.isTest ? { deletedAt: now } : {}),
+        ...(cancelled ? { cancelledAt: now, cancelReason: reason } : {}),
+        teardownDbStatus: StepStatus.IN_PROGRESS,
+        teardownCredentialsStatus: StepStatus.IN_PROGRESS,
+        teardownBillingStatus:
+          tenant.stripeSubscriptionId && !tenant.isTest
+            ? StepStatus.IN_PROGRESS
+            : StepStatus.SKIPPED,
+      });
+    }
+
+    // Only from the status we read, so two concurrent DELETEs start one teardown.
+    const { count } = await this.prisma.tenant.updateMany({
+      where: { id, status: tenant.status },
+      data,
     });
+    if (count === 0) {
+      return this.reload(id);
+    }
 
-    await this.logEvent(id, 'tenant.deleted', 'Success', {
-      subdomain: tenant.subdomain,
-      schema: tenant.schemaName,
+    const payload = await this.deprovisionPayload(tenant, reason);
+    await this.logEvent(
+      id,
+      resuming ? 'tenant.deprovision.retried' : 'tenant.deprovision.requested',
+      'Success',
+      {
+        reason,
+        schema: payload.schemaName,
+        subscription: payload.stripeSubscriptionId,
+        test: tenant.isTest,
+      },
+    );
+    if (!resuming && tenant.isTest) {
+      await this.logEvent(id, 'tenant.deleted', 'Success', { reason });
+      this.webhooks.notify(id, 'tenant.deleted');
+    }
+
+    try {
+      await this.amqpConnection.publish(
+        'provisioning.direct',
+        'tenant.deprovision',
+        payload,
+        { timeout: PUBLISH_TIMEOUT_MS },
+      );
+    } catch (error) {
+      this.logger.error(
+        `Could not publish tenant.deprovision for tenant ${id}: ${errorMessage(error)}`,
+      );
+      throw new ServiceUnavailableException(
+        'Removal started but could not be queued. Remove the customer again in a moment to retry.',
+      );
+    }
+    this.logger.log(
+      `Tenant ${id} (${tenant.subdomain}) ${resuming ? 'teardown retried' : 'deprovisioning'}: ${reason}`,
+    );
+    return this.reload(id);
+  }
+
+  private async deprovisionPayload(
+    tenant: Tenant,
+    reason: string,
+  ): Promise<TenantDeprovisionPayload> {
+    const schema = tenant.schemaName ?? legacySchemaName(tenant.subdomain);
+    // Schema names truncate the organisation handle, so two tenants can in theory share
+    // one. Never drop a schema another tenant still uses.
+    const sharers = await this.prisma.tenant.count({
+      where: {
+        id: { not: tenant.id },
+        schemaName: schema,
+        status: { not: TenantStatus.DELETED },
+      },
     });
+    if (sharers > 0) {
+      this.logger.warn(
+        `Not dropping schema ${schema} for tenant ${tenant.id}: ${sharers} other tenant(s) use it`,
+      );
+    }
+    return {
+      tenantId: tenant.id,
+      subdomain: tenant.subdomain,
+      schemaName: sharers > 0 ? null : schema,
+      stripeSubscriptionId: tenant.isTest ? null : tenant.stripeSubscriptionId,
+      reason,
+      ...(tenant.isTest ? { test: true } : {}),
+    };
+  }
 
-    // Events are cascade deleted due to Prisma schema onDelete: Cascade
-    const deletedTenant = await this.prisma.tenant.delete({
+  private async reload(id: string) {
+    const tenant = await this.prisma.tenant.findUnique({
       where: { id },
+      include: { plan: true },
     });
+    if (!tenant) {
+      throw new NotFoundException(`Tenant ${id} not found`);
+    }
+    return tenant;
+  }
 
-    this.logger.log(`Tenant ${id} (${tenant.subdomain}) deleted`);
-    return withAddress(deletedTenant, await this.baseDomainOf(organisationId));
+  @RabbitSubscribe({
+    exchange: 'provisioning.direct',
+    routingKey: 'tenant.deprovision.done',
+    queue: 'tenant-service-deprovision-done-queue',
+    queueOptions: { durable: true },
+  })
+  public async handleDeprovisionDone(payload: TenantDeprovisionDonePayload) {
+    const step = TEARDOWN_STEP_BY_PART[payload.part];
+    if (!step || !payload.tenantId) {
+      this.logger.warn(
+        `Ignoring tenant.deprovision.done: ${JSON.stringify(payload)}`,
+      );
+      return;
+    }
+    const data: Prisma.TenantUpdateManyMutationInput = {};
+    data[step] = payload.skipped ? StepStatus.SKIPPED : StepStatus.SUCCESS;
+    const { count } = await this.prisma.tenant.updateMany({
+      where: {
+        id: payload.tenantId,
+        status: {
+          in: [TenantStatus.DEPROVISIONING, TenantStatus.DELETED],
+        },
+      },
+      data,
+    });
+    if (count === 0) {
+      this.logger.warn(
+        `Teardown ${payload.part} for tenant ${payload.tenantId} ignored: tenant is gone or not being removed`,
+      );
+      return;
+    }
+    await this.logEvent(
+      payload.tenantId,
+      TEARDOWN_EVENT[payload.part],
+      'Success',
+      payload,
+    );
+    if (payload.warning) {
+      await this.logEvent(
+        payload.tenantId,
+        `${TEARDOWN_EVENT[payload.part]}.warning`,
+        'Warning',
+        { part: payload.part, warning: payload.warning },
+      );
+    }
+    await this.finishDeprovision(payload.tenantId);
+  }
+
+  // Whichever result lands last moves the tenant to DELETED; the where clause makes it once.
+  private async finishDeprovision(tenantId: string) {
+    const finished = { in: TEARDOWN_FINISHED };
+    const { count } = await this.prisma.tenant.updateMany({
+      where: {
+        id: tenantId,
+        status: TenantStatus.DEPROVISIONING,
+        teardownDbStatus: finished,
+        teardownCredentialsStatus: finished,
+        teardownBillingStatus: finished,
+      },
+      data: { status: TenantStatus.DELETED, deletedAt: new Date(), live: null },
+    });
+    if (count > 0) {
+      await this.logEvent(tenantId, 'tenant.deleted', 'Success', {});
+      this.logger.log(`Tenant ${tenantId} is DELETED`);
+      this.webhooks.notify(tenantId, 'tenant.deleted');
+    }
+    // A test tenant read DELETED at once; it gives its name back once its schema is gone,
+    // so a new tenant with the same subdomain never gets a schema that is being dropped.
+    await this.prisma.tenant.updateMany({
+      where: {
+        id: tenantId,
+        status: TenantStatus.DELETED,
+        live: true,
+        teardownDbStatus: finished,
+      },
+      data: { live: null },
+    });
+  }
+
+  private async failTeardown(
+    tenantId: string,
+    part: TenantDeprovisionDonePayload['part'],
+    message: DeadLetterMessage,
+  ) {
+    const data: Prisma.TenantUpdateManyMutationInput = {};
+    data[TEARDOWN_STEP_BY_PART[part]] = StepStatus.FAILED;
+    const { count } = await this.prisma.tenant.updateMany({
+      where: {
+        id: tenantId,
+        status: {
+          in: [TenantStatus.DEPROVISIONING, TenantStatus.DELETED],
+        },
+      },
+      data,
+    });
+    if (count === 0) {
+      this.logger.warn(
+        `Teardown dead letter for tenant ${tenantId} ignored: tenant is gone or not being removed`,
+      );
+      return;
+    }
+    const error = describeDeadLetter(message);
+    await this.logEvent(tenantId, 'tenant.deprovision.failed', 'Error', {
+      part,
+      error,
+      deadLetterKey: message.fields.routingKey,
+    });
+    this.logger.warn(
+      `Teardown ${part} failed for tenant ${tenantId}: ${error}`,
+    );
   }
 }

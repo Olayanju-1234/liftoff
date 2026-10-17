@@ -380,7 +380,11 @@ export const WEBHOOK_SIGNATURE_HEADER = 'x-liftoff-signature';
 export const WEBHOOK_EVENT_HEADER = 'x-liftoff-event';
 export const WEBHOOK_DELIVERY_HEADER = 'x-liftoff-delivery';
 
-export type TenantWebhookEvent = 'tenant.active' | 'tenant.failed';
+export type TenantWebhookEvent =
+  | 'tenant.active'
+  | 'tenant.failed'
+  // Every resource is torn down and the tenant reads DELETED.
+  | 'tenant.deleted';
 
 export interface TenantWebhookPayload<TTenant = unknown> {
   event: TenantWebhookEvent;
@@ -469,6 +473,37 @@ export interface ProvisioningCompletePayload {
   notification?: NotificationOutcome;
 }
 
+// ============================================================================
+// Deprovisioning (RabbitMQ)
+// ============================================================================
+
+// Published by tenant-service as `tenant.deprovision` on DELETE /tenants/:id, or on cancel
+// from ACTIVE/FAILED. db-provisioner, credentials and billing each tear their part down
+// and answer with `tenant.deprovision.done`. Replays are safe: every teardown is idempotent.
+export interface TenantDeprovisionPayload extends TestModeFlag {
+  tenantId: string;
+  subdomain: string;
+  // The schema to drop; null when there is nothing to drop (another live tenant shares it).
+  schemaName: string | null;
+  // The subscription to cancel in the company's Stripe; null when billing created none.
+  stripeSubscriptionId: string | null;
+  reason: string;
+}
+
+export const DEPROVISION_PARTS = ['db', 'credentials', 'billing'] as const;
+export type DeprovisionPart = (typeof DEPROVISION_PARTS)[number];
+
+export interface TenantDeprovisionDonePayload {
+  tenantId: string;
+  part: DeprovisionPart;
+  // True when there was nothing to tear down (no schema, no key, no subscription).
+  skipped: boolean;
+  detail?: string;
+  // Something was left in place that the company should know about, e.g. a subscription
+  // that could not be cancelled because Stripe was disconnected. Logged as a Warning.
+  warning?: string;
+}
+
 // Published by tenant-service on provisioning.direct as `tenant.failed` whenever a step
 // is marked FAILED (dead letter or timeout), so notification-service can tell the company.
 export interface TenantFailedPayload {
@@ -492,6 +527,8 @@ export interface InternalBillingConfig {
   tenantId: string;
   organisationId: string;
   test: boolean;
+  // What billing created for this tenant, if anything; cancelled on deprovision.
+  stripeSubscriptionId: string | null;
   // False until the company has stored a Stripe key; the billing step is then SKIPPED.
   configured: boolean;
   stripeSecretKey: string | null;

@@ -8,6 +8,7 @@ import type {
   InternalBillingConfig,
   TenantBillingActivePayload,
   TenantCredentialsReadyPayload,
+  TenantDeprovisionPayload,
 } from '@liftoff/shared-types';
 import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -25,6 +26,8 @@ const mockStripe = {
       Promise<Pick<Stripe.Subscription, 'id' | 'status' | 'trial_end'>>,
       [Stripe.SubscriptionCreateParams]
     >(),
+    cancel: jest.fn<Promise<Pick<Stripe.Subscription, 'status'>>, [string]>(),
+    retrieve: jest.fn<Promise<Pick<Stripe.Subscription, 'status'>>, [string]>(),
   },
 };
 
@@ -47,6 +50,7 @@ describe('AppService', () => {
     tenantId: 'tenant-1',
     organisationId: 'org-1',
     test: false,
+    stripeSubscriptionId: null,
     configured: true,
     stripeSecretKey: 'sk_test_orgkey12345',
     prices: {
@@ -307,5 +311,157 @@ describe('AppService', () => {
 
     expect(result).toBeInstanceOf(Nack);
     expect((result as Nack).requeue).toBe(false);
+  });
+
+  describe('tenant.deprovision', () => {
+    const deprovision: TenantDeprovisionPayload = {
+      tenantId: 'tenant-1',
+      subdomain: 'acme',
+      schemaName: 'tenant_acme',
+      stripeSubscriptionId: 'sub_123',
+      reason: 'Deleted by user',
+    };
+
+    beforeEach(() => {
+      mockStripe.subscriptions.cancel
+        .mockReset()
+        .mockResolvedValue({ status: 'canceled' });
+      mockStripe.subscriptions.retrieve.mockReset();
+    });
+
+    it('subscribes on its own queue with its own dead-letter key', () => {
+      const handler: unknown = Object.getOwnPropertyDescriptor(
+        AppService.prototype,
+        'handleTenantDeprovision',
+      )?.value;
+      expect(
+        Reflect.getMetadata(RABBIT_HANDLER, handler as object),
+      ).toMatchObject({
+        routingKey: 'tenant.deprovision',
+        queue: 'billing-deprovision-queue',
+        queueOptions: {
+          deadLetterExchange: 'dlx.provisioning',
+          deadLetterRoutingKey: 'billing.deprovision.failed',
+        },
+      });
+    });
+
+    it("cancels the subscription in the company's Stripe and reports it", async () => {
+      await expect(
+        service.handleTenantDeprovision(deprovision),
+      ).resolves.toBeUndefined();
+
+      expect(mockStripeConstructor).toHaveBeenCalledWith(
+        'sk_test_orgkey12345',
+        expect.anything(),
+      );
+      expect(mockStripe.subscriptions.cancel).toHaveBeenCalledWith('sub_123');
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision.done',
+        {
+          tenantId: 'tenant-1',
+          part: 'billing',
+          skipped: false,
+          detail: 'sub_123',
+        },
+      );
+    });
+
+    it('reports skipped without any lookup when there is no subscription', async () => {
+      await service.handleTenantDeprovision({
+        ...deprovision,
+        stripeSubscriptionId: null,
+      });
+
+      expect(internalApi.billingConfig).not.toHaveBeenCalled();
+      expect(mockStripeConstructor).not.toHaveBeenCalled();
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision.done',
+        expect.objectContaining({ part: 'billing', skipped: true }),
+      );
+    });
+
+    it('treats an already-cancelled subscription as done on replay', async () => {
+      mockStripe.subscriptions.cancel.mockRejectedValueOnce(
+        new Error('already canceled'),
+      );
+      mockStripe.subscriptions.retrieve.mockResolvedValueOnce({
+        status: 'canceled',
+      });
+
+      await expect(
+        service.handleTenantDeprovision(deprovision),
+      ).resolves.toBeUndefined();
+
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision.done',
+        expect.objectContaining({ part: 'billing', skipped: false }),
+      );
+    });
+
+    it('treats a subscription Stripe no longer knows as skipped', async () => {
+      mockStripe.subscriptions.cancel.mockRejectedValueOnce(
+        Object.assign(new Error('No such subscription'), {
+          code: 'resource_missing',
+        }),
+      );
+
+      await service.handleTenantDeprovision(deprovision);
+
+      expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalled();
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision.done',
+        expect.objectContaining({ part: 'billing', skipped: true }),
+      );
+    });
+
+    it('lets the removal finish with a warning when Stripe was disconnected since', async () => {
+      internalApi.billingConfig.mockResolvedValueOnce({
+        ...connected,
+        configured: false,
+        stripeSecretKey: null,
+      });
+
+      await service.handleTenantDeprovision(deprovision);
+
+      expect(mockStripeConstructor).not.toHaveBeenCalled();
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision.done',
+        expect.objectContaining({
+          part: 'billing',
+          skipped: true,
+          warning: expect.stringContaining('sub_123') as unknown,
+        }),
+      );
+    });
+
+    it('nacks without requeue when Stripe refuses and the subscription is still live', async () => {
+      mockStripe.subscriptions.cancel.mockRejectedValueOnce(
+        new Error('rate limited'),
+      );
+      mockStripe.subscriptions.retrieve.mockResolvedValueOnce({
+        status: 'active',
+      });
+
+      const result = await service.handleTenantDeprovision(deprovision);
+
+      expect(result).toBeInstanceOf(Nack);
+      expect((result as Nack).requeue).toBe(false);
+      expect(amqp.publish).not.toHaveBeenCalled();
+    });
+
+    it('nacks without requeue when tenant-service cannot be reached', async () => {
+      internalApi.billingConfig.mockRejectedValueOnce(new Error('503'));
+
+      const result = await service.handleTenantDeprovision(deprovision);
+
+      expect(result).toBeInstanceOf(Nack);
+      expect(mockStripe.subscriptions.cancel).not.toHaveBeenCalled();
+    });
   });
 });

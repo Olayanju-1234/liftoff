@@ -18,7 +18,12 @@ export class InternalService {
   async billingConfig(tenantId: string): Promise<InternalBillingConfig> {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id: tenantId },
-      select: { id: true, organisationId: true, isTest: true },
+      select: {
+        id: true,
+        organisationId: true,
+        isTest: true,
+        stripeSubscriptionId: true,
+      },
     });
     if (!tenant) {
       throw new NotFoundException(`Tenant ${tenantId} not found`);
@@ -29,6 +34,7 @@ export class InternalService {
         tenantId: tenant.id,
         organisationId: '',
         test: tenant.isTest,
+        stripeSubscriptionId: tenant.stripeSubscriptionId,
         configured: false,
         stripeSecretKey: null,
         prices: { starter: null, pro: null, enterprise: null },
@@ -41,6 +47,7 @@ export class InternalService {
       tenantId: tenant.id,
       organisationId: tenant.organisationId,
       test: tenant.isTest,
+      stripeSubscriptionId: tenant.stripeSubscriptionId,
       ...stripe,
     };
   }
