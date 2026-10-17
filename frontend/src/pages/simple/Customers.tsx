@@ -100,7 +100,7 @@ export default function Customers() {
                     <span className="label">Customer</span>
                     <span className="label">Status</span>
                     <span className="label">Address</span>
-                    <span className="label">Plan</span>
+                    <span className="label">Customer plan</span>
                     <span className="label">Added</span>
                     <span />
                 </div>

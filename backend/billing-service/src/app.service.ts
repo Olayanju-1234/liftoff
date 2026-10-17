@@ -47,7 +47,8 @@ export class AppService {
         return await this.skipBilling(payload, 'not-connected');
       }
 
-      const plan = payload.planId?.toLowerCase() as sharedTypes.PlanId;
+      // Keyed by the company's own customer plan ids; set under Settings → Billing.
+      const plan = payload.planId?.toLowerCase() ?? '';
       const priceId = config.prices[plan];
       if (!priceId) {
         throw new Error(

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { ApiKey, CreatedApiKey, Tenant, EventLog, Organisation, PlanId, PublicTenantStatus, UpdatedOrganisation, UserSettings } from './types';
+import type { ApiKey, CreatedApiKey, CustomerPlan, Tenant, EventLog, Organisation, PublicTenantStatus, UpdatedOrganisation, UserSettings } from './types';
 import type { SessionUser } from './session';
 
 const api = axios.create({
@@ -61,7 +61,10 @@ export interface OrganisationPatch {
     rotateWebhookSecret?: boolean;
     // The company's Stripe secret key; null disconnects. Never comes back in a response.
     stripeSecretKey?: string | null;
-    stripePrices?: Partial<Record<PlanId, string | null>> | null;
+    // Merged by plan id; null for a plan clears its price, null for the whole field clears them all.
+    stripePrices?: Record<string, string | null> | null;
+    // The company's customer plans; null goes back to the defaults.
+    plans?: CustomerPlan[] | null;
     // Hides the finished onboarding checklist for good.
     dismissOnboarding?: boolean;
 }

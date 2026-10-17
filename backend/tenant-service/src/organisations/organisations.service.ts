@@ -6,11 +6,17 @@ import {
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { Prisma } from '.prisma/tenant-client';
-import { PLAN_IDS, type StripePrices } from '@liftoff/shared-types';
+import type { CustomerPlan, StripePrices } from '@liftoff/shared-types';
 import { PrismaService } from '../prisma.service';
 import { parseWebhookUrl } from '../webhooks/destination';
 import { UpdateOrganisationDto } from './dto/update-organisation.dto';
 import { OrgSecretsService } from './org-secrets.service';
+import {
+  effectivePlans,
+  pricesFor,
+  storedPrices,
+  toStoredPlans,
+} from './customer-plans';
 
 export interface OrganisationResponse {
   id: string;
@@ -23,6 +29,8 @@ export interface OrganisationResponse {
   baseDomain: string | null;
   // True once a Stripe key is stored. The key itself is never in a response.
   stripeConfigured: boolean;
+  // The company's customer plans (the defaults when it defined none) and a price per plan.
+  plans: CustomerPlan[];
   stripePrices: StripePrices;
   // Quotas on POST /tenants. Raised by hand for a company that needs more.
   limits: { maxActiveTenants: number; maxProvisionsPerDay: number };
@@ -45,6 +53,7 @@ const publicFields = {
   baseDomain: true,
   stripeSecretKeyEncrypted: true,
   stripePrices: true,
+  plans: true,
   maxActiveTenants: true,
   maxProvisionsPerDay: true,
   onboardingDismissedAt: true,
@@ -59,20 +68,6 @@ type OrganisationRow = Prisma.OrganisationGetPayload<{
 export const newWebhookSecret = () =>
   `whsec_${randomBytes(32).toString('base64url')}`;
 
-// The stored JSON is whatever an earlier PUT wrote; only known plans with string ids count.
-export function toStripePrices(raw: Prisma.JsonValue | null): StripePrices {
-  const source =
-    raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : {};
-  return Object.fromEntries(
-    PLAN_IDS.map((plan) => {
-      const value = source[plan];
-      return [plan, typeof value === 'string' && value ? value : null];
-    }),
-  ) as StripePrices;
-}
-
 @Injectable()
 export class OrganisationsService {
   private readonly logger = new Logger(OrganisationsService.name);
@@ -83,6 +78,14 @@ export class OrganisationsService {
   ) {}
 
   async get(organisationId: string): Promise<OrganisationResponse> {
+    return (await this.load(organisationId)).response;
+  }
+
+  // The update path needs the stored price map as well as the per-plan view.
+  private async load(organisationId: string): Promise<{
+    response: OrganisationResponse;
+    stored: Record<string, string>;
+  }> {
     const organisation = await this.prisma.organisation.findUnique({
       where: { id: organisationId },
       select: publicFields,
@@ -90,14 +93,17 @@ export class OrganisationsService {
     if (!organisation) {
       throw new NotFoundException('Organisation not found');
     }
-    return this.toResponse(organisation);
+    return {
+      response: this.toResponse(organisation),
+      stored: storedPrices(organisation.stripePrices),
+    };
   }
 
   async update(
     organisationId: string,
     dto: UpdateOrganisationDto,
   ): Promise<UpdatedOrganisation> {
-    const current = await this.get(organisationId);
+    const { response: current, stored } = await this.load(organisationId);
     const data: Prisma.OrganisationUpdateInput = {};
     if (dto.name !== undefined) {
       data.name = dto.name;
@@ -138,16 +144,22 @@ export class OrganisationsService {
     if (dto.stripePrices === null) {
       data.stripePrices = Prisma.DbNull;
     } else if (dto.stripePrices !== undefined) {
-      const merged = { ...current.stripePrices };
-      for (const plan of PLAN_IDS) {
-        const value = dto.stripePrices[plan];
-        if (value !== undefined) {
-          merged[plan] = value;
+      // Merged into what is stored, so a PUT for one plan leaves the others alone.
+      const merged = { ...stored };
+      for (const [plan, price] of Object.entries(dto.stripePrices)) {
+        if (price === null) {
+          delete merged[plan];
+        } else {
+          merged[plan] = price;
         }
       }
-      data.stripePrices = Object.fromEntries(
-        Object.entries(merged).filter(([, v]) => v !== null),
-      );
+      data.stripePrices = merged;
+    }
+
+    if (dto.plans === null) {
+      data.plans = Prisma.DbNull;
+    } else if (dto.plans !== undefined) {
+      data.plans = toStoredPlans(dto.plans);
     }
 
     // Dismissed once; a second click (another browser, another user) keeps the first time.
@@ -173,6 +185,12 @@ export class OrganisationsService {
               ? 'removed'
               : 'stored',
         stripePrices: dto.stripePrices !== undefined,
+        plans:
+          dto.plans === undefined
+            ? 'unchanged'
+            : dto.plans === null
+              ? 'defaults'
+              : dto.plans.length,
         onboardingDismissed: data.onboardingDismissedAt !== undefined,
       })}`,
     );
@@ -192,7 +210,8 @@ export class OrganisationsService {
     if (!organisation) {
       throw new NotFoundException('Organisation not found');
     }
-    const prices = toStripePrices(organisation.stripePrices);
+    // Every stored price, not just the current plans: a tenant may still be on an old one.
+    const prices: StripePrices = storedPrices(organisation.stripePrices);
     if (!organisation.stripeSecretKeyEncrypted) {
       return { configured: false, stripeSecretKey: null, prices };
     }
@@ -221,15 +240,19 @@ export class OrganisationsService {
       webhookSecret,
       stripeSecretKeyEncrypted,
       stripePrices,
+      plans,
       maxActiveTenants,
       maxProvisionsPerDay,
       ...rest
     } = row;
+    const effective = effectivePlans(plans);
+    const stored = storedPrices(stripePrices);
     return {
       ...rest,
       webhookConfigured: webhookSecret !== null,
       stripeConfigured: stripeSecretKeyEncrypted !== null,
-      stripePrices: toStripePrices(stripePrices),
+      plans: effective,
+      stripePrices: pricesFor(effective, stored),
       limits: { maxActiveTenants, maxProvisionsPerDay },
     };
   }

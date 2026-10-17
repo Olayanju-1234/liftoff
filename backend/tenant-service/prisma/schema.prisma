@@ -103,8 +103,11 @@ model Organisation {
   // and never returned; billing-service fetches it over the internal API when it subscribes
   // a tenant. Null means Stripe is not connected and the billing step is SKIPPED.
   stripeSecretKeyEncrypted String?
-  // { starter, pro, enterprise } → Stripe Price ID, any of them absent.
+  // { <customer plan id>: Stripe Price ID }, any plan absent.
   stripePrices             Json?
+  // The company's own customer plans, [{ id, name, description? }]; null means the three
+  // defaults (starter, pro, enterprise). POST /tenants validates planId against them.
+  plans                    Json?
 
   // Set when someone dismissed the finished onboarding checklist on the Simple home;
   // it is never shown to the company again.

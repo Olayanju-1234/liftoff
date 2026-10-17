@@ -168,7 +168,7 @@ const STEP_NOTES: Record<string, { plain: string; honest?: string }> = {
         honest: 'The API does not return this key yet, so the dashboard shows it masked. Surfacing it to you, and rotating it, is on the roadmap.',
     },
     billingStatus: {
-        plain: 'Creates a customer and a subscription with a 14-day trial in your own Stripe account, on the Price ID you mapped to the tenant’s plan (PUT /organisation { stripeSecretKey, stripePrices }, or Settings → Billing). The key is stored encrypted and never returned.',
+        plain: 'Creates a customer and a subscription with a 14-day trial in your own Stripe account, on the Price ID you set for the tenant’s customer plan (PUT /organisation { stripeSecretKey, stripePrices }, or Settings → Billing). The key is stored encrypted and never returned.',
         honest: 'Until you connect Stripe the step is recorded as SKIPPED, not simulated: no customer, no subscription, and the dashboard says "Billing: not connected". A plan without a price fails the step with the reason in the event log.',
     },
     notificationStatus: {
@@ -191,7 +191,7 @@ const LIMITS: [string, string, string][] = [
 ];
 
 const ERRORS: [string, string, string][] = [
-    ['400', 'Bad request', 'A body field failed validation (name ≤ 100 chars; subdomain letters only, ≤ 30; planId one of starter, pro, enterprise), or an :id is not a CUID.'],
+    ['400', 'Bad request', 'A body field failed validation (name ≤ 100 chars; subdomain letters only, ≤ 30), planId is not one of your customer plans (the message lists them), or an :id is not a CUID.'],
     ['401', 'Unauthorized', 'No Authorization or x-api-key header, the API key was revoked, or the token is invalid or expired. Access tokens last 15 minutes; use POST /auth/refresh or sign in again. An API key on a route that needs a signed-in user also answers 401.'],
     ['403', 'Forbidden', 'POST /api-keys before the signup email is verified. Open the link from the email, or resend it from the dashboard banner.'],
     ['404', 'Not found', 'No tenant with that ID belongs to your account. Another account’s tenant also answers 404, never 403.'],
@@ -219,7 +219,7 @@ const ENDPOINTS: [string, string, string][] = [
     ['POST', '/tenants/:id/retry', 'Run the failed step of a FAILED tenant again; finished steps are kept'],
     ['POST', '/tenants/:id/cancel', 'Stop a tenant that is still provisioning; from ACTIVE or FAILED, remove it like DELETE'],
     ['DELETE', '/tenants/:id', 'Remove a tenant: drop its schema, revoke its API key, cancel its Stripe subscription. Ends DELETED; events are kept'],
-    ['GET / PUT', '/organisation', 'Your company: name, base domain, webhook URL (PUT returns the signing secret once), Stripe key (never returned) and plan → price map'],
+    ['GET / PUT', '/organisation', 'Your company: name, base domain, webhook URL (PUT returns the signing secret once), Stripe key (never returned), your customer plans and a price per plan'],
     ['GET / PUT', '/settings', 'Your profile and notification preferences'],
     ['POST', '/api-keys', 'Create a company API key (returned once)'],
     ['GET', '/api-keys', 'List your API keys by name and prefix, never the key'],
@@ -267,7 +267,9 @@ export default function Docs() {
                     <QuickStep n="2" title="Create a tenant from your signup flow">
                         <p>
                             One request per new customer. <Code>name</Code> is what your support team will see, <Code>subdomain</Code> is letters only and becomes the schema and
-                            address, <Code>planId</Code> is the customer’s plan on your product: <Code>starter</Code>, <Code>pro</Code> or <Code>enterprise</Code>.
+                            address, <Code>planId</Code> is the customer’s plan on <em>your</em> product: <Code>starter</Code>, <Code>pro</Code> or <Code>enterprise</Code> unless
+                            you defined your own customer plans under Settings → Billing (<Code>{'PUT /organisation { plans }'}</Code>), in which case only those ids are
+                            accepted. Every response carries <Code>planName</Code>, the plan as you named it.
                         </p>
                         <CodeBlock code={CREATE} title="Request" lang="curl" />
                         <p>You get a 202 immediately with the tenant in <Code>PROVISIONING</Code>. The five steps run in the background and are usually done in about four seconds.</p>

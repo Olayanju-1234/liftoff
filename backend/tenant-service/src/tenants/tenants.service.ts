@@ -45,6 +45,13 @@ import { STEP_INPUT, rebuildInput, storedInput } from './retry';
 import { QuotasService } from './quotas.service';
 import { StatusTokenService } from '../status/status-token.service';
 import { newTenantId } from './ids';
+import {
+  effectivePlans,
+  planNameFor,
+  resolvePlanId,
+} from '../organisations/customer-plans';
+import { PLAN_CATALOG } from './plans';
+import type { CustomerPlan, PlanId } from '@liftoff/shared-types';
 
 const PUBLISH_TIMEOUT_MS = 5_000;
 
@@ -94,6 +101,18 @@ const teardownUnfinished = (tenant: Tenant) =>
     (step) => !tenant[step] || !TEARDOWN_FINISHED.includes(tenant[step]),
   );
 
+// What a tenant response is shaped by: the company's base domain and its customer plans.
+interface OrgContext {
+  baseDomain: string | null;
+  plans: CustomerPlan[];
+}
+
+const isUniqueViolation = (
+  error: unknown,
+): error is Prisma.PrismaClientKnownRequestError =>
+  error instanceof Prisma.PrismaClientKnownRequestError &&
+  error.code === 'P2002';
+
 // Who a tenant is created for: the company, and the user who clicked (none for an API key).
 export interface TenantCreator {
   organisationId: string;
@@ -120,47 +139,46 @@ export class TenantsService {
     private readonly statusTokens: StatusTokenService,
   ) {}
 
-  // Every tenant the API returns carries its address and its public status page.
-  private present<T extends { id: string; subdomain: string }>(
+  // Every tenant the API returns carries its address, its public status page and the
+  // name of its customer plan as the company calls it.
+  private present<T extends { id: string; subdomain: string; planId: string }>(
     tenant: T,
-    baseDomain: string | null | undefined,
+    context: OrgContext,
   ) {
     return {
-      ...withAddress(tenant, baseDomain),
+      ...withAddress(tenant, context.baseDomain),
       statusUrl: this.statusTokens.urlFor(tenant.id),
+      planName: planNameFor(context.plans, tenant.planId),
     };
   }
 
   async create(createTenantDto: CreateTenantDto, creator: TenantCreator) {
     const organisation = await this.prisma.organisation.findUnique({
       where: { id: creator.organisationId },
-      select: { handle: true, baseDomain: true },
+      select: { handle: true, baseDomain: true, plans: true },
     });
     if (!organisation) {
       throw new NotFoundException('Organisation not found');
+    }
+    // The plan is the customer's plan on the company's product: one of the company's own.
+    const context: OrgContext = {
+      baseDomain: organisation.baseDomain,
+      plans: effectivePlans(organisation.plans),
+    };
+    const planId = resolvePlanId(context.plans, createTenantDto.planId);
+    if (!planId) {
+      throw new BadRequestException(
+        `Unknown customer plan "${createTenantDto.planId}". Your plans: ${context.plans
+          .map((plan) => plan.id)
+          .join(', ')}.`,
+      );
     }
     const isTest = createTenantDto.test === true;
     if (!isTest) {
       await this.quotas.assertCanProvision(creator.organisationId);
     }
 
-    // Get or create plan - check by both id and name to avoid unique constraint issues
-    let plan = await this.prisma.plan.findFirst({
-      where: {
-        OR: [{ id: createTenantDto.planId }, { name: createTenantDto.planId }],
-      },
-    });
-
-    if (!plan) {
-      plan = await this.prisma.plan.create({
-        data: {
-          id: createTenantDto.planId,
-          name: createTenantDto.planId,
-          maxUsers: 5,
-          maxApiKeys: 3,
-        },
-      });
-    }
+    const plan = await this.ensurePlanRow(planId, organisation.handle);
 
     try {
       // The id is drawn here so the status token hash can be written in the same insert.
@@ -188,12 +206,9 @@ export class TenantsService {
       }
       await this.startProvisioning(tenant);
 
-      return this.present(tenant, organisation.baseDomain);
+      return this.present(tenant, context);
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
+      if (isUniqueViolation(error)) {
         const target = (error.meta?.target as string[] | undefined) ?? [];
         const field =
           target.find((t) => t === 'name' || t === 'subdomain') ??
@@ -203,6 +218,38 @@ export class TenantsService {
         );
       }
       throw error;
+    }
+  }
+
+  // Tenant.planId references the global Plan table, one row per plan id across companies.
+  // It is a registry of ids: the name the company gave its plan lives on the organisation.
+  private async ensurePlanRow(planId: string, handle: string) {
+    const existing = await this.prisma.plan.findUnique({
+      where: { id: planId },
+    });
+    if (existing) {
+      return existing;
+    }
+    const defaults = PLAN_CATALOG[planId as PlanId] ?? {
+      name: planId,
+      maxUsers: 5,
+      maxApiKeys: 3,
+    };
+    try {
+      return await this.prisma.plan.create({
+        data: { id: planId, ...defaults },
+      });
+    } catch (error) {
+      if (!isUniqueViolation(error)) {
+        throw error;
+      }
+      // A concurrent create won, or another company's plan already took that name.
+      return (
+        (await this.prisma.plan.findUnique({ where: { id: planId } })) ??
+        this.prisma.plan.create({
+          data: { ...defaults, id: planId, name: `${planId} (${handle})` },
+        })
+      );
     }
   }
 
@@ -556,8 +603,8 @@ export class TenantsService {
   }
 
   async findAll(organisationId: string) {
-    const [baseDomain, tenants] = await Promise.all([
-      this.baseDomainOf(organisationId),
+    const [context, tenants] = await Promise.all([
+      this.organisationContext(organisationId),
       this.prisma.tenant.findMany({
         // Removed customers leave the list; GET /tenants/:id still answers with DELETED.
         where: {
@@ -568,15 +615,20 @@ export class TenantsService {
         orderBy: { createdAt: 'desc' },
       }),
     ]);
-    return tenants.map((tenant) => this.present(tenant, baseDomain));
+    return tenants.map((tenant) => this.present(tenant, context));
   }
 
-  private async baseDomainOf(organisationId: string): Promise<string | null> {
+  private async organisationContext(
+    organisationId: string,
+  ): Promise<OrgContext> {
     const organisation = await this.prisma.organisation.findUnique({
       where: { id: organisationId },
-      select: { baseDomain: true },
+      select: { baseDomain: true, plans: true },
     });
-    return organisation?.baseDomain ?? null;
+    return {
+      baseDomain: organisation?.baseDomain ?? null,
+      plans: effectivePlans(organisation?.plans),
+    };
   }
 
   // Another company's tenant reads as missing, so its ids can't be probed.
@@ -596,14 +648,17 @@ export class TenantsService {
       include: {
         plan: true,
         events: { orderBy: { timestamp: 'desc' }, take: 100 },
-        organisation: { select: { baseDomain: true } },
+        organisation: { select: { baseDomain: true, plans: true } },
       },
     });
     if (!tenant) {
       throw new NotFoundException(`Tenant ${id} not found`);
     }
     const { organisation, ...row } = tenant;
-    return this.present(row, organisation?.baseDomain);
+    return this.present(row, {
+      baseDomain: organisation?.baseDomain ?? null,
+      plans: effectivePlans(organisation?.plans),
+    });
   }
 
   async findEvents(id: string, organisationId: string) {
@@ -642,7 +697,7 @@ export class TenantsService {
       tenant.status === TenantStatus.FAILED
         ? await this.deprovision(tenant, cancelReason, true)
         : await this.cancelTenant(tenant, cancelReason);
-    return this.present(result, await this.baseDomainOf(organisationId));
+    return this.present(result, await this.organisationContext(organisationId));
   }
 
   // The timeout sweeper acts for no user, so it looks the tenant up unscoped.
@@ -746,7 +801,7 @@ export class TenantsService {
     );
     return this.present(
       await this.reload(id),
-      await this.baseDomainOf(organisationId),
+      await this.organisationContext(organisationId),
     );
   }
 
@@ -778,7 +833,10 @@ export class TenantsService {
   async delete(id: string, organisationId: string) {
     const tenant = await this.findInOrganisation(id, organisationId);
     const removed = await this.deprovision(tenant, 'Deleted by user');
-    return this.present(removed, await this.baseDomainOf(organisationId));
+    return this.present(
+      removed,
+      await this.organisationContext(organisationId),
+    );
   }
 
   // Starts (or resumes) the teardown saga. Safe to call again: a finished removal is

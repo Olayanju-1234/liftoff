@@ -125,7 +125,7 @@ export default function Customer() {
                                 Test
                             </Tag>
                         )}
-                        <span>{planLabel(tenant)} plan</span>
+                        <span>{planLabel(tenant)} customer plan</span>
                         <span title={fmtStamp(created)}>Added {formatDistanceStrict(created, now, { addSuffix: true })}</span>
                         {live && <span>Updates every 3 seconds</span>}
                     </div>
@@ -296,7 +296,7 @@ function ReadyPanel({ tenant, events, tookMs }: { tenant: Tenant; events: EventL
                                     to start trials for new customers.
                                 </>
                             ) : (
-                                `${TRIAL_DAYS}-day free trial on the ${planLabel(tenant)} plan.`
+                                `${TRIAL_DAYS}-day free trial on your ${planLabel(tenant)} customer plan.`
                             )}
                         </p>
                     </dd>

@@ -111,6 +111,7 @@ describe('WebhookService', () => {
           ...tenantRow,
           address: 'globex.acme.app',
           statusUrl: 'https://app.test/status/tok(t1)',
+          planName: 'Starter',
         },
       });
       // The organisation (and its secret) never travels with the tenant.
