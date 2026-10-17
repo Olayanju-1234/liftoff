@@ -26,6 +26,8 @@ export interface OrganisationResponse {
   stripePrices: StripePrices;
   // Quotas on POST /tenants. Raised by hand for a company that needs more.
   limits: { maxActiveTenants: number; maxProvisionsPerDay: number };
+  // When the finished onboarding checklist was dismissed; null while it still shows.
+  onboardingDismissedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -45,6 +47,7 @@ const publicFields = {
   stripePrices: true,
   maxActiveTenants: true,
   maxProvisionsPerDay: true,
+  onboardingDismissedAt: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.OrganisationSelect;
@@ -147,6 +150,11 @@ export class OrganisationsService {
       );
     }
 
+    // Dismissed once; a second click (another browser, another user) keeps the first time.
+    if (dto.dismissOnboarding && !current.onboardingDismissedAt) {
+      data.onboardingDismissedAt = new Date();
+    }
+
     const updated = await this.prisma.organisation.update({
       where: { id: organisationId },
       data,
@@ -165,6 +173,7 @@ export class OrganisationsService {
               ? 'removed'
               : 'stored',
         stripePrices: dto.stripePrices !== undefined,
+        onboardingDismissed: data.onboardingDismissedAt !== undefined,
       })}`,
     );
     return { ...this.toResponse(updated), webhookSecret: secret };

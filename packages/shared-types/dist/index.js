@@ -357,6 +357,14 @@ __decorate([
     (0, class_transformer_1.Type)(() => StripePricesDto),
     __metadata("design:type", StripePricesDto)
 ], UpdateOrganisationDto.prototype, "stripePrices", void 0);
+__decorate([
+    (0, swagger_1.ApiPropertyOptional)({
+        description: 'true hides the finished onboarding checklist on the dashboard for good (onboardingDismissedAt is set once and kept).',
+    }),
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], UpdateOrganisationDto.prototype, "dismissOnboarding", void 0);
 class CreateApiKeyDto {
 }
 exports.CreateApiKeyDto = CreateApiKeyDto;
