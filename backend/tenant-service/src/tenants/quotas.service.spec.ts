@@ -70,6 +70,7 @@ describe('QuotasService', () => {
       where: {
         organisationId: 'org-1',
         isWorkspace: false,
+        isTest: false,
         status: { in: [TenantStatus.PROVISIONING, TenantStatus.ACTIVE] },
       },
     });

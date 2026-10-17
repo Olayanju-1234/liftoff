@@ -130,6 +130,33 @@ describe('TenantsService', () => {
       expect(quotas.record).toHaveBeenCalledWith('org-1', 'tenant-1');
     });
 
+    it('provisions a test tenant outside the quotas, with billing told to skip', async () => {
+      prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
+      prisma.tenant.create.mockImplementationOnce(({ data }) =>
+        Promise.resolve({
+          id: 'tenant-t',
+          subdomain: 'acme',
+          planId: 'starter',
+          schemaName: data.schemaName,
+          isTest: data.isTest,
+        }),
+      );
+
+      const result = await service.create({ ...baseDto, test: true }, creator);
+
+      const [[createArgs]] = prisma.tenant.create.mock.calls;
+      expect(createArgs.data.isTest).toBe(true);
+      expect(quotas.assertCanProvision).not.toHaveBeenCalled();
+      expect(quotas.record).not.toHaveBeenCalled();
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.requested',
+        expect.objectContaining({ tenantId: 'tenant-t', test: true }),
+        { timeout: 5_000 },
+      );
+      expect(result.isTest).toBe(true);
+    });
+
     it('creates nothing when the organisation is over quota', async () => {
       quotas.assertCanProvision.mockRejectedValueOnce(
         new QuotaExceededException('over', 60),
@@ -374,6 +401,26 @@ describe('TenantsService', () => {
         }
         Object.assign(row, data);
         return Promise.resolve({ count: 1 });
+      });
+    });
+
+    it('records billing as SKIPPED, not SUCCESS, and still starts notification for a test tenant', async () => {
+      await service.handleBillingActive({
+        ...saga,
+        stripeCustomerId: null,
+        stripeSubscriptionId: null,
+        subscriptionStatus: 'skipped',
+        trialEnd: null,
+        skipped: true,
+        test: true,
+      });
+
+      expect(row.billingStatus).toBe(StepStatus.SKIPPED);
+      expect(row.notificationStatus).toBe(StepStatus.IN_PROGRESS);
+      expect(prisma.eventLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'tenant.billing.skipped',
+        }) as unknown,
       });
     });
 

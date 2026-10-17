@@ -37,6 +37,9 @@ model Tenant {
   // Signup used to provision a tenant for the signer's own company; those rows stay but are
   // not customers, so every listing skips them.
   isWorkspace Boolean @default(false)
+  // Test mode: provisioned like a real tenant, but billing is SKIPPED and it never counts
+  // towards the organisation's quotas.
+  isTest Boolean @default(false)
 
   // Provisioning Steps Status
   dbStatus          StepStatus @default(PENDING)
@@ -224,4 +227,6 @@ enum StepStatus {
   SUCCESS
   FAILED
   CANCELLED
+  // The step was deliberately not run (billing on a test tenant). Terminal, like SUCCESS.
+  SKIPPED
 }
