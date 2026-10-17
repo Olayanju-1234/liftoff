@@ -18,6 +18,7 @@ const BAR: Record<StageState, string> = {
     SUCCESS: 'bg-ink',
     FAILED: 'bg-abort',
     CANCELLED: 'hatch border border-scrub/60',
+    SKIPPED: 'border border-dashed border-ink/50',
 };
 
 export default function StageTimeline({ tenant, timeline, now }: StageTimelineProps) {

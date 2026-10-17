@@ -41,6 +41,14 @@ export class CreateTenantDto {
   @IsString()
   @IsNotEmpty()
   planId: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Test mode: provisions like a real tenant, but the billing step is SKIPPED, it never counts towards your quotas, and it can be deleted at any time.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  test?: boolean;
 }
 
 export class CancelTenantDto {
@@ -323,7 +331,12 @@ export type PlanId = (typeof PLAN_IDS)[number];
 // Event Payloads (RabbitMQ)
 // ============================================================================
 
-export interface TenantRequestedPayload {
+// Carried from tenant.requested through every step so billing knows to skip a test tenant.
+export interface TestModeFlag {
+  test?: boolean;
+}
+
+export interface TenantRequestedPayload extends TestModeFlag {
   tenantId: string;
   subdomain: string;
   planId: string;
@@ -332,32 +345,35 @@ export interface TenantRequestedPayload {
   schemaName?: string;
 }
 
-export interface TenantDbReadyPayload {
+export interface TenantDbReadyPayload extends TestModeFlag {
   tenantId: string;
   subdomain: string;
   planId: string;
 }
 
-export interface TenantDnsReadyPayload {
+export interface TenantDnsReadyPayload extends TestModeFlag {
   tenantId: string;
   subdomain: string;
   planId: string;
 }
 
-export interface TenantCredentialsReadyPayload {
+export interface TenantCredentialsReadyPayload extends TestModeFlag {
   tenantId: string;
   subdomain: string;
   planId: string;
 }
 
-export interface TenantBillingActivePayload {
+export interface TenantBillingActivePayload extends TestModeFlag {
   tenantId: string;
   subdomain: string;
   planId: string;
-  stripeCustomerId: string;
-  stripeSubscriptionId: string;
+  // Null when billing was skipped (test tenant).
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
   subscriptionStatus: string;
   trialEnd: string | null;
+  // True when no subscription was created: the billing step is recorded as SKIPPED.
+  skipped?: boolean;
 }
 
 export interface ProvisioningCompletePayload {

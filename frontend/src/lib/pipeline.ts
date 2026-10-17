@@ -235,6 +235,7 @@ const EVENT_LABELS: Record<string, string> = {
     'tenant.dns.ready': 'Subdomain registered',
     'tenant.credentials.ready': 'API key issued',
     'tenant.billing.active': 'Stripe subscription active',
+    'tenant.billing.skipped': 'Billing skipped (test tenant)',
     'tenant.provisioning.complete': 'Provisioning complete',
     'tenant.cancelled': 'Provisioning cancelled',
     'tenant.deleted': 'Tenant deleted',

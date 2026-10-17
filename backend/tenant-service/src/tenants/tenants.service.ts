@@ -70,7 +70,10 @@ export class TenantsService {
     if (!organisation) {
       throw new NotFoundException('Organisation not found');
     }
-    await this.quotas.assertCanProvision(creator.organisationId);
+    const isTest = createTenantDto.test === true;
+    if (!isTest) {
+      await this.quotas.assertCanProvision(creator.organisationId);
+    }
 
     // Get or create plan - check by both id and name to avoid unique constraint issues
     let plan = await this.prisma.plan.findFirst({
@@ -102,11 +105,14 @@ export class TenantsService {
           planId: plan.id,
           organisationId: creator.organisationId,
           ownerId: creator.ownerId,
+          isTest,
           dbStatus: StepStatus.IN_PROGRESS, // Start first step
         },
       });
 
-      await this.quotas.record(creator.organisationId, tenant.id);
+      if (!isTest) {
+        await this.quotas.record(creator.organisationId, tenant.id);
+      }
       await this.startProvisioning(tenant);
 
       return withAddress(tenant, organisation.baseDomain);
@@ -129,12 +135,16 @@ export class TenantsService {
 
   // Callers create the tenant with dbStatus IN_PROGRESS first.
   async startProvisioning(
-    tenant: Pick<Tenant, 'id' | 'name' | 'subdomain' | 'planId' | 'schemaName'>,
+    tenant: Pick<
+      Tenant,
+      'id' | 'name' | 'subdomain' | 'planId' | 'schemaName' | 'isTest'
+    >,
   ) {
     await this.logEvent(tenant.id, 'tenant.created', 'Success', {
       name: tenant.name,
       plan: tenant.planId,
       schema: tenant.schemaName,
+      test: tenant.isTest,
     });
 
     const eventPayload: TenantRequestedPayload = {
@@ -142,6 +152,7 @@ export class TenantsService {
       subdomain: tenant.subdomain,
       planId: tenant.planId,
       ...(tenant.schemaName ? { schemaName: tenant.schemaName } : {}),
+      ...(tenant.isTest ? { test: true } : {}),
     };
 
     try {
@@ -201,9 +212,12 @@ export class TenantsService {
     tenantId: string,
     step: ProvisioningStep,
     next: ProvisioningStep,
+    outcome:
+      | typeof StepStatus.SUCCESS
+      | typeof StepStatus.SKIPPED = StepStatus.SUCCESS,
   ) {
     const data: Prisma.TenantUpdateInput = {};
-    data[step] = StepStatus.SUCCESS;
+    data[step] = outcome;
     await this.prisma.tenant.update({ where: { id: tenantId }, data });
 
     const where: Prisma.TenantWhereInput = { id: tenantId };
@@ -299,14 +313,17 @@ export class TenantsService {
     queue: 'tenant-service-billing-active-queue',
   })
   public async handleBillingActive(payload: TenantBillingActivePayload) {
+    // A test tenant's billing is skipped, not simulated: the row says so and the saga moves on.
+    const skipped = payload.skipped === true;
     await this.completeStep(
       payload.tenantId,
       'billingStatus',
       'notificationStatus',
+      skipped ? StepStatus.SKIPPED : StepStatus.SUCCESS,
     );
     await this.logEvent(
       payload.tenantId,
-      'tenant.billing.active',
+      skipped ? 'tenant.billing.skipped' : 'tenant.billing.active',
       'Success',
       payload,
     );

@@ -98,6 +98,21 @@ describe('AppService', () => {
     );
   });
 
+  it('carries the test flag on to tenant.db.ready', async () => {
+    await service.handleTenantRequested({ ...payload, test: true });
+
+    expect(amqp.publish).toHaveBeenCalledWith(
+      'provisioning.direct',
+      'tenant.db.ready',
+      {
+        tenantId: 'tenant-1',
+        subdomain: 'acme',
+        planId: 'starter',
+        test: true,
+      },
+    );
+  });
+
   it('reduces the subdomain to [A-Za-z0-9_] before it reaches the raw SQL', async () => {
     await service.handleTenantRequested({
       ...payload,

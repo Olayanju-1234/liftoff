@@ -39,6 +39,7 @@ export class AppService {
           tenantId: payload.tenantId,
           subdomain: payload.subdomain,
           planId: payload.planId,
+          ...(payload.test ? { test: true } : {}),
         },
       );
     } catch (error) {

@@ -138,6 +138,45 @@ describe('AppService', () => {
     );
   });
 
+  it('never calls Stripe for a test tenant and publishes billing.active as skipped', async () => {
+    const service = await createService();
+
+    await expect(
+      service.handleTenantCredentialsReady({ ...payload, test: true }),
+    ).resolves.toBeUndefined();
+
+    expect(mockStripe.customers.create).not.toHaveBeenCalled();
+    expect(mockStripe.subscriptions.create).not.toHaveBeenCalled();
+    const skipped: TenantBillingActivePayload = {
+      tenantId: 'tenant-1',
+      subdomain: 'acme',
+      planId: 'pro',
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      subscriptionStatus: 'skipped',
+      trialEnd: null,
+      skipped: true,
+      test: true,
+    };
+    expect(amqp.publish).toHaveBeenCalledWith(
+      'provisioning.direct',
+      'tenant.billing.active',
+      skipped,
+    );
+  });
+
+  it('nacks without requeue when the skipped billing cannot be published', async () => {
+    const service = await createService();
+    amqp.publish.mockRejectedValueOnce(new Error('channel closed'));
+
+    const result = await service.handleTenantCredentialsReady({
+      ...payload,
+      test: true,
+    });
+
+    expect(result).toBeInstanceOf(Nack);
+  });
+
   it.each(PLAN_IDS)(
     'subscribes the shared plan id %s to its Stripe price',
     async (planId) => {

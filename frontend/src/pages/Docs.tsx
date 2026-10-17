@@ -13,6 +13,7 @@ const TOC = [
     { id: 'steps', label: 'The five steps' },
     { id: 'status', label: 'Status and polling' },
     { id: 'idempotency', label: 'Idempotency' },
+    { id: 'test-mode', label: 'Test mode' },
     { id: 'webhooks', label: 'Webhooks and signatures' },
     { id: 'errors', label: 'Errors' },
     { id: 'limits', label: 'Rate limits' },
@@ -28,6 +29,13 @@ const CREATE = `curl -X POST ${API_BASE}/tenants \\
     "subdomain": "globex",
     "planId": "starter"
   }'`;
+
+const CREATE_TEST = `curl -X POST ${API_BASE}/tenants \\
+  -H "Authorization: Bearer $LIFTOFF_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "name": "Globex (test)", "subdomain": "globextest", "planId": "starter", "test": true }'
+
+# 202 … "isTest": true, and once ready: "billingStatus": "SKIPPED"`;
 
 const IDEMPOTENT_RETRY = `# First attempt timed out on your side; send the same request with the same key.
 curl -i -X POST ${API_BASE}/tenants \\
@@ -163,7 +171,7 @@ const ENDPOINTS: [string, string, string][] = [
     ['POST', '/auth/refresh', 'Exchange a refresh token for a new access token'],
     ['POST', '/auth/logout', 'Invalidate the current refresh token'],
     ['GET', '/auth/me', 'The signed-in user'],
-    ['POST', '/tenants', 'Create a tenant and start provisioning (202). Takes an Idempotency-Key'],
+    ['POST', '/tenants', 'Create a tenant and start provisioning (202). Takes an Idempotency-Key; test: true for test mode'],
     ['GET', '/tenants', 'List your tenants with step statuses'],
     ['GET', '/tenants/:id', 'One tenant with its plan and last 100 events'],
     ['GET', '/tenants/:id/events', 'Event log for one tenant (latest 200)'],
@@ -287,7 +295,8 @@ export default function Docs() {
                         ]}
                     />
                     <p>
-                        Step statuses are <Code>PENDING</Code>, <Code>IN_PROGRESS</Code>, <Code>SUCCESS</Code>, <Code>FAILED</Code> or <Code>CANCELLED</Code>. The dashboard
+                        Step statuses are <Code>PENDING</Code>, <Code>IN_PROGRESS</Code>, <Code>SUCCESS</Code>, <Code>FAILED</Code>, <Code>CANCELLED</Code> or{' '}
+                        <Code>SKIPPED</Code> (billing on a test tenant). The dashboard
                         additionally shows a step as <em>stalled</em> when it has been IN_PROGRESS for more than {STALL_AFTER_MS / 1000} seconds; the API does not have that
                         state, so compute it from <Code>updatedAt</Code> if you need it.
                     </p>
@@ -316,7 +325,17 @@ export default function Docs() {
                     <CodeBlock code={IDEMPOTENT_RETRY} title="Retry" lang="curl" />
                 </DocSection>
 
-                <DocSection id="webhooks" n="06" title="Webhooks and signatures">
+                <DocSection id="test-mode" n="06" title="Test mode">
+                    <p>
+                        Try the flow without touching anything real: send <Code>"test": true</Code> on <Code>POST /tenants</Code>. A test tenant is provisioned exactly like a
+                        real one (schema, address, API key, webhook), but the billing step is recorded as <Code>SKIPPED</Code> and no billing call is ever made, it never counts
+                        towards your quotas, and you can delete it at any time. It carries <Code>isTest: true</Code> in every response and webhook, and shows a{' '}
+                        <strong className="font-medium text-ink">Test</strong> badge in the dashboard.
+                    </p>
+                    <CodeBlock code={CREATE_TEST} title="Request" lang="curl" />
+                </DocSection>
+
+                <DocSection id="webhooks" n="07" title="Webhooks and signatures">
                     <p className="flex flex-wrap items-center gap-2">
                         <Soon>Next release</Soon>
                         <span>The behaviour below is what the company-accounts release ships; header names are final.</span>
@@ -341,7 +360,7 @@ export default function Docs() {
                     <CodeBlock code={VERIFY} title="Verify (Node)" lang="ts" />
                 </DocSection>
 
-                <DocSection id="errors" n="07" title="Errors">
+                <DocSection id="errors" n="08" title="Errors">
                     <p>Errors are JSON with the HTTP status repeated in the body. The gateway passes the tenant service’s status and message through unchanged.</p>
                     <CodeBlock code={ERROR_BODY} title="Shape" lang="json" />
                     <div className="overflow-hidden rounded-md border border-rule bg-card">
@@ -364,7 +383,7 @@ export default function Docs() {
                     </div>
                 </DocSection>
 
-                <DocSection id="limits" n="08" title="Rate limits and quotas">
+                <DocSection id="limits" n="09" title="Rate limits and quotas">
                     <p>
                         Two kinds. <strong className="font-medium text-ink">Quotas</strong> are per company: 10 active tenants (provisioning or ready) and 50 new tenants per
                         rolling 24 hours on the free tier. Over either, <Code>POST /tenants</Code> answers 429 with a message naming the limit and a{' '}
@@ -393,7 +412,7 @@ export default function Docs() {
                     </p>
                 </DocSection>
 
-                <DocSection id="reference" n="09" title="API reference">
+                <DocSection id="reference" n="10" title="API reference">
                     <p>
                         The full reference is generated from the code and lives in Swagger on the gateway. Every route except <Code>/health</Code>, <Code>/auth/register</Code>,{' '}
                         <Code>/auth/login</Code> and <Code>/auth/refresh</Code> needs a bearer token.

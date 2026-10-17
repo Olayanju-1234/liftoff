@@ -138,7 +138,14 @@ function Row({ tenant, status, now }: { tenant: Tenant; status: SimpleStatus; no
                 className={`group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 px-4 py-3.5 transition-colors hover:bg-paper/70 sm:px-5 ${COLS}`}
             >
                 <span className="min-w-0">
-                    <span className="block truncate text-[15.5px] font-semibold text-ink group-hover:underline">{tenant.name}</span>
+                    <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-[15.5px] font-semibold text-ink group-hover:underline">{tenant.name}</span>
+                        {tenant.isTest && (
+                            <Tag tone="blueprint" title="Test customer: never billed, not counted towards your limits.">
+                                Test
+                            </Tag>
+                        )}
+                    </span>
                     <span className="block truncate text-[12.5px] text-ink-3 md:hidden">{tenantHost(tenant)}</span>
                 </span>
                 <span className="justify-self-end md:justify-self-start">

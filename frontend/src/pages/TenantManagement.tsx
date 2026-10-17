@@ -15,7 +15,7 @@ import Panel from '../components/ui/Panel';
 import Button from '../components/ui/Button';
 import Empty from '../components/ui/Empty';
 import { Segmented } from '../components/ui/Field';
-import { ConditionTag } from '../components/ui/Tag';
+import { ConditionTag, Tag } from '../components/ui/Tag';
 import SequenceTrack from '../components/pipeline/SequenceTrack';
 import CreateTenantModal from '../components/CreateTenantModal';
 import LoadError from '../components/LoadError';
@@ -217,7 +217,14 @@ function Row({ tenant, cond, now, onCancel, onDelete }: RowProps) {
     return (
         <li className="group relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-paper/70 sm:px-5 md:grid-cols-[minmax(0,1.4fr)_150px_130px_minmax(0,0.8fr)_120px_92px]">
             <Link to={`/tenants/${tenant.id}`} className="min-w-0 after:absolute after:inset-0">
-                <span className="block truncate text-[15px] font-semibold text-ink group-hover:underline">{tenant.name}</span>
+                <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-[15px] font-semibold text-ink group-hover:underline">{tenant.name}</span>
+                    {tenant.isTest && (
+                        <Tag tone="blueprint" title="Test tenant: billing SKIPPED, outside the quotas.">
+                            Test
+                        </Tag>
+                    )}
+                </span>
                 <span className="block truncate font-mono text-[11.5px] text-ink-3">{tenant.subdomain}</span>
             </Link>
             <SequenceTrack tenant={tenant} now={now} className="hidden md:block" />

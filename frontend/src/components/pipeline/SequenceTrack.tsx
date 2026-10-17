@@ -24,6 +24,7 @@ const NODE_CLASS: Record<StageState, string> = {
     SUCCESS: 'fill-ink stroke-ink',
     FAILED: 'fill-abort stroke-abort',
     CANCELLED: 'fill-card stroke-scrub',
+    SKIPPED: 'fill-card stroke-ink',
 };
 
 type Terminal = 'go' | 'abort' | 'scrub' | 'idle';
@@ -64,7 +65,7 @@ export default function SequenceTrack({ tenant, now, size = 'sm', labels = false
                 let cls = 'stroke-rule-strong';
                 let dash: string | undefined = '2 2';
                 let animated = false;
-                if (left === 'SUCCESS') {
+                if (left === 'SUCCESS' || left === 'SKIPPED') {
                     if (right === 'IN_PROGRESS') {
                         cls = 'stroke-ignite';
                         dash = '3 3';
@@ -72,7 +73,7 @@ export default function SequenceTrack({ tenant, now, size = 'sm', labels = false
                     } else if (right === 'STALLED') {
                         cls = 'stroke-hold';
                         dash = undefined;
-                    } else if (right === 'SUCCESS' || right === 'FAILED' || right === 'go') {
+                    } else if (right === 'SUCCESS' || right === 'SKIPPED' || right === 'FAILED' || right === 'go') {
                         cls = right === 'go' ? 'stroke-go' : 'stroke-ink';
                         dash = undefined;
                     }
@@ -111,6 +112,9 @@ export default function SequenceTrack({ tenant, now, size = 'sm', labels = false
                         />
                         {state === 'CANCELLED' && (
                             <rect x={x + 0.5} y={g.pad + 0.5} width={g.n - 1} height={g.n - 1} fill={`url(#h-${uid})`} />
+                        )}
+                        {state === 'SKIPPED' && (
+                            <path d={`M${x + 2.5} ${cy} L${x + g.n - 2.5} ${cy}`} className="stroke-ink" strokeWidth="1.4" />
                         )}
                         {state === 'FAILED' && (
                             <path

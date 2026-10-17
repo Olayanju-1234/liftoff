@@ -75,6 +75,23 @@ describe('AppService', () => {
     );
   });
 
+  it('carries the test flag on to tenant.dns.ready', async () => {
+    const result = service.handleTenantDbReady({ ...payload, test: true });
+    await jest.advanceTimersByTimeAsync(2000);
+    await expect(result).resolves.toBeUndefined();
+
+    expect(amqp.publish).toHaveBeenCalledWith(
+      'provisioning.direct',
+      'tenant.dns.ready',
+      {
+        tenantId: 'tenant-1',
+        subdomain: 'acme',
+        planId: 'starter',
+        test: true,
+      },
+    );
+  });
+
   it('nacks without requeue when publishing fails, so the message dead-letters', async () => {
     amqp.publish.mockRejectedValueOnce(new Error('channel closed'));
 

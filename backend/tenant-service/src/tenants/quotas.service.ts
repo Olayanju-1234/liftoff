@@ -38,9 +38,10 @@ export interface QuotaUsage {
   maxProvisionsPerDay: number;
 }
 
-// Tenants that hold a schema and may still go ACTIVE. Cancelled and failed ones don't count.
+// Tenants that hold a schema and may still go ACTIVE. Cancelled, failed and test ones don't count.
 const countsAsActive: Prisma.TenantWhereInput = {
   isWorkspace: false,
+  isTest: false,
   status: { in: [TenantStatus.PROVISIONING, TenantStatus.ACTIVE] },
 };
 
