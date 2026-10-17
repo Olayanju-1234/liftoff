@@ -19,6 +19,7 @@ import {
     billingSkip,
     cancelReasonFrom,
     condition,
+    customStep,
     eventErrorText,
     eventLabel,
     failedStage,
@@ -30,10 +31,12 @@ import {
     stageForEvent,
     stageState,
     stageTimings,
+    stepMode,
     stepTimeoutAt,
     sweepAt,
     teardownFailed,
     teardownStuck,
+    waitingOnCompany,
 } from '../lib/pipeline';
 import type { Condition } from '../lib/pipeline';
 import { tenantHost } from '../lib/simple';
@@ -41,7 +44,7 @@ import { fmtAgo, fmtClock, fmtDuration, fmtOffset, fmtStamp } from '../lib/time'
 import { EVENT_TONE } from '../lib/ui';
 import type { Tone } from '../lib/ui';
 import { cn } from '../lib/cn';
-import type { EventLog, Tenant } from '../lib/types';
+import type { CustomStepView, EventLog, Tenant } from '../lib/types';
 import PageHeader from '../components/ui/PageHeader';
 import Panel from '../components/ui/Panel';
 import Button from '../components/ui/Button';
@@ -148,7 +151,11 @@ export default function TenantDetail() {
                                 variant="primary"
                                 onClick={() => actions.retry(tenant)}
                                 busy={actions.retrying === tenant.id}
-                                title={`Republish ${retryStage.consumes} to ${retryStage.queue}`}
+                                title={
+                                    stepMode(tenant, retryStage.api) === 'custom'
+                                        ? `Send step.requested for ${retryStage.api} again, with a new requestId`
+                                        : `Republish ${retryStage.consumes} to ${retryStage.queue}`
+                                }
                             >
                                 {actions.retrying !== tenant.id && <RotateCcw size={14} />} Retry {retryStage.code}
                             </Button>
@@ -205,6 +212,12 @@ export default function TenantDetail() {
                     )}
                 </Panel>
             </div>
+
+            {!!tenant.customSteps?.length && (
+                <Panel fig="Fig. 4" title="Custom steps" meta="requests to your system, latest per step" flush className="mt-6">
+                    <CustomSteps calls={tenant.customSteps} now={now} />
+                </Panel>
+            )}
         </>
     );
 }
@@ -225,15 +238,26 @@ function buildBoxes(tenant: Tenant, timeline: ReturnType<typeof stageTimings>, n
     return STAGES.map((stage, i) => {
         const state = stageState(tenant, stage, now);
         const { start, end } = timeline.stages[i];
+        const mode = stepMode(tenant, stage.api);
+        if (mode === 'skipped' && state === 'SKIPPED') {
+            return { tone: 'idle', badge: 'SKIPPED', meta: 'step settings' };
+        }
+        if (mode === 'custom' && state === 'IN_PROGRESS') {
+            return { tone: 'run', badge: 'YOUR SYSTEM', meta: start !== undefined ? fmtDuration(now - start) : undefined };
+        }
         switch (state) {
             case 'SUCCESS':
-                return { tone: 'ok', badge: 'DONE', meta: start !== undefined && end !== undefined ? fmtDuration(end - start) : undefined };
+                return {
+                    tone: 'ok',
+                    badge: mode === 'custom' ? 'DONE · CUSTOM' : 'DONE',
+                    meta: start !== undefined && end !== undefined ? fmtDuration(end - start) : undefined,
+                };
             case 'IN_PROGRESS':
                 return { tone: 'run', badge: 'IN FLIGHT', meta: start !== undefined ? fmtDuration(now - start) : undefined };
             case 'STALLED':
                 return { tone: 'stall', badge: 'STALLED', meta: fmtDuration(quietFor(tenant, now)), dlq: true };
             case 'FAILED':
-                return { tone: 'fail', badge: 'FAILED', dlq: true };
+                return { tone: 'fail', badge: mode === 'custom' ? 'FAILED · CUSTOM' : 'FAILED', dlq: mode !== 'custom' };
             case 'CANCELLED':
                 return { tone: 'cancel', badge: 'CANCELLED' };
             case 'SKIPPED':
@@ -285,7 +309,17 @@ function TitleBlock({ tenant, now }: { tenant: Tenant; now: number }) {
         { k: 'Customer plan', v: planLabel(tenant), title: `planId ${tenant.planId}: the customer's plan on your product` },
         {
             k: 'Billing',
-            v: tenant.stripeSubscriptionId ?? (billingSkip(tenant) === 'not-connected' ? 'not connected' : billingSkip(tenant) === 'test' ? 'skipped (test)' : '—'),
+            v:
+                tenant.stripeSubscriptionId ??
+                (stepMode(tenant, 'billing') === 'custom'
+                    ? 'custom'
+                    : billingSkip(tenant) === 'not-connected'
+                      ? 'not connected'
+                      : billingSkip(tenant) === 'test'
+                        ? 'skipped (test)'
+                        : billingSkip(tenant) === 'configured'
+                          ? 'skipped (settings)'
+                          : '—'),
             title: tenant.stripeSubscriptionId
                 ? `Stripe subscription ${tenant.stripeSubscriptionId} (customer ${tenant.stripeCustomerId ?? '?'})`
                 : 'No Stripe subscription for this tenant',
@@ -323,8 +357,32 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
     const stage = activeStage(tenant) ?? failedStage(tenant);
     const sweepIn = sweepAt(tenant) - now;
     const timeoutIn = stepTimeoutAt(tenant) - now;
+    const waiting = waitingOnCompany(tenant);
+    const request = waiting && customStep(tenant, waiting.api);
 
     switch (cond) {
+        case 'running': {
+            if (!waiting) return null;
+            tone = 'blueprint';
+            head = `${waiting.code} ${waiting.name} is custom: waiting on your system.`;
+            body = (
+                <>
+                    {request ? (
+                        <>
+                            <Mono>step.requested</Mono> went to <Mono>{request.url}</Mono> as request <Mono>{request.requestId}</Mono>. The step fails
+                            if no callback reaches <Mono>/tenants/{tenant.id.slice(0, 6)}…/steps/{waiting.api}/complete</Mono> by{' '}
+                            {fmtStamp(Date.parse(request.deadlineAt))}.
+                        </>
+                    ) : (
+                        <>
+                            <Mono>step.requested</Mono> went to the step's URL; the step fails if no callback arrives by its deadline.
+                        </>
+                    )}{' '}
+                    The 2-minute builtin step timeout and the 30-minute sweeper don't apply while the company's system has it.
+                </>
+            );
+            break;
+        }
         case 'stalled':
             if (!stage) return null;
             tone = 'hold';
@@ -361,8 +419,17 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
                     {stage && tenant.status === 'FAILED' && (
                         <>
                             {' '}
-                            Retry republishes <Mono>{stage.consumes}</Mono> straight to <Mono>{stage.queue}</Mono> (the payload from the event log,
-                            or rebuilt from the tenant) and sets the step IN_PROGRESS.
+                            {stepMode(tenant, stage.api) === 'custom' ? (
+                                <>
+                                    Retry sends <Mono>step.requested</Mono> again with a new requestId, by the step settings as they are now, and sets the
+                                    step IN_PROGRESS.
+                                </>
+                            ) : (
+                                <>
+                                    Retry republishes <Mono>{stage.consumes}</Mono> straight to <Mono>{stage.queue}</Mono> (the payload from the event log,
+                                    or rebuilt from the tenant) and sets the step IN_PROGRESS.
+                                </>
+                            )}
                         </>
                     )}
                 </>
@@ -403,9 +470,23 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
                     <span className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[12px]">
                         {TEARDOWN.map((part) => (
                             <span key={part.key}>
-                                <span className="text-ink-3">{part.name}</span> <Mono>{tenant[part.key] ?? 'PENDING'}</Mono>
+                                <span className="text-ink-3">
+                                    {part.name}
+                                    {stepMode(tenant, part.step) === 'custom' && ' (step.teardown)'}
+                                </span>{' '}
+                                <Mono>{tenant[part.key] ?? 'PENDING'}</Mono>
                             </span>
                         ))}
+                        {(['address', 'welcome'] as const).map((step) => {
+                            const call = customStep(tenant, step, 'teardown');
+                            return (
+                                call && (
+                                    <span key={step}>
+                                        <span className="text-ink-3">{step} (step.teardown)</span> <Mono>{call.status}</Mono>
+                                    </span>
+                                )
+                            );
+                        })}
                     </span>
                 </>
             );
@@ -420,9 +501,9 @@ function StatusNote({ tenant, cond, events, now }: { tenant: Tenant; cond: Condi
         abort: 'border-abort/35 bg-abort/[0.05]',
         scrub: 'border-scrub/35 bg-scrub/[0.05]',
         go: 'border-go/35 bg-go/[0.05]',
+        blueprint: 'border-blueprint/35 bg-blueprint/[0.05]',
         ignite: '',
         ink: '',
-        blueprint: '',
     };
 
     return (
@@ -482,5 +563,63 @@ function EventTimeline({ events, t0, freshIds }: { events: EventLog[]; t0: numbe
                 );
             })}
         </ol>
+    );
+}
+
+const CALL_TONE: Record<string, Tone> = {
+    IN_PROGRESS: 'ignite',
+    SUCCESS: 'go',
+    FAILED: 'abort',
+    CANCELLED: 'scrub',
+};
+
+// Every request to the company's system this tenant has had, latest per step and action.
+function CustomSteps({ calls, now }: { calls: CustomStepView[]; now: number }) {
+    const [open, setOpen] = useState<string | null>(null);
+    return (
+        <ul className="divide-y divide-rule">
+            {calls.map((call) => {
+                const tone = CALL_TONE[call.status] ?? 'scrub';
+                const detail = call.error ?? (call.output ? JSON.stringify(call.output) : null);
+                const isOpen = open === call.requestId;
+                return (
+                    <li key={call.requestId} className="px-4 py-3 sm:px-5">
+                        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                            <Tag tone={tone} live={tone === 'ignite'}>
+                                {call.status}
+                            </Tag>
+                            <span className="font-mono text-[13px] font-medium text-ink">
+                                {call.action === 'teardown' ? 'step.teardown' : 'step.requested'} · {call.step}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-3" title={call.url}>
+                                {call.url}
+                            </span>
+                            <span className="font-mono text-[11.5px] text-ink-3" title={fmtStamp(Date.parse(call.requestedAt))}>
+                                sent {fmtAgo(Date.parse(call.requestedAt), now)}
+                            </span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1 font-mono text-[11.5px] text-ink-3">
+                            <span>requestId {call.requestId}</span>
+                            {call.completedAt ? (
+                                <span title={fmtStamp(Date.parse(call.completedAt))}>closed {fmtAgo(Date.parse(call.completedAt), now)}</span>
+                            ) : (
+                                <span title={fmtStamp(Date.parse(call.deadlineAt))}>deadline {fmtStamp(Date.parse(call.deadlineAt))}</span>
+                            )}
+                            {detail && (
+                                <button
+                                    type="button"
+                                    onClick={() => setOpen(isOpen ? null : call.requestId)}
+                                    className={cn('inline-flex items-center gap-1 hover:text-ink', call.error ? 'text-abort' : 'text-ink-2')}
+                                >
+                                    <ChevronRight size={12} className={cn('transition-transform', isOpen && 'rotate-90')} />
+                                    {call.error ? 'error' : 'output'}
+                                </button>
+                            )}
+                        </div>
+                        {isOpen && (call.error ? <p className="mt-2 font-mono text-[12px] text-abort">{call.error}</p> : <PayloadView payload={call.output} className="mt-2" />)}
+                    </li>
+                );
+            })}
+        </ul>
     );
 }

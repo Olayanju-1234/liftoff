@@ -1,10 +1,12 @@
-import type { EventLog, StepStatus, Tenant } from './types';
+import type { CustomStepView, EventLog, StepMode, StepName, StepStatus, Tenant } from './types';
 
 export type StepKey = 'dbStatus' | 'dnsStatus' | 'credentialsStatus' | 'billingStatus' | 'notificationStatus';
 
 export interface Stage {
     index: number;
     key: StepKey;
+    // The step's name in the API and in custom step requests.
+    api: StepName;
     code: string;
     short: string;
     name: string;
@@ -29,6 +31,7 @@ export const STAGES: Stage[] = [
     {
         index: 0,
         key: 'dbStatus',
+        api: 'database',
         code: 'S1',
         short: 'DB',
         name: 'Database schema',
@@ -44,6 +47,7 @@ export const STAGES: Stage[] = [
     {
         index: 1,
         key: 'dnsStatus',
+        api: 'address',
         code: 'S2',
         short: 'DNS',
         name: 'DNS record',
@@ -59,6 +63,7 @@ export const STAGES: Stage[] = [
     {
         index: 2,
         key: 'credentialsStatus',
+        api: 'credentials',
         code: 'S3',
         short: 'KEY',
         name: 'API credentials',
@@ -74,6 +79,7 @@ export const STAGES: Stage[] = [
     {
         index: 3,
         key: 'billingStatus',
+        api: 'billing',
         code: 'S4',
         short: 'BIL',
         name: 'Billing',
@@ -89,6 +95,7 @@ export const STAGES: Stage[] = [
     {
         index: 4,
         key: 'notificationStatus',
+        api: 'welcome',
         code: 'S5',
         short: 'NTF',
         name: 'Notify + activate',
@@ -110,17 +117,33 @@ export type Condition = 'active' | 'running' | 'stalled' | 'waiting' | 'failed' 
 export type TeardownKey = 'teardownDbStatus' | 'teardownCredentialsStatus' | 'teardownBillingStatus';
 
 // What DELETE tears down, in plain words and as the event each part logs.
-export const TEARDOWN: { key: TeardownKey; name: string; plain: string; event: string }[] = [
-    { key: 'teardownDbStatus', name: 'Database schema', plain: 'Deleting their database', event: 'tenant.schema.dropped' },
-    { key: 'teardownCredentialsStatus', name: 'API key', plain: 'Revoking their API key', event: 'tenant.credentials.revoked' },
-    { key: 'teardownBillingStatus', name: 'Stripe subscription', plain: 'Cancelling their subscription', event: 'tenant.billing.cancelled' },
+export const TEARDOWN: { key: TeardownKey; step: StepName; name: string; plain: string; event: string }[] = [
+    { key: 'teardownDbStatus', step: 'database', name: 'Database schema', plain: 'Deleting their database', event: 'tenant.schema.dropped' },
+    { key: 'teardownCredentialsStatus', step: 'credentials', name: 'API key', plain: 'Revoking their API key', event: 'tenant.credentials.revoked' },
+    { key: 'teardownBillingStatus', step: 'billing', name: 'Stripe subscription', plain: 'Cancelling their subscription', event: 'tenant.billing.cancelled' },
 ];
 
 // A teardown with no change for this long is probably stuck; removing again retries it.
 export const TEARDOWN_SLOW_MS = 2 * 60_000;
 
+// How the step ran for this tenant; tenants from before custom steps ran everything builtin.
+export function stepMode(t: Pick<Tenant, 'stepModes'>, step: StepName): StepMode {
+    return t.stepModes?.[step] ?? 'builtin';
+}
+
+// The latest request to the company's system for this step, on GET /tenants/:id.
+export function customStep(t: Pick<Tenant, 'customSteps'>, step: StepName, action: CustomStepView['action'] = 'provision') {
+    return t.customSteps?.find((c) => c.step === step && c.action === action);
+}
+
+// A custom step is in progress: the company's system has it, with its own deadline.
+export function waitingOnCompany(t: Tenant): Stage | undefined {
+    const stage = activeStage(t);
+    return t.status === 'PROVISIONING' && stage && stepMode(t, stage.api) === 'custom' ? stage : undefined;
+}
+
 export function teardownFailed(t: Tenant) {
-    return TEARDOWN.some((p) => t[p.key] === 'FAILED');
+    return TEARDOWN.some((p) => t[p.key] === 'FAILED') || !!t.customSteps?.some((c) => c.action === 'teardown' && c.status === 'FAILED');
 }
 
 // A removal worth retrying: a part dead-lettered, or nothing has moved for a while.
@@ -159,8 +182,9 @@ export function quietFor(t: Tenant, now: number) {
     return Math.max(0, now - Date.parse(t.updatedAt));
 }
 
+// A custom step has its own deadline, so waiting on the company's system is never "stalled".
 export function isStalled(t: Tenant, now: number) {
-    return t.status === 'PROVISIONING' && !!activeStage(t) && quietFor(t, now) > STALL_AFTER_MS;
+    return t.status === 'PROVISIONING' && !!activeStage(t) && !waitingOnCompany(t) && quietFor(t, now) > STALL_AFTER_MS;
 }
 
 export function sweepAt(t: Tenant) {
@@ -225,9 +249,22 @@ export function stageTimings(t: Tenant, events: EventLog[]): Timeline {
     }
     const t0 = firstSeen.get('tenant.created') ?? Date.parse(t.createdAt);
     let prevEnd: number | undefined = t0;
+    // A custom or skipped step ends with an event naming it rather than the worker's.
+    const stepEnd = (stage: Stage) =>
+        events
+            .filter((e) => e.status !== 'Error' && STEP_END_EVENTS.includes(e.eventType) && e.payload?.step === stage.api)
+            .map((e) => Date.parse(e.timestamp))
+            .sort((a, b) => a - b)[0];
     const stages = STAGES.map((stage) => {
         const status = t[stage.key];
-        const end = status === 'SUCCESS' ? firstSeen.get(stage.emits) : undefined;
+        const end =
+            stepMode(t, stage.api) !== 'builtin'
+                ? status === 'SUCCESS' || status === 'SKIPPED'
+                    ? (stepEnd(stage) ?? (stage.key === 'notificationStatus' ? firstSeen.get('tenant.provisioning.complete') : undefined))
+                    : undefined
+                : status === 'SUCCESS'
+                  ? firstSeen.get(stage.emits)
+                  : undefined;
         let start: number | undefined;
         if (status !== 'PENDING') {
             start = prevEnd ?? (status === 'IN_PROGRESS' ? Date.parse(t.updatedAt) : undefined);
@@ -249,7 +286,16 @@ export function stageForEvent(eventType: string): Stage | undefined {
     return STAGES.find((s) => s.emits === eventType);
 }
 
+const STEP_END_EVENTS = ['tenant.step.completed', 'tenant.step.skipped'];
+
 const EVENT_LABELS: Record<string, string> = {
+    'tenant.step.requested': 'step.requested sent to your system',
+    'tenant.step.completed': 'Your system finished the step',
+    'tenant.step.skipped': 'Step skipped (step settings)',
+    'tenant.step.teardown.requested': 'step.teardown sent to your system',
+    'tenant.step.torn_down': 'Your system tore the step down',
+    'tenant.step.teardown.skipped': 'Nothing for your system to undo',
+    'tenant.retry': 'Failed step retried',
     'tenant.created': 'Tenant created, tenant.requested published',
     'tenant.db.ready': 'Schema created',
     'tenant.dns.ready': 'Subdomain registered',
@@ -272,11 +318,13 @@ export function eventLabel(eventType: string) {
     return EVENT_LABELS[eventType] ?? eventType.replace(/^tenant\./, '').replace(/\./g, ' ');
 }
 
-// Billing is SKIPPED for a test tenant or when the company has not connected Stripe.
-export type BillingSkip = 'test' | 'not-connected';
+// Billing is SKIPPED for a test tenant, when the company has not connected Stripe, or when
+// the company set the step to skipped.
+export type BillingSkip = 'test' | 'not-connected' | 'configured';
 
-export function billingSkip(t: Pick<Tenant, 'billingStatus' | 'isTest'>): BillingSkip | undefined {
+export function billingSkip(t: Pick<Tenant, 'billingStatus' | 'isTest' | 'stepModes'>): BillingSkip | undefined {
     if (t.billingStatus !== 'SKIPPED') return undefined;
+    if (t.stepModes?.billing === 'skipped') return 'configured';
     return t.isTest ? 'test' : 'not-connected';
 }
 

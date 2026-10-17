@@ -2,22 +2,31 @@ import { useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { formatDistanceStrict } from 'date-fns';
-import { Check, Copy, CreditCard, KeyRound, LogOut, MailCheck, Plus, Trash2, Webhook } from 'lucide-react';
+import { Check, Copy, CreditCard, KeyRound, LogOut, MailCheck, Plus, Trash2, Waypoints, Webhook } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { createApiKey, getApiKeys, getOrganisation, getSettings, revokeApiKey, saveSettings, updateOrganisation } from '../lib/api';
 import { useNow, useResource } from '../lib/hooks';
 import { useAuth } from '../lib/auth-context';
 import { apiMessage } from '../lib/errors';
-import { previewHost } from '../lib/simple';
+import { STEP_NAMES, previewHost } from '../lib/simple';
+import { STAGES } from '../lib/pipeline';
 import { fmtStamp } from '../lib/time';
 import { inputClass } from '../lib/ui';
 import { cn } from '../lib/cn';
-import type { ApiKey, Organisation, UserSettings } from '../lib/types';
-import { DEFAULT_PLANS, MAX_PLANS, PLAN_ID_OK, organisationPlans } from '../lib/types';
+import type { ApiKey, Organisation, StepMode, StepName, UserSettings } from '../lib/types';
+import {
+    CUSTOM_STEP_DEFAULT_TIMEOUT_MS,
+    CUSTOM_STEP_MAX_TIMEOUT_MS,
+    CUSTOM_STEP_MIN_TIMEOUT_MS,
+    DEFAULT_PLANS,
+    MAX_PLANS,
+    PLAN_ID_OK,
+    organisationPlans,
+} from '../lib/types';
 import PageHeader from '../components/ui/PageHeader';
 import Panel from '../components/ui/Panel';
 import Button from '../components/ui/Button';
-import { Field, Toggle } from '../components/ui/Field';
+import { Field, Segmented, Toggle } from '../components/ui/Field';
 import LoadError from '../components/LoadError';
 import ConfirmDialog from '../components/ConfirmDialog';
 
@@ -181,7 +190,9 @@ export default function Settings() {
 
             <WebhookPanel org={org} />
 
-            <Panel id="notifications" fig="7.6" title="Notifications" flush className={PANEL}>
+            <ProvisioningPanel org={org} />
+
+            <Panel id="notifications" fig="7.7" title="Notifications" flush className={PANEL}>
                 <ul className="divide-y divide-rule">
                     {NOTIFY.map((n) => (
                         <li key={n.key} className="flex items-center gap-4 px-4 py-4 sm:px-5">
@@ -200,7 +211,7 @@ export default function Settings() {
                 </ul>
             </Panel>
 
-            <Panel id="session" fig="7.7" title="Session" flush className="scroll-mt-16">
+            <Panel id="session" fig="7.8" title="Session" flush className="scroll-mt-16">
                 <dl className="grid gap-px bg-rule sm:grid-cols-2">
                     {[
                         ['Signed in as', user?.email ?? '—'],
@@ -919,6 +930,221 @@ function WebhookPanel({ org }: { org: OrgState }) {
                         )}
                         <Button type="submit" variant="primary" busy={busy === 'save'} disabled={!dirty || !url.trim() || !urlOk || busy !== null}>
                             {configured ? 'Save URL' : 'Add webhook'}
+                        </Button>
+                    </div>
+                </form>
+            )}
+        </Panel>
+    );
+}
+
+const MODE_OPTIONS: { value: StepMode; label: string }[] = [
+    { value: 'builtin', label: 'Liftoff' },
+    { value: 'skipped', label: 'Skip' },
+    { value: 'custom', label: 'Your system' },
+];
+
+// What each step does when Liftoff runs it.
+const BUILTIN_COPY: Record<StepName, string> = {
+    database: 'Liftoff creates a separate database schema for the customer.',
+    address: "Liftoff records the customer's address under your base domain.",
+    credentials: 'Liftoff generates an API key for the customer and stores it securely.',
+    billing: 'Liftoff starts a 14-day trial in your connected Stripe account, or skips billing until you connect one.',
+    welcome: 'Liftoff emails your team that the customer is ready.',
+};
+
+const MAX_TIMEOUT_MINUTES = CUSTOM_STEP_MAX_TIMEOUT_MS / 60_000;
+const MIN_TIMEOUT_MINUTES = CUSTOM_STEP_MIN_TIMEOUT_MS / 60_000;
+
+interface StepRow {
+    mode: StepMode;
+    url: string;
+    minutes: string;
+}
+type StepRows = Record<StepName, StepRow>;
+
+const stepRowsOf = (o: Organisation): StepRows =>
+    Object.fromEntries(
+        STAGES.map(({ api }) => {
+            const entry = o.stepConfig?.[api];
+            const timeout = entry?.timeoutMs ?? CUSTOM_STEP_DEFAULT_TIMEOUT_MS;
+            return [api, { mode: entry?.mode ?? 'builtin', url: entry?.url ?? '', minutes: String(Math.round(timeout / 60_000)) }];
+        }),
+    ) as StepRows;
+
+const sameStepRows = (a: StepRows, b: StepRows) =>
+    STAGES.every(({ api }) => a[api].mode === b[api].mode && a[api].url.trim() === b[api].url.trim() && a[api].minutes.trim() === b[api].minutes.trim());
+
+const minutesOk = (value: string) => {
+    const n = Number(value.trim());
+    return Number.isInteger(n) && n >= MIN_TIMEOUT_MINUTES && n <= MAX_TIMEOUT_MINUTES;
+};
+
+// Who runs each of the five steps: Liftoff, nobody, or the company's own system.
+function ProvisioningPanel({ org }: { org: OrgState }) {
+    const current = org.current;
+    const [rows, setRows] = useState<StepRows | null>(null);
+    const [saving, setSaving] = useState(false);
+
+    const form = rows ?? (current ? stepRowsOf(current) : null);
+    const dirty = !!rows && !!current && !sameStepRows(rows, stepRowsOf(current));
+    const supported = !!current?.stepConfig;
+    const signed = !!current?.webhookConfigured;
+    const customCount = form ? STAGES.filter(({ api }) => form[api].mode === 'custom').length : 0;
+    const skippedCount = form ? STAGES.filter(({ api }) => form[api].mode === 'skipped').length : 0;
+    const rowError = (r: StepRow) =>
+        r.url.trim() && !WEBHOOK_URL_OK(r.url.trim())
+            ? 'A full URL starting with https:// (or http://).'
+            : r.mode === 'custom' && !r.url.trim()
+              ? 'Your system needs a URL for this step.'
+              : r.mode === 'custom' && !minutesOk(r.minutes)
+                ? `Between ${MIN_TIMEOUT_MINUTES} and ${MAX_TIMEOUT_MINUTES} minutes.`
+                : undefined;
+    const valid = !!form && STAGES.every(({ api }) => !rowError(form[api]));
+    const needsWebhook = customCount > 0 && !signed;
+
+    const edit = (step: StepName, patch: Partial<StepRow>) => {
+        if (!form) return;
+        setRows({ ...form, [step]: { ...form[step], ...patch } });
+    };
+
+    const save = async (e: FormEvent) => {
+        e.preventDefault();
+        if (!form || !valid || needsWebhook) return;
+        setSaving(true);
+        try {
+            const stepConfig = Object.fromEntries(
+                STAGES.map(({ api }) => {
+                    const r = form[api];
+                    return [
+                        api,
+                        {
+                            mode: r.mode,
+                            ...(r.url.trim() && { url: r.url.trim() }),
+                            ...(minutesOk(r.minutes) && { timeoutMs: Number(r.minutes.trim()) * 60_000 }),
+                        },
+                    ];
+                }),
+            );
+            const next = await updateOrganisation({ stepConfig });
+            org.onSaved(next);
+            setRows(null);
+            toast.success('Provisioning steps saved. New customers follow them from their next step.');
+        } catch (err) {
+            toast.error(apiMessage(err, 'Could not save the provisioning steps.'));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const meta = !form
+        ? undefined
+        : customCount + skippedCount === 0
+          ? 'All five on Liftoff'
+          : [customCount && `${customCount} on your system`, skippedCount && `${skippedCount} skipped`].filter(Boolean).join(' · ');
+
+    return (
+        <Panel id="provisioning" fig="7.6" title="Provisioning" meta={meta} className={PANEL}>
+            <OrgLoadError org={org} what="your provisioning steps" />
+            {!current || !form ? (
+                <div className="h-[66px] animate-pulse rounded bg-paper-deep/60" />
+            ) : !supported ? (
+                <p className="text-[14px] text-ink-3">Step settings aren't available on this server yet.</p>
+            ) : (
+                <form onSubmit={save}>
+                    <div className="mb-4 flex items-start gap-3 rounded border border-rule bg-paper/60 px-3 py-2.5 text-[14px] text-ink-2">
+                        <Waypoints size={16} className="mt-0.5 shrink-0 text-ink-3" />
+                        <p className="min-w-0">
+                            Choose who does each step for a new customer. <span className="font-medium text-ink">Liftoff</span> does it for you.{' '}
+                            <span className="font-medium text-ink">Skip</span> leaves it out. <span className="font-medium text-ink">Your system</span>: we send
+                            the request to your URL, signed like a webhook, and wait for your system to tell us it's done. When a customer is removed, your
+                            system gets a request to undo it too.{' '}
+                            <Link to="/docs#custom-steps" className="font-medium text-blueprint hover:underline">
+                                Request and callback
+                            </Link>
+                        </p>
+                    </div>
+                    {needsWebhook && (
+                        <div role="alert" className="mb-4 flex items-start gap-3 rounded border border-hold/45 bg-hold/[0.06] px-3 py-2.5 text-[14px] text-ink-2">
+                            <Webhook size={16} className="mt-0.5 shrink-0 text-hold" />
+                            <p className="min-w-0">
+                                Requests to your system are signed with your webhook secret.{' '}
+                                <a href="#webhook" className="font-medium text-blueprint hover:underline">
+                                    Add a webhook
+                                </a>{' '}
+                                first, then save these steps.
+                            </p>
+                        </div>
+                    )}
+                    <ol className="divide-y divide-rule rounded border border-rule-strong">
+                        {STAGES.map((stage, i) => {
+                            const r = form[stage.api];
+                            const error = rowError(r);
+                            return (
+                                <li key={stage.api} className="px-3 py-3 sm:px-4">
+                                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                                        <span className="num w-5 shrink-0 font-mono text-[12px] text-ink-3">{i + 1}</span>
+                                        <span className="min-w-0 flex-1 basis-48">
+                                            <span className="block text-[15px] font-medium text-ink">{STEP_NAMES[stage.key]}</span>
+                                            <span className="block font-mono text-[11.5px] text-ink-4">{stage.api}</span>
+                                        </span>
+                                        <Segmented<StepMode>
+                                            label={`Who does ${STEP_NAMES[stage.key].toLowerCase()}`}
+                                            value={r.mode}
+                                            onChange={(mode) => edit(stage.api, { mode })}
+                                            options={MODE_OPTIONS}
+                                        />
+                                    </div>
+                                    <p className="mt-1.5 pl-9 text-[13px] text-ink-3">
+                                        {r.mode === 'builtin'
+                                            ? BUILTIN_COPY[stage.api]
+                                            : r.mode === 'skipped'
+                                              ? 'Nobody does this step. It shows as skipped and the next step starts straight away.'
+                                              : `We send step.requested to your URL and wait up to ${minutesOk(r.minutes) ? `${r.minutes.trim()} minute${r.minutes.trim() === '1' ? '' : 's'}` : 'the time below'} for your system to call back. No answer by then and the step fails; you can retry it.`}
+                                    </p>
+                                    {r.mode === 'custom' && (
+                                        <div className="mt-3 grid gap-3 pl-9 md:grid-cols-[minmax(0,1fr)_150px]">
+                                            <Field label="Your URL" htmlFor={`step-url-${stage.api}`}>
+                                                <input
+                                                    id={`step-url-${stage.api}`}
+                                                    value={r.url}
+                                                    onChange={(e) => edit(stage.api, { url: e.target.value })}
+                                                    className={cn(inputClass, 'font-mono text-[14px]')}
+                                                    placeholder={`https://api.acme.com/liftoff/${stage.api}`}
+                                                    maxLength={2000}
+                                                    spellCheck={false}
+                                                    autoComplete="off"
+                                                />
+                                            </Field>
+                                            <Field label="Wait up to" htmlFor={`step-timeout-${stage.api}`} aside="minutes">
+                                                <input
+                                                    id={`step-timeout-${stage.api}`}
+                                                    value={r.minutes}
+                                                    onChange={(e) => edit(stage.api, { minutes: e.target.value })}
+                                                    className={cn(inputClass, 'num font-mono text-[14px]')}
+                                                    inputMode="numeric"
+                                                    autoComplete="off"
+                                                />
+                                            </Field>
+                                        </div>
+                                    )}
+                                    {error && <p className="mt-1.5 pl-9 text-[13px] text-abort">{error}</p>}
+                                </li>
+                            );
+                        })}
+                    </ol>
+                    <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-rule pt-4">
+                        <span className="min-w-0 flex-1 text-[13px] text-ink-3">
+                            Customers already being set up follow the new settings from their next step. A private or loopback URL is refused.
+                        </span>
+                        {dirty && <span className="font-mono text-[11.5px] text-hold">unsaved changes</span>}
+                        {dirty && (
+                            <Button variant="ghost" onClick={() => setRows(null)}>
+                                Discard
+                            </Button>
+                        )}
+                        <Button type="submit" variant="primary" busy={saving} disabled={!dirty || !valid || needsWebhook}>
+                            Save steps
                         </Button>
                     </div>
                 </form>

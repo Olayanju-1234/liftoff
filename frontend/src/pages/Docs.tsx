@@ -11,6 +11,7 @@ const TOC = [
     { id: 'quickstart', label: 'Quickstart' },
     { id: 'auth', label: 'Authentication' },
     { id: 'steps', label: 'The five steps' },
+    { id: 'custom-steps', label: 'Custom steps' },
     { id: 'status', label: 'Status and polling' },
     { id: 'idempotency', label: 'Idempotency' },
     { id: 'test-mode', label: 'Test mode' },
@@ -153,6 +154,58 @@ const POLL = `curl ${API_BASE}/tenants/cm2k7x1q90000abcd1234efgh \\
 
 # "status": "ACTIVE" when all five step statuses are SUCCESS`;
 
+const SET_STEPS = `curl -X PUT ${API_BASE}/organisation \\
+  -H "Authorization: Bearer $LIFTOFF_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "stepConfig": {
+      "database": { "mode": "custom", "url": "https://api.globex.com/liftoff/steps", "timeoutMs": 600000 },
+      "billing": { "mode": "skipped" }
+    }
+  }'
+
+# "stepConfig": { "database": { "mode": "custom", "url": "https://api.globex.com/liftoff/steps", "timeoutMs": 600000 },
+#                 "address": { "mode": "builtin", "url": null, "timeoutMs": 600000 }, … }`;
+
+const STEP_REQUEST = `POST /liftoff/steps HTTP/1.1
+Host: api.globex.com
+Content-Type: application/json
+User-Agent: Liftoff-Webhooks/1.0
+x-liftoff-event: step.requested
+x-liftoff-delivery: 7c2e9a1f-0b4d-4e6a-8f3c-5d1b2a9e7f40
+x-liftoff-signature: sha256=4e1a…
+
+{
+  "event": "step.requested",
+  "step": "database",
+  "requestId": "cm2k7x4t20001abcd9876wxyz",
+  "callbackUrl": "${API_BASE}/tenants/cm2k7x1q90000abcd1234efgh/steps/database",
+  "deadline": "2026-10-17T09:51:03.400Z",
+  "tenant": {
+    "id": "cm2k7x1q90000abcd1234efgh",
+    "name": "Globex",
+    "subdomain": "globex",
+    "planId": "starter",
+    "isTest": false,
+    "address": "globex.acme.app",
+    …
+  }
+}`;
+
+const STEP_CALLBACK = `# Done: the step is SUCCESS and the next one starts
+curl -X POST "$CALLBACK_URL/complete" \\
+  -H "x-api-key: $LIFTOFF_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "requestId": "cm2k7x4t20001abcd9876wxyz", "output": { "databaseId": "db_123", "region": "eu-west-1" } }'
+
+# { "tenantId": "cm2k7x1q90000abcd1234efgh", "step": "database", "action": "provision", "outcome": "recorded", "status": "PROVISIONING" }
+
+# Could not do it: the step and the customer are FAILED with your reason
+curl -X POST "$CALLBACK_URL/fail" \\
+  -H "x-api-key: $LIFTOFF_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "requestId": "cm2k7x4t20001abcd9876wxyz", "error": "No capacity left in eu-west-1" }'`;
+
 const ERROR_BODY = `{ "statusCode": 409, "message": "A tenant with this name or subdomain already exists", "error": "Conflict" }`;
 
 const STEP_NOTES: Record<string, { plain: string; honest?: string }> = {
@@ -195,7 +248,7 @@ const ERRORS: [string, string, string][] = [
     ['401', 'Unauthorized', 'No Authorization or x-api-key header, the API key was revoked, or the token is invalid or expired. Access tokens last 15 minutes; use POST /auth/refresh or sign in again. An API key on a route that needs a signed-in user also answers 401.'],
     ['403', 'Forbidden', 'POST /api-keys before the signup email is verified. Open the link from the email, or resend it from the dashboard banner.'],
     ['404', 'Not found', 'No tenant with that ID belongs to your account. Another account’s tenant also answers 404, never 403.'],
-    ['409', 'Conflict', 'The tenant name or subdomain is already used by another of your tenants (another company may use the same one), or at sign-up the email or handle is taken.'],
+    ['409', 'Conflict', 'The tenant name or subdomain is already used by another of your tenants (another company may use the same one), or at sign-up the email or handle is taken. On a custom step callback: the step is not waiting on your system, already failed, or the requestId is not the latest.'],
     ['429', 'Too many requests', 'You hit a rate limit or a quota (next section). Retry-After says how many seconds to wait; the message says which limit and what to do.'],
     ['422', 'Unprocessable', 'An Idempotency-Key was reused with a different body. Use a new key for a new request.'],
     ['502 / 503', 'Upstream unavailable', 'The gateway could not reach the tenant service, usually during a deploy. Safe to retry after a few seconds; send the same Idempotency-Key on POST /tenants so the retry cannot create a second tenant.'],
@@ -216,7 +269,10 @@ const ENDPOINTS: [string, string, string][] = [
     ['GET', '/tenants/:id', 'One tenant with its plan and last 100 events'],
     ['GET', '/tenants/:id/events', 'Event log for one tenant (latest 200)'],
     ['GET', '/events', 'Event log across all your tenants (latest 200)'],
-    ['POST', '/tenants/:id/retry', 'Run the failed step of a FAILED tenant again; finished steps are kept'],
+    ['POST', '/tenants/:id/retry', 'Run the failed step of a FAILED tenant again (a custom step gets a new step.requested); finished steps are kept'],
+    ['POST', '/tenants/:id/steps/:step/complete', 'Custom step callback: your system did the step (API key)'],
+    ['POST', '/tenants/:id/steps/:step/fail', 'Custom step callback: your system could not do the step'],
+    ['POST', '/tenants/:id/steps/:step/teardown/…', 'complete or fail: your system undid the step after a removal'],
     ['POST', '/tenants/:id/cancel', 'Stop a tenant that is still provisioning; from ACTIVE or FAILED, remove it like DELETE'],
     ['DELETE', '/tenants/:id', 'Remove a tenant: drop its schema, revoke its API key, cancel its Stripe subscription. Ends DELETED; events are kept'],
     ['GET / PUT', '/organisation', 'Your company: name, base domain, webhook URL (PUT returns the signing secret once), Stripe key (never returned), your customer plans and a price per plan, and how each step runs (stepConfig: builtin, skipped or custom)'],
@@ -300,7 +356,8 @@ export default function Docs() {
                             Settings → API keys
                         </Link>
                         ), and are shown once. Send one as <Code>Authorization: Bearer lk_…</Code> or in an <Code>x-api-key</Code> header. A key acts for your whole company, never expires, and is
-                        accepted on <Code>POST /tenants</Code> and <Code>GET /tenants/:id</Code>; every other route needs a signed-in user and answers 401 to a key.{' '}
+                        accepted on <Code>POST /tenants</Code>, <Code>GET /tenants/:id</Code> and the custom step callbacks; every other route needs a signed-in user and
+                        answers 401 to a key.{' '}
                         <Code>GET /api-keys</Code> lists your keys by name and prefix, <Code>DELETE /api-keys/:id</Code> revokes one at once.
                     </p>
                     <p>
@@ -315,8 +372,13 @@ export default function Docs() {
 
                 <DocSection id="steps" n="03" title="The five steps">
                     <p>
-                        Each step is a separate worker with its own queue. A step consumes the previous step’s event, does one job, and publishes the next event. The tenant
-                        record keeps a status per step so you can see exactly where a slow tenant is.
+                        Each step is a separate worker with its own queue. When a step is due, Liftoff sends its worker the input, the worker does one job and reports back,
+                        and the next step starts. The tenant record keeps a status per step so you can see exactly where a slow tenant is. Any step can instead be skipped or
+                        run by your own system: see{' '}
+                        <a href="#custom-steps" className="link">
+                            Custom steps
+                        </a>
+                        .
                     </p>
                     <ol className="space-y-4">
                         {STAGES.map((s) => {
@@ -343,7 +405,77 @@ export default function Docs() {
                     </ol>
                 </DocSection>
 
-                <DocSection id="status" n="04" title="Status and polling">
+                <DocSection id="custom-steps" n="04" title="Custom steps">
+                    <p>
+                        Liftoff is the control plane: it knows which step is due, retries, times out and shows your support team where every customer is. Who does each
+                        step is yours to choose, per step, under{' '}
+                        <Link to="/settings#provisioning" className="link">
+                            Settings → Provisioning
+                        </Link>{' '}
+                        or with <Code>{'PUT /organisation { stepConfig }'}</Code>:
+                    </p>
+                    <DefList
+                        rows={[
+                            ['builtin', 'Liftoff does it, as described above. The default for every step.'],
+                            ['skipped', 'Nobody does it. The step reads SKIPPED and the next one starts at once. Skipping every step makes a customer ACTIVE straight away.'],
+                            [
+                                'custom',
+                                'Your system does it. Liftoff POSTs step.requested to the URL you set and waits for your callback, up to timeoutMs (10 minutes by default, 1 minute to 24 hours).',
+                            ],
+                        ]}
+                    />
+                    <p>
+                        The steps are <Code>database</Code>, <Code>address</Code>, <Code>credentials</Code>, <Code>billing</Code> and <Code>welcome</Code>. A step you leave
+                        out of the request keeps its setting; <Code>null</Code> puts one back to builtin, and <Code>{'"stepConfig": null'}</Code> puts all of them back.
+                        Requests are signed with your webhook secret, so{' '}
+                        <a href="#webhooks" className="link">
+                            set a webhook
+                        </a>{' '}
+                        first. Settings apply from each customer’s next step, so customers already being set up pick them up as they go.
+                    </p>
+                    <CodeBlock code={SET_STEPS} title="Configure" lang="curl" />
+
+                    <h3 className="pt-2 font-cond text-[22px] font-semibold text-ink">The request</h3>
+                    <p>
+                        When a custom step is due, Liftoff POSTs this to your URL, with the same headers, signature and retries as a webhook. Answer with any 2xx straight
+                        away and do the work in the background. A 4xx fails the step at once; no 2xx after four attempts fails it too. Test customers call your system as
+                        well, with <Code>tenant.isTest: true</Code>.
+                    </p>
+                    <CodeBlock code={STEP_REQUEST} title="step.requested" lang="http" />
+
+                    <h3 className="pt-2 font-cond text-[22px] font-semibold text-ink">The callback</h3>
+                    <p>
+                        When the work is done, POST to <Code>callbackUrl</Code> plus <Code>/complete</Code>, or <Code>/fail</Code> with an <Code>error</Code> your support
+                        team can act on. Authenticate with a company API key. Send the <Code>requestId</Code> you were given: after a retry a callback for the older request
+                        is refused. <Code>output</Code> is optional, a JSON object of at most 4 KB, kept with the step and shown in the event log. Never put secrets in it.
+                    </p>
+                    <CodeBlock code={STEP_CALLBACK} title="Complete or fail" lang="curl" />
+                    <ul className="list-disc space-y-1.5 pl-5">
+                        <li>
+                            Callbacks are idempotent: the same result again answers <Code>outcome: "duplicate"</Code>. For a customer that was cancelled or removed meanwhile
+                            the answer is <Code>outcome: "ignored"</Code> and nothing changes. Both are 200, so you can stop retrying.
+                        </li>
+                        <li>
+                            <Code>409</Code> means the step is not waiting on your system (it is builtin, or not due yet), it already failed or timed out (Retry the customer to
+                            get a new request), or <Code>requestId</Code> is not the latest.
+                        </li>
+                        <li>
+                            No callback by <Code>deadline</Code> fails the step with “Your system did not call back within …”, the <Code>tenant.failed</Code> webhook is sent and
+                            your team is emailed. <Code>POST /tenants/:id/retry</Code> (or Retry in the dashboard) sends a new <Code>step.requested</Code>, by your settings
+                            as they are then.
+                        </li>
+                    </ul>
+
+                    <h3 className="pt-2 font-cond text-[22px] font-semibold text-ink">Removal</h3>
+                    <p>
+                        When you remove a customer, every step that ran on your system gets <Code>step.teardown</Code> at the same URL, even if the step failed, so partial
+                        work can be cleaned up. Its <Code>callbackUrl</Code> ends in <Code>/teardown</Code>: POST <Code>/complete</Code> or <Code>/fail</Code> to it the same
+                        way. The customer reads <Code>DEPROVISIONING</Code> until every part is done, then <Code>DELETED</Code> with the <Code>tenant.deleted</Code>{' '}
+                        webhook. A failed or late teardown leaves it removing; removing it again sends a new request. A skipped step has nothing to undo.
+                    </p>
+                </DocSection>
+
+                <DocSection id="status" n="05" title="Status and polling">
                     <p>
                         If you would rather not receive webhooks, poll <Code>GET /tenants/:id</Code> every couple of seconds. The overall <Code>status</Code> is the one to branch on; the five step
                         statuses tell your support team where it is.
@@ -353,7 +485,7 @@ export default function Docs() {
                         rows={[
                             ['PROVISIONING', 'Steps are running. Expect ACTIVE within seconds.'],
                             ['ACTIVE', 'All five steps succeeded. Terminal.'],
-                            ['FAILED', 'A step failed for good, or made no progress for 2 minutes and was timed out ("Step timed out: …" in the event log). The step’s own status is FAILED and the event log holds the error. tenant.failed is sent. POST /tenants/:id/retry (or Retry in the dashboard) runs that step again once you have fixed the cause, e.g. a missing Stripe price; or delete it.'],
+                            ['FAILED', 'A step failed for good, made no progress for 2 minutes and was timed out ("Step timed out: …" in the event log), or, for a custom step, your system called /fail or missed its deadline. The step’s own status is FAILED and the event log holds the error. tenant.failed is sent. POST /tenants/:id/retry (or Retry in the dashboard) runs that step again once you have fixed the cause, e.g. a missing Stripe price; or delete it.'],
                             ['CANCELLED', 'You cancelled it, or no step was ever in progress and nothing moved for 30 minutes, so the sweeper did. cancelReason says which. Terminal.'],
                             ['SUSPENDED', 'Reserved for a future pause action; not set by the service today.'],
                             ['DEPROVISIONING', 'You removed it (DELETE, or cancel from ACTIVE/FAILED). Its schema is being dropped, its API key revoked and its Stripe subscription cancelled. The three teardown* fields say how far it got; DELETE again retries any that failed.'],
@@ -362,13 +494,14 @@ export default function Docs() {
                     />
                     <p>
                         Step statuses are <Code>PENDING</Code>, <Code>IN_PROGRESS</Code>, <Code>SUCCESS</Code>, <Code>FAILED</Code>, <Code>CANCELLED</Code> or{' '}
-                        <Code>SKIPPED</Code> (billing on a test tenant or when your company has not connected Stripe; notification when nobody could be emailed). The dashboard
-                        additionally shows a step as <em>stalled</em> when it has been IN_PROGRESS for more than {STALL_AFTER_MS / 1000} seconds; the API does not have that
-                        state, so compute it from <Code>updatedAt</Code> if you need it.
+                        <Code>SKIPPED</Code> (any step you set to skipped; billing on a test tenant or when your company has not connected Stripe; notification when nobody
+                        could be emailed). <Code>stepModes</Code> on the tenant says how each step ran. The dashboard additionally shows a builtin step as <em>stalled</em>{' '}
+                        when it has been IN_PROGRESS for more than {STALL_AFTER_MS / 1000} seconds; the API does not have that state, so compute it from{' '}
+                        <Code>updatedAt</Code> if you need it. A custom step is never stalled: it has its own deadline.
                     </p>
                 </DocSection>
 
-                <DocSection id="idempotency" n="05" title="Idempotency">
+                <DocSection id="idempotency" n="06" title="Idempotency">
                     <p>
                         A signup flow that retries on a timeout must not create two tenants. Send an <Code>Idempotency-Key</Code> header on <Code>POST /tenants</Code>: any
                         string up to 255 characters that is unique per request, such as a UUID or your own signup ID. The first response for a key is stored for 24 hours and
@@ -391,7 +524,7 @@ export default function Docs() {
                     <CodeBlock code={IDEMPOTENT_RETRY} title="Retry" lang="curl" />
                 </DocSection>
 
-                <DocSection id="test-mode" n="06" title="Test mode">
+                <DocSection id="test-mode" n="07" title="Test mode">
                     <p>
                         Try the flow without touching anything real: send <Code>"test": true</Code> on <Code>POST /tenants</Code>. A test tenant is provisioned exactly like a
                         real one (schema, address, API key, webhook), but the billing step is recorded as <Code>SKIPPED</Code> and no billing call is ever made, it never counts
@@ -401,7 +534,7 @@ export default function Docs() {
                     <CodeBlock code={CREATE_TEST} title="Request" lang="curl" />
                 </DocSection>
 
-                <DocSection id="webhooks" n="07" title="Webhooks and signatures">
+                <DocSection id="webhooks" n="08" title="Webhooks and signatures">
                     <p>
                         Set the URL with <Code>PUT /organisation</Code>. The response carries <Code>webhookSecret</Code> once; store it, it signs every delivery. Send{' '}
                         <Code>webhookUrl: null</Code> to stop deliveries.
@@ -428,7 +561,7 @@ export default function Docs() {
                     <CodeBlock code={VERIFY} title="Verify (Node)" lang="ts" />
                 </DocSection>
 
-                <DocSection id="status-page" n="08" title="Status page">
+                <DocSection id="status-page" n="09" title="Status page">
                     <p>
                         Your customer has nothing to look at while their workspace is set up, so every tenant has a public progress page. The link is{' '}
                         <Code>statusUrl</Code> on the <Code>POST /tenants</Code> response, on every tenant record and in every webhook; show it on your
@@ -452,7 +585,7 @@ export default function Docs() {
                     <CodeBlock code={STATUS_PAGE} title="The same data as JSON" lang="curl" />
                 </DocSection>
 
-                <DocSection id="errors" n="09" title="Errors">
+                <DocSection id="errors" n="10" title="Errors">
                     <p>Errors are JSON with the HTTP status repeated in the body. The gateway passes the tenant service’s status and message through unchanged.</p>
                     <CodeBlock code={ERROR_BODY} title="Shape" lang="json" />
                     <div className="overflow-hidden rounded-md border border-rule bg-card">
@@ -475,7 +608,7 @@ export default function Docs() {
                     </div>
                 </DocSection>
 
-                <DocSection id="limits" n="10" title="Rate limits and quotas">
+                <DocSection id="limits" n="11" title="Rate limits and quotas">
                     <p>
                         Two kinds. <strong className="font-medium text-ink">Quotas</strong> are per company: 10 active tenants (provisioning or ready) and 50 new tenants per
                         rolling 24 hours on the free tier. Over either, <Code>POST /tenants</Code> answers 429 with a message naming the limit and a{' '}
@@ -504,10 +637,10 @@ export default function Docs() {
                     </p>
                 </DocSection>
 
-                <DocSection id="reference" n="11" title="API reference">
+                <DocSection id="reference" n="12" title="API reference">
                     <p>
                         The full reference is generated from the code and lives in Swagger on the gateway. Every route except <Code>/health</Code>, <Code>/auth/register</Code>,{' '}
-                        <Code>/auth/login</Code>, <Code>/auth/refresh</Code> and <Code>/status/:token</Code> needs a bearer token; <Code>POST /tenants</Code> and <Code>GET /tenants/:id</Code> also take a company API key.
+                        <Code>/auth/login</Code>, <Code>/auth/refresh</Code> and <Code>/status/:token</Code> needs a bearer token; <Code>POST /tenants</Code>, <Code>GET /tenants/:id</Code> and the custom step callbacks also take a company API key.
                     </p>
                     <div className="flex flex-wrap gap-2">
                         <a href={SWAGGER_URL} target="_blank" rel="noreferrer" className={buttonClass('primary', 'md')}>
@@ -522,7 +655,7 @@ export default function Docs() {
                             {ENDPOINTS.map(([method, path, what]) => (
                                 <li key={method + path} className="grid gap-x-4 gap-y-0.5 px-4 py-2.5 sm:grid-cols-[88px_220px_1fr]">
                                     <span className="font-mono text-[12px] font-medium text-blueprint">{method}</span>
-                                    <span className="font-mono text-[13px] text-ink">{path}</span>
+                                    <span className="break-all font-mono text-[13px] text-ink">{path}</span>
                                     <span className="text-[13.5px] text-ink-2">{what}</span>
                                 </li>
                             ))}

@@ -7,7 +7,7 @@ import { getTenants } from '../../lib/api';
 import { useAuth } from '../../lib/auth-context';
 import { useNow, useResource } from '../../lib/hooks';
 import { HOOD_HOME } from '../../lib/mode';
-import { condition, planLabel } from '../../lib/pipeline';
+import { condition, planLabel, waitingOnCompany } from '../../lib/pipeline';
 import { SIMPLE_STATUS, simpleStatus, tenantHost } from '../../lib/simple';
 import type { SimpleStatus } from '../../lib/simple';
 import { fmtStamp } from '../../lib/time';
@@ -166,6 +166,9 @@ function Row({ tenant, status, now }: { tenant: Tenant; status: SimpleStatus; no
                     <Tag tone={meta.tone} live={meta.live}>
                         {meta.label}
                     </Tag>
+                    {status === 'setting-up' && waitingOnCompany(tenant) && (
+                        <span className="mt-1 block text-right text-[12px] text-ink-3 md:text-left">Waiting on your system</span>
+                    )}
                 </span>
                 <span className="hidden min-w-0 truncate font-mono text-[12.5px] text-ink-2 md:block" title={tenantHost(tenant)}>
                     {tenantHost(tenant)}
