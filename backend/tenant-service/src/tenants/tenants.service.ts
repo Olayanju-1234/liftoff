@@ -17,6 +17,7 @@ import {
 } from '.prisma/tenant-client';
 import type {
   ProvisioningCompletePayload,
+  TenantFailedPayload,
   TenantRequestedPayload,
   TenantDbReadyPayload,
   TenantDnsReadyPayload,
@@ -203,7 +204,24 @@ export class TenantsService {
     });
     this.logger.warn(`Tenant ${tenantId} failed at ${step}: ${error}`);
     this.webhooks.notify(tenantId, 'tenant.failed');
+    await this.publishFailed({ tenantId, step, error });
     return true;
+  }
+
+  // Tells notification-service to email the company. Best effort: the row already says FAILED.
+  private async publishFailed(payload: TenantFailedPayload): Promise<void> {
+    try {
+      await this.amqpConnection.publish(
+        'provisioning.direct',
+        'tenant.failed',
+        payload,
+        { timeout: PUBLISH_TIMEOUT_MS },
+      );
+    } catch (error) {
+      this.logger.error(
+        `Could not publish tenant.failed for tenant ${payload.tenantId}: ${errorMessage(error)}`,
+      );
+    }
   }
 
   // Each worker consumes the same event in parallel with this service, so the
@@ -350,6 +368,8 @@ export class TenantsService {
   ) {
     this.logger.log(`Activating tenant ${payload.tenantId}`);
 
+    // notification-service says whether the company was emailed; nothing sent is SKIPPED.
+    const emailed = payload.notification?.sent !== false;
     try {
       await this.prisma.tenant.update({
         where: {
@@ -357,7 +377,7 @@ export class TenantsService {
         },
         data: {
           status: TenantStatus.ACTIVE,
-          notificationStatus: StepStatus.SUCCESS,
+          notificationStatus: emailed ? StepStatus.SUCCESS : StepStatus.SKIPPED,
         },
       });
 

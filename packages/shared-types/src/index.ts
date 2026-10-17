@@ -449,9 +449,33 @@ export interface TenantBillingActivePayload extends TestModeFlag {
   skipReason?: BillingSkipReason;
 }
 
+// Why notification-service sent nothing: no email provider configured on it, nobody in
+// the company with a verified address and notifications on, or no tenant-service to ask.
+export type NotificationSkipReason =
+  | 'no-provider'
+  | 'no-recipient'
+  | 'not-configured';
+
+export interface NotificationOutcome {
+  sent: boolean;
+  recipients: number;
+  skipReason?: NotificationSkipReason;
+}
+
 export interface ProvisioningCompletePayload {
   tenantId: string;
   subdomain: string;
+  // Absent on messages from before the company was emailed; treated as sent.
+  notification?: NotificationOutcome;
+}
+
+// Published by tenant-service on provisioning.direct as `tenant.failed` whenever a step
+// is marked FAILED (dead letter or timeout), so notification-service can tell the company.
+export interface TenantFailedPayload {
+  tenantId: string;
+  // The Tenant column that failed, e.g. "billingStatus".
+  step: string;
+  error: string;
 }
 
 // ============================================================================
@@ -472,4 +496,21 @@ export interface InternalBillingConfig {
   configured: boolean;
   stripeSecretKey: string | null;
   prices: StripePrices;
+}
+
+// GET /internal/tenants/:id/notification: what the "<Customer> is ready" and
+// "<Customer> needs attention" emails say, and who in the company gets them. Only users
+// with a verified address and the matching preference on are listed.
+export interface InternalTenantNotification {
+  tenant: {
+    id: string;
+    name: string;
+    subdomain: string;
+    address: string;
+    planId: string;
+    status: string;
+    isTest: boolean;
+  };
+  organisation: { id: string; name: string };
+  recipients: { ready: string[]; attention: string[] };
 }

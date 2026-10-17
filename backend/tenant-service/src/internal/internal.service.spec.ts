@@ -65,4 +65,77 @@ describe('InternalService', () => {
       NotFoundException,
     );
   });
+
+  describe('notificationDetails', () => {
+    const base = {
+      id: 't',
+      name: 'Globex',
+      subdomain: 'globex',
+      planId: 'pro',
+      status: 'ACTIVE',
+      isTest: false,
+    };
+
+    it('lists verified users by preference and builds the address from the base domain', async () => {
+      prisma.tenant.findUnique.mockResolvedValueOnce({
+        ...base,
+        organisation: {
+          id: 'org-1',
+          name: 'Acme',
+          baseDomain: 'acme.app',
+          users: [
+            { email: 'both@acme.com', settings: null },
+            {
+              email: 'ready-only@acme.com',
+              settings: { emailNotifications: true, failedJobAlerts: false },
+            },
+            {
+              email: 'alerts-only@acme.com',
+              settings: { emailNotifications: false, failedJobAlerts: true },
+            },
+          ],
+        },
+      });
+
+      await expect(service.notificationDetails('t')).resolves.toEqual({
+        tenant: { ...base, address: 'globex.acme.app' },
+        organisation: { id: 'org-1', name: 'Acme' },
+        recipients: {
+          ready: ['both@acme.com', 'ready-only@acme.com'],
+          attention: ['both@acme.com', 'alerts-only@acme.com'],
+        },
+      });
+      // Only verified, live users are read at all.
+      const [[args]] = prisma.tenant.findUnique.mock.calls as [
+        [
+          {
+            select: { organisation: { select: { users: { where: object } } } };
+          },
+        ],
+      ];
+      expect(args.select.organisation.select.users.where).toEqual({
+        deletedAt: null,
+        emailVerified: true,
+      });
+    });
+
+    it('has no recipients for a legacy tenant without an organisation', async () => {
+      prisma.tenant.findUnique.mockResolvedValueOnce({
+        ...base,
+        organisation: null,
+      });
+
+      await expect(service.notificationDetails('t')).resolves.toMatchObject({
+        tenant: { address: 'globex.liftoff.ojusentinel.com' },
+        recipients: { ready: [], attention: [] },
+      });
+    });
+
+    it('404s for an unknown tenant', async () => {
+      prisma.tenant.findUnique.mockResolvedValueOnce(null);
+      await expect(service.notificationDetails('nope')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
 });

@@ -123,8 +123,8 @@ services:
         sync: false
 
   # ============================================================
-  # Notification Service — mock welcome-email step, then publishes
-  # provisioning.complete (real emails are sent by tenant-service)
+  # Notification Service — emails the company that its customer is
+  # ready (or needs attention), then publishes provisioning.complete
   # ============================================================
   - type: web
     name: notification-service
@@ -137,4 +137,14 @@ services:
       - key: NODE_ENV
         value: production
       - key: RABBITMQ_URL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: TENANT_SERVICE_URL
+        sync: false
+      - key: INTERNAL_API_TOKEN
         sync: false

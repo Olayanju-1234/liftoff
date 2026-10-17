@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppService } from './app.service';
+import { EmailService } from './email.service';
+import { InternalApiClient } from './internal-api.client';
 import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
 import { LoggerModule } from 'nestjs-pino';
 
@@ -47,6 +49,6 @@ import { LoggerModule } from 'nestjs-pino';
     }),
   ],
   controllers: [],
-  providers: [AppService],
+  providers: [AppService, EmailService, InternalApiClient],
 })
 export class AppModule {}
