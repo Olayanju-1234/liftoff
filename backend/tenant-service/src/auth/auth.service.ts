@@ -9,29 +9,46 @@ import { PrismaService } from '../prisma.service';
 import * as bcrypt from 'bcrypt';
 import { RegisterDto, LoginDto } from './dto/auth.dto';
 import { ConfigService } from '@nestjs/config';
-import { StepStatus } from '.prisma/tenant-client';
-import { TenantsService } from '../tenants/tenants.service';
-import { DEFAULT_PLAN_ID, PLAN_CATALOG } from '../tenants/plans';
-import { errorMessage } from '../common/error-message';
+import type { User } from '.prisma/tenant-client';
+import { OrganisationsService } from '../organisations/organisations.service';
 
 export interface JwtPayload {
   sub: string;
   email: string;
   role: string;
-  tenantId: string;
+  organisationId: string | null;
+  // Legacy workspace tenant; null for accounts created since organisations.
+  tenantId: string | null;
+}
+
+export interface SessionUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  organisationId: string | null;
+  tenantId: string | null;
 }
 
 export interface TokenResponse {
   accessToken: string;
   refreshToken: string;
-  user: {
-    id: string;
-    email: string;
-    name: string | null;
-    role: string;
-    tenantId: string;
-  };
+  user: SessionUser;
 }
+
+type TokenUser = Pick<
+  User,
+  'id' | 'email' | 'name' | 'role' | 'organisationId' | 'tenantId'
+>;
+
+export const toSessionUser = (user: TokenUser): SessionUser => ({
+  id: user.id,
+  email: user.email,
+  name: user.name,
+  role: user.role,
+  organisationId: user.organisationId,
+  tenantId: user.tenantId,
+});
 
 @Injectable()
 export class AuthService {
@@ -41,101 +58,43 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private configService: ConfigService,
-    private tenantsService: TenantsService,
+    private organisations: OrganisationsService,
   ) {}
 
+  // Signs a company up: one User and one Organisation. Its customers are added later as tenants.
   async register(dto: RegisterDto): Promise<TokenResponse> {
     this.logger.log(`Registering new user: ${dto.email}`);
+    const companyName = (dto.companyName ?? dto.tenantName ?? '').trim();
+    const handle = (dto.handle ?? dto.subdomain ?? '').toLowerCase();
 
-    // Check if user already exists
     const existingUser = await this.prisma.user.findUnique({
       where: { email: dto.email },
     });
     if (existingUser) {
       throw new ConflictException('Email already registered');
     }
+    await this.organisations.assertHandleFree(handle);
 
-    // Check if subdomain is taken
-    const existingTenant = await this.prisma.tenant.findUnique({
-      where: { subdomain: dto.subdomain },
-    });
-    if (existingTenant) {
-      throw new ConflictException('Subdomain already taken');
-    }
-
-    // Billing must be able to price the workspace, so never pick an arbitrary plan.
-    const plan = await this.prisma.plan.upsert({
-      where: { id: DEFAULT_PLAN_ID },
-      update: {},
-      create: { id: DEFAULT_PLAN_ID, ...PLAN_CATALOG[DEFAULT_PLAN_ID] },
-    });
-
-    // Hash password
     const hashedPassword = await bcrypt.hash(dto.password, 10);
 
-    // Create tenant and user in a transaction
-    const result = await this.prisma.$transaction(async (tx) => {
-      const tenant = await tx.tenant.create({
-        data: {
-          name: dto.tenantName,
-          subdomain: dto.subdomain,
-          planId: plan.id,
-          dbStatus: StepStatus.IN_PROGRESS,
-        },
-      });
-
-      const user = await tx.user.create({
-        data: {
-          email: dto.email,
-          password: hashedPassword,
-          name: dto.name,
-          role: 'ADMIN', // First user is admin
-          tenantId: tenant.id,
-        },
-      });
-
-      // The user row needs the tenant id first, so ownership is set afterwards.
-      await tx.tenant.update({
-        where: { id: tenant.id },
-        data: { ownerId: user.id },
-      });
-
-      return { tenant, user };
+    const user = await this.prisma.user.create({
+      data: {
+        email: dto.email,
+        password: hashedPassword,
+        name: dto.name,
+        role: 'ADMIN', // First user is admin
+        organisation: { create: { name: companyName, handle } },
+      },
     });
 
-    await this.provisionWorkspace(result.tenant);
+    const tokens = await this.generateTokens(user);
+    await this.updateRefreshToken(user.id, tokens.refreshToken);
 
-    // Generate tokens
-    const tokens = await this.generateTokens(result.user);
+    this.logger.log(
+      `User registered successfully: ${user.id} in organisation ${user.organisationId}`,
+    );
 
-    // Save refresh token
-    await this.updateRefreshToken(result.user.id, tokens.refreshToken);
-
-    this.logger.log(`User registered successfully: ${result.user.id}`);
-
-    return {
-      ...tokens,
-      user: {
-        id: result.user.id,
-        email: result.user.email,
-        name: result.user.name,
-        role: result.user.role,
-        tenantId: result.user.tenantId,
-      },
-    };
-  }
-
-  // The account exists by now; startProvisioning has already marked the tenant FAILED.
-  private async provisionWorkspace(
-    tenant: Parameters<TenantsService['startProvisioning']>[0],
-  ) {
-    try {
-      await this.tenantsService.startProvisioning(tenant);
-    } catch (error) {
-      this.logger.error(
-        `Could not start provisioning workspace ${tenant.id}: ${errorMessage(error)}`,
-      );
-    }
+    return { ...tokens, user: toSessionUser(user) };
   }
 
   async login(dto: LoginDto): Promise<TokenResponse> {
@@ -159,16 +118,7 @@ export class AuthService {
 
     this.logger.log(`User logged in: ${user.id}`);
 
-    return {
-      ...tokens,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        tenantId: user.tenantId,
-      },
-    };
+    return { ...tokens, user: toSessionUser(user) };
   }
 
   async refreshTokens(refreshToken: string): Promise<TokenResponse> {
@@ -193,16 +143,7 @@ export class AuthService {
       const tokens = await this.generateTokens(user);
       await this.updateRefreshToken(user.id, tokens.refreshToken);
 
-      return {
-        ...tokens,
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-          tenantId: user.tenantId,
-        },
-      };
+      return { ...tokens, user: toSessionUser(user) };
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
@@ -226,16 +167,12 @@ export class AuthService {
     return user;
   }
 
-  private async generateTokens(user: {
-    id: string;
-    email: string;
-    role: string;
-    tenantId: string;
-  }) {
+  private async generateTokens(user: TokenUser) {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
       role: user.role,
+      organisationId: user.organisationId,
       tenantId: user.tenantId,
     };
 

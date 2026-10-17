@@ -12,7 +12,10 @@ export function setupSwagger(app: NestFastifyApplication): void {
   const swaggerConfig = new DocumentBuilder()
     .setTitle('TenantOps API Gateway')
     .setDescription(
-      'Public-facing entry point for the TenantOps platform. Proxies ' +
+      'Public-facing entry point for Liftoff. A SaaS company signs up, ' +
+        'its customers are the tenants it provisions, and it can drive that ' +
+        'with a company API key and receive a signed webhook when a tenant ' +
+        'is ready. Proxies ' +
         'authenticated requests to the internal **tenant-service**, which ' +
         'owns the provisioning state machine and consumes events from five ' +
         'downstream worker services (db-provisioner, dns-provisioner, ' +
@@ -28,8 +31,20 @@ export function setupSwagger(app: NestFastifyApplication): void {
       { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
       'bearer',
     )
-    .addTag('Auth', 'Registration, login, token refresh, profile')
-    .addTag('Tenants', 'Tenant lifecycle and provisioning state')
+    .addApiKey(
+      {
+        type: 'apiKey',
+        in: 'header',
+        name: 'x-api-key',
+        description:
+          'Company API key from POST /api-keys. Accepted on POST /tenants and GET /tenants/:id, also as `Authorization: Bearer lk_…`.',
+      },
+      'api-key',
+    )
+    .addTag('Auth', 'Company signup, login, token refresh, profile')
+    .addTag('Organisation', 'The signed-up company and its webhook')
+    .addTag('API keys', 'Company API keys for server-to-server calls')
+    .addTag('Tenants', 'Customer tenants: lifecycle and provisioning state')
     .addTag('Settings', 'Per-user settings')
     .addTag('Health', 'Liveness probe')
     .build();

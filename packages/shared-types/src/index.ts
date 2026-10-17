@@ -6,8 +6,11 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUrl,
+  Matches,
   MaxLength,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 
 // ============================================================================
@@ -53,6 +56,9 @@ export class CancelTenantDto {
 // Auth DTOs
 // ============================================================================
 
+// Letters, digits and single hyphens, like a GitHub handle. Stored lowercase.
+export const HANDLE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/i;
+
 export class RegisterDto {
   @ApiProperty({ example: 'admin@acme.com' })
   @IsEmail({}, { message: 'Invalid email format' })
@@ -72,17 +78,51 @@ export class RegisterDto {
   @MaxLength(100)
   name?: string;
 
-  @ApiProperty({ example: 'Acme Corp', maxLength: 100 })
+  @ApiProperty({
+    example: 'Acme Corp',
+    maxLength: 100,
+    description: 'The company signing up. Its customers become tenants.',
+  })
+  @ValidateIf((dto: RegisterDto) => dto.tenantName === undefined)
   @IsString()
-  @IsNotEmpty({ message: 'Tenant name is required' })
+  @IsNotEmpty({ message: 'Company name is required' })
   @MaxLength(100)
-  tenantName: string;
+  companyName?: string;
 
-  @ApiProperty({ example: 'acme', maxLength: 50 })
+  @ApiProperty({
+    example: 'acme',
+    minLength: 3,
+    maxLength: 50,
+    description: 'Unique, URL-safe name for the company. Case-insensitive.',
+  })
+  @ValidateIf((dto: RegisterDto) => dto.subdomain === undefined)
   @IsString()
-  @IsNotEmpty({ message: 'Subdomain is required' })
+  @IsNotEmpty({ message: 'Handle is required' })
+  @MinLength(3)
   @MaxLength(50)
-  subdomain: string;
+  @Matches(HANDLE_PATTERN, {
+    message: 'Handle may only contain letters, digits and hyphens',
+  })
+  handle?: string;
+
+  // Older clients send these; they mean the same as companyName and handle.
+  @ApiPropertyOptional({ deprecated: true, description: 'Use companyName.' })
+  @ValidateIf((dto: RegisterDto) => dto.companyName === undefined)
+  @IsString()
+  @IsNotEmpty({ message: 'Company name is required' })
+  @MaxLength(100)
+  tenantName?: string;
+
+  @ApiPropertyOptional({ deprecated: true, description: 'Use handle.' })
+  @ValidateIf((dto: RegisterDto) => dto.handle === undefined)
+  @IsString()
+  @IsNotEmpty({ message: 'Handle is required' })
+  @MinLength(3)
+  @MaxLength(50)
+  @Matches(HANDLE_PATTERN, {
+    message: 'Handle may only contain letters, digits and hyphens',
+  })
+  subdomain?: string;
 }
 
 export class LoginDto {
@@ -146,6 +186,70 @@ export class ConfirmEmailChangeDto {
   @IsNotEmpty()
   @MaxLength(200)
   token: string;
+}
+
+// ============================================================================
+// Organisation DTOs
+// ============================================================================
+
+export class UpdateOrganisationDto {
+  @ApiPropertyOptional({ example: 'Acme Corp', maxLength: 100 })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  name?: string;
+
+  @ApiPropertyOptional({
+    example: 'https://api.acme.com/liftoff/webhook',
+    nullable: true,
+    description:
+      'Where tenant.active and tenant.failed are POSTed. Setting a new URL issues a new signing secret, returned once. null turns deliveries off.',
+  })
+  @IsOptional()
+  @ValidateIf((dto: UpdateOrganisationDto) => dto.webhookUrl !== null)
+  @IsUrl({
+    protocols: ['http', 'https'],
+    require_protocol: true,
+    require_tld: false,
+  })
+  @MaxLength(2000)
+  webhookUrl?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Issue a new signing secret for the current URL. Returned once; the old one stops working.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  rotateWebhookSecret?: boolean;
+}
+
+export class CreateApiKeyDto {
+  @ApiProperty({ example: 'Billing integration', maxLength: 100 })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  name: string;
+}
+
+// Header for company API keys. A key is also accepted as `Authorization: Bearer <key>`.
+export const API_KEY_HEADER = 'x-api-key';
+export const API_KEY_PREFIX = 'lk_';
+
+// ============================================================================
+// Webhooks
+// ============================================================================
+
+export const WEBHOOK_SIGNATURE_HEADER = 'x-liftoff-signature';
+export const WEBHOOK_EVENT_HEADER = 'x-liftoff-event';
+export const WEBHOOK_DELIVERY_HEADER = 'x-liftoff-delivery';
+
+export type TenantWebhookEvent = 'tenant.active' | 'tenant.failed';
+
+export interface TenantWebhookPayload<TTenant = unknown> {
+  event: TenantWebhookEvent;
+  tenant: TTenant;
 }
 
 // ============================================================================

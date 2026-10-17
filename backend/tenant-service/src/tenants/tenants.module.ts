@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma.service';
 import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
 import { ProvisioningTimeoutService } from './provisioning-timeout.service';
 import { DEAD_LETTER_EXCHANGE, DEAD_LETTER_QUEUE } from './dead-letters';
+import { WebhooksModule } from '../webhooks/webhooks.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { DEAD_LETTER_EXCHANGE, DEAD_LETTER_QUEUE } from './dead-letters';
       isGlobal: true,
     }),
     ScheduleModule.forRoot(),
+    WebhooksModule,
     RabbitMQModule.forRoot({
       exchanges: [
         {

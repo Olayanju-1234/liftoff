@@ -12,18 +12,23 @@ import {
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiHeader,
   ApiOperation,
   ApiResponse,
+  ApiSecurity,
   ApiTags,
 } from '@nestjs/swagger';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import {
+  API_KEY_HEADER,
   CancelTenantDto,
   ConfirmEmailChangeDto,
+  CreateApiKeyDto,
   CreateTenantDto,
   LoginDto,
   RefreshTokenDto,
   RegisterDto,
+  UpdateOrganisationDto,
   UpdateSettingsDto,
 } from '@liftoff/shared-types';
 import { AppService } from './app.service';
@@ -52,9 +57,13 @@ export class AppController {
   // ============ AUTH ENDPOINTS ============
 
   @ApiTags('Auth')
-  @ApiOperation({ summary: 'Register a new tenant + admin user' })
+  @ApiOperation({
+    summary: 'Sign a company up',
+    description:
+      'Creates the admin user and their organisation (companyName + handle). No tenant is provisioned: tenants are the company’s customers, added with POST /tenants.',
+  })
   @ApiResponse({ status: 201, description: 'Tokens + user profile' })
-  @ApiResponse({ status: 409, description: 'Email or subdomain taken' })
+  @ApiResponse({ status: 409, description: 'Email or handle taken' })
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('auth/register')
   register(@Body() dto: RegisterDto) {
@@ -96,26 +105,39 @@ export class AppController {
 
   // ============ TENANT ENDPOINTS ============
 
+  // Also open to company API keys, so they are throttled like the other public routes.
   @ApiTags('Tenants')
   @ApiBearerAuth('bearer')
+  @ApiSecurity('api-key')
+  @ApiHeader({
+    name: API_KEY_HEADER,
+    required: false,
+    description: 'Company API key, instead of a user token',
+  })
   @ApiOperation({
-    summary: 'Create a tenant and start the provisioning pipeline',
+    summary: 'Create a customer tenant and start the provisioning pipeline',
+    description:
+      'Authenticate with a user token or a company API key (x-api-key, or Authorization: Bearer lk_…). 10 requests per minute per IP.',
   })
   @ApiResponse({
     status: 202,
     description: 'Tenant accepted; pipeline started',
   })
+  @ApiResponse({ status: 401, description: 'Missing or invalid credentials' })
+  @ApiResponse({ status: 409, description: 'Name or subdomain taken' })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('tenants')
   createTenant(
     @Body() dto: CreateTenantDto,
     @Headers('authorization') auth: string,
+    @Headers(API_KEY_HEADER) apiKey: string,
   ) {
-    return this.appService.createTenant(dto, auth);
+    return this.appService.createTenant(dto, { auth, apiKey });
   }
 
   @ApiTags('Tenants')
   @ApiBearerAuth('bearer')
-  @ApiOperation({ summary: "List the caller's tenants" })
+  @ApiOperation({ summary: "List the company's tenants" })
   @Get('tenants')
   getTenants(@Headers('authorization') auth: string) {
     return this.appService.getTenants(auth);
@@ -124,7 +146,7 @@ export class AppController {
   @ApiTags('Tenants')
   @ApiBearerAuth('bearer')
   @ApiOperation({
-    summary: "Event log across the caller's tenants (most recent 200)",
+    summary: "Event log across the company's tenants (most recent 200)",
   })
   @Get('events')
   getEvents(@Headers('authorization') auth: string) {
@@ -133,14 +155,26 @@ export class AppController {
 
   @ApiTags('Tenants')
   @ApiBearerAuth('bearer')
-  @ApiOperation({ summary: 'Get a single tenant with its step statuses' })
+  @ApiSecurity('api-key')
+  @ApiHeader({
+    name: API_KEY_HEADER,
+    required: false,
+    description: 'Company API key, instead of a user token',
+  })
+  @ApiOperation({
+    summary: 'Get a single tenant with its step statuses',
+    description:
+      'Authenticate with a user token or a company API key. 60 requests per minute per IP.',
+  })
   @ApiResponse({ status: 404, description: 'Tenant not found' })
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @Get('tenants/:id')
   getTenant(
     @Param('id', ParseCuidPipe) id: string,
     @Headers('authorization') auth: string,
+    @Headers(API_KEY_HEADER) apiKey: string,
   ) {
-    return this.appService.getTenant(id, auth);
+    return this.appService.getTenant(id, { auth, apiKey });
   }
 
   @ApiTags('Tenants')
@@ -182,6 +216,68 @@ export class AppController {
     @Headers('authorization') auth: string,
   ) {
     return this.appService.cancelTenant(id, dto, auth);
+  }
+
+  // ============ ORGANISATION ENDPOINTS ============
+
+  @ApiTags('Organisation')
+  @ApiBearerAuth('bearer')
+  @ApiOperation({ summary: "Get the caller's company" })
+  @Get('organisation')
+  getOrganisation(@Headers('authorization') auth: string) {
+    return this.appService.getOrganisation(auth);
+  }
+
+  @ApiTags('Organisation')
+  @ApiBearerAuth('bearer')
+  @ApiOperation({
+    summary: "Update the caller's company",
+    description:
+      'Setting webhookUrl (or rotateWebhookSecret) returns webhookSecret once. tenant.active and tenant.failed are POSTed there, signed with it in x-liftoff-signature.',
+  })
+  @ApiResponse({ status: 400, description: 'Private or loopback webhookUrl' })
+  @Put('organisation')
+  updateOrganisation(
+    @Body() dto: UpdateOrganisationDto,
+    @Headers('authorization') auth: string,
+  ) {
+    return this.appService.updateOrganisation(dto, auth);
+  }
+
+  @ApiTags('API keys')
+  @ApiBearerAuth('bearer')
+  @ApiOperation({
+    summary: 'Create a company API key',
+    description: 'The key is in this response only; store it.',
+  })
+  @Post('api-keys')
+  createApiKey(
+    @Body() dto: CreateApiKeyDto,
+    @Headers('authorization') auth: string,
+  ) {
+    return this.appService.createApiKey(dto, auth);
+  }
+
+  @ApiTags('API keys')
+  @ApiBearerAuth('bearer')
+  @ApiOperation({ summary: "List the company's API keys (prefixes only)" })
+  @Get('api-keys')
+  listApiKeys(@Headers('authorization') auth: string) {
+    return this.appService.listApiKeys(auth);
+  }
+
+  @ApiTags('API keys')
+  @ApiBearerAuth('bearer')
+  @ApiOperation({ summary: 'Revoke an API key' })
+  @ApiResponse({ status: 204, description: 'Revoked' })
+  @ApiResponse({ status: 404, description: 'Not one of the company’s keys' })
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Delete('api-keys/:id')
+  async revokeApiKey(
+    @Param('id', ParseCuidPipe) id: string,
+    @Headers('authorization') auth: string,
+  ): Promise<void> {
+    await this.appService.revokeApiKey(id, auth);
   }
 
   // ============ SETTINGS ENDPOINTS ============

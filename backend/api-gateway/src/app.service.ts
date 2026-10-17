@@ -9,16 +9,25 @@ import {
 import { AxiosRequestConfig, isAxiosError } from 'axios';
 import { firstValueFrom } from 'rxjs';
 import {
+  API_KEY_HEADER,
   CancelTenantDto,
   ConfirmEmailChangeDto,
+  CreateApiKeyDto,
   CreateTenantDto,
   LoginDto,
   RefreshTokenDto,
   RegisterDto,
+  UpdateOrganisationDto,
   UpdateSettingsDto,
 } from '@liftoff/shared-types';
 
 type DownstreamErrorBody = string | Record<string, unknown>;
+
+// What the caller presented: a user bearer token, a company API key, or both headers.
+export interface Credentials {
+  auth?: string;
+  apiKey?: string;
+}
 
 @Injectable()
 export class AppService {
@@ -60,16 +69,20 @@ export class AppService {
 
   // ============ TENANT METHODS ============
 
-  async createTenant(dto: CreateTenantDto, auth?: string) {
+  async createTenant(dto: CreateTenantDto, credentials: Credentials) {
     this.logger.log(
-      { name: dto.name, subdomain: dto.subdomain },
+      {
+        name: dto.name,
+        subdomain: dto.subdomain,
+        viaApiKey: !!credentials.apiKey,
+      },
       'Creating tenant',
     );
     const data = await this.proxy<{ id: string }>(
       'post',
       '/tenants',
       dto,
-      auth,
+      credentials,
     );
     this.logger.log({ tenantId: data.id }, 'Tenant creation initiated');
     return data;
@@ -83,8 +96,8 @@ export class AppService {
     return this.proxy('get', '/tenants/events', undefined, auth);
   }
 
-  getTenant(id: string, auth?: string) {
-    return this.proxy('get', `/tenants/${id}`, undefined, auth);
+  getTenant(id: string, credentials: Credentials) {
+    return this.proxy('get', `/tenants/${id}`, undefined, credentials);
   }
 
   getTenantEvents(id: string, auth?: string) {
@@ -99,6 +112,30 @@ export class AppService {
   async cancelTenant(id: string, dto: CancelTenantDto, auth?: string) {
     this.logger.log({ tenantId: id }, 'Cancelling tenant provisioning');
     return this.proxy('post', `/tenants/${id}/cancel`, dto, auth);
+  }
+
+  // ============ ORGANISATION METHODS ============
+
+  getOrganisation(auth?: string) {
+    return this.proxy('get', '/organisation', undefined, auth);
+  }
+
+  updateOrganisation(dto: UpdateOrganisationDto, auth?: string) {
+    return this.proxy('put', '/organisation', dto, auth);
+  }
+
+  createApiKey(dto: CreateApiKeyDto, auth?: string) {
+    this.logger.log({ name: dto.name }, 'Creating API key');
+    return this.proxy('post', '/api-keys', dto, auth);
+  }
+
+  listApiKeys(auth?: string) {
+    return this.proxy('get', '/api-keys', undefined, auth);
+  }
+
+  revokeApiKey(id: string, auth?: string) {
+    this.logger.log({ apiKeyId: id }, 'Revoking API key');
+    return this.proxy('delete', `/api-keys/${id}`, undefined, auth);
   }
 
   // ============ SETTINGS METHODS ============
@@ -121,9 +158,11 @@ export class AppService {
     method: 'get' | 'post' | 'put' | 'delete',
     path: string,
     body?: unknown,
-    auth?: string,
+    credentials?: string | Credentials,
   ): Promise<T> {
-    const config = this.buildConfig(auth);
+    const config = this.buildConfig(
+      typeof credentials === 'string' ? { auth: credentials } : credentials,
+    );
     try {
       const response =
         method === 'get' || method === 'delete'
@@ -137,8 +176,16 @@ export class AppService {
     }
   }
 
-  private buildConfig(auth?: string): AxiosRequestConfig {
-    return auth ? { headers: { Authorization: auth } } : {};
+  // Both headers go through verbatim; tenant-service decides what each route accepts.
+  private buildConfig(credentials?: Credentials): AxiosRequestConfig {
+    const headers: Record<string, string> = {};
+    if (credentials?.auth) {
+      headers.Authorization = credentials.auth;
+    }
+    if (credentials?.apiKey) {
+      headers[API_KEY_HEADER] = credentials.apiKey;
+    }
+    return Object.keys(headers).length > 0 ? { headers } : {};
   }
 
   /**

@@ -9,6 +9,7 @@ import { Prisma, StepStatus, TenantStatus } from '.prisma/tenant-client';
 
 import { TenantsService } from './tenants.service';
 import { PrismaService } from '../prisma.service';
+import { WebhookService } from '../webhooks/webhook.service';
 import {
   DEAD_LETTER_QUEUE,
   type DeadLetterMessage,
@@ -53,18 +54,24 @@ describe('TenantsService', () => {
   let service: TenantsService;
   let prisma: MockPrisma;
   let amqp: { publish: jest.Mock };
+  let webhooks: { notify: jest.Mock };
 
   const baseDto = { name: 'Acme', subdomain: 'acme', planId: 'starter' };
+  const creator = { organisationId: 'org-1', ownerId: 'owner-1' };
+  // How every read is scoped: the company's customers, never its legacy workspace tenant.
+  const inOrg = { organisationId: 'org-1', isWorkspace: false };
 
   beforeEach(async () => {
     prisma = buildPrisma();
     amqp = { publish: jest.fn().mockResolvedValue(undefined) };
+    webhooks = { notify: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
         TenantsService,
         { provide: PrismaService, useValue: prisma },
         { provide: AmqpConnection, useValue: amqp },
+        { provide: WebhookService, useValue: webhooks },
       ],
     }).compile();
 
@@ -80,12 +87,13 @@ describe('TenantsService', () => {
         planId: 'starter',
       });
 
-      const result = await service.create(baseDto, 'owner-1');
+      const result = await service.create(baseDto, creator);
 
       expect(prisma.plan.create).not.toHaveBeenCalled();
       expect(prisma.tenant.create).toHaveBeenCalledTimes(1);
       const [[createArgs]] = prisma.tenant.create.mock.calls;
       expect(createArgs.data.dbStatus).toBe(StepStatus.IN_PROGRESS);
+      expect(createArgs.data.organisationId).toBe('org-1');
       expect(createArgs.data.ownerId).toBe('owner-1');
       expect(amqp.publish).toHaveBeenCalledWith(
         'provisioning.direct',
@@ -110,9 +118,7 @@ describe('TenantsService', () => {
       prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
       amqp.publish.mockRejectedValueOnce(new Error('timeout'));
 
-      await expect(service.create(baseDto, 'owner-1')).rejects.toThrow(
-        'timeout',
-      );
+      await expect(service.create(baseDto, creator)).rejects.toThrow('timeout');
 
       const [[{ data }]] = prisma.tenant.updateMany.mock.calls;
       expect(data).toEqual({
@@ -130,6 +136,23 @@ describe('TenantsService', () => {
       });
     });
 
+    it('records no owner when an API key, not a user, creates the tenant', async () => {
+      prisma.plan.findFirst.mockResolvedValueOnce({ id: 'starter' });
+      prisma.tenant.create.mockResolvedValueOnce({
+        id: 'tenant-1',
+        subdomain: 'acme',
+        planId: 'starter',
+      });
+
+      await service.create(baseDto, { organisationId: 'org-1', ownerId: null });
+
+      const [[createArgs]] = prisma.tenant.create.mock.calls;
+      expect(createArgs.data).toMatchObject({
+        organisationId: 'org-1',
+        ownerId: null,
+      });
+    });
+
     it('creates plan on the fly when missing', async () => {
       prisma.plan.findFirst.mockResolvedValueOnce(null);
       prisma.plan.create.mockResolvedValueOnce({ id: 'starter' });
@@ -139,7 +162,7 @@ describe('TenantsService', () => {
         planId: 'starter',
       });
 
-      await service.create(baseDto, 'owner-1');
+      await service.create(baseDto, creator);
 
       expect(prisma.plan.create).toHaveBeenCalled();
     });
@@ -156,7 +179,7 @@ describe('TenantsService', () => {
       );
       prisma.tenant.create.mockRejectedValueOnce(p2002);
 
-      await expect(service.create(baseDto, 'owner-1')).rejects.toBeInstanceOf(
+      await expect(service.create(baseDto, creator)).rejects.toBeInstanceOf(
         ConflictException,
       );
       expect(amqp.publish).not.toHaveBeenCalled();
@@ -195,6 +218,28 @@ describe('TenantsService', () => {
       const [[updateCall]] = prisma.tenant.update.mock.calls;
       expect(updateCall.data.status).toBe(TenantStatus.ACTIVE);
       expect(updateCall.data.notificationStatus).toBe(StepStatus.SUCCESS);
+    });
+
+    it('notifies the company webhook once the tenant is ACTIVE', async () => {
+      prisma.tenant.update.mockResolvedValueOnce({});
+
+      await service.handleProvisioningComplete({
+        tenantId: 't',
+        subdomain: 's',
+      });
+
+      expect(webhooks.notify).toHaveBeenCalledWith('t', 'tenant.active');
+    });
+
+    it('does not notify the webhook when activation fails', async () => {
+      prisma.tenant.update.mockRejectedValueOnce(new Error('gone'));
+
+      await service.handleProvisioningComplete({
+        tenantId: 't',
+        subdomain: 's',
+      });
+
+      expect(webhooks.notify).not.toHaveBeenCalled();
     });
   });
 
@@ -357,6 +402,7 @@ describe('TenantsService', () => {
           },
         },
       });
+      expect(webhooks.notify).toHaveBeenCalledWith('t', 'tenant.failed');
     });
 
     it('leaves a tenant that is gone, active or cancelled alone', async () => {
@@ -364,6 +410,7 @@ describe('TenantsService', () => {
 
       await expect(service.failStep('t', 'dbStatus', 'x')).resolves.toBe(false);
       expect(prisma.eventLog.create).not.toHaveBeenCalled();
+      expect(webhooks.notify).not.toHaveBeenCalled();
     });
   });
 
@@ -484,11 +531,12 @@ describe('TenantsService', () => {
     });
   });
 
-  describe('ownership', () => {
-    const owned = {
+  describe('organisation scoping', () => {
+    const customer = {
       id: 't',
       subdomain: 'acme',
-      ownerId: 'owner-1' as string | null,
+      organisationId: 'org-1' as string | null,
+      isWorkspace: false,
       status: TenantStatus.PROVISIONING,
       dbStatus: StepStatus.SUCCESS,
       dnsStatus: StepStatus.IN_PROGRESS,
@@ -497,21 +545,24 @@ describe('TenantsService', () => {
       notificationStatus: StepStatus.PENDING,
       events: [{ id: 'e1', eventType: 'tenant.created' }],
     };
-    let stored: typeof owned;
+    let stored: typeof customer;
 
     const scoped = {
-      findOne: (caller: string) => service.findOne('t', caller),
-      findEvents: (caller: string) => service.findEvents('t', caller),
-      cancel: (caller: string) => service.cancel('t', caller, 'changed mind'),
-      delete: (caller: string) => service.delete('t', caller),
+      findOne: (org: string) => service.findOne('t', org),
+      findEvents: (org: string) => service.findEvents('t', org),
+      cancel: (org: string) => service.cancel('t', org, 'changed mind'),
+      delete: (org: string) => service.delete('t', org),
     };
 
     beforeEach(() => {
-      stored = { ...owned };
+      stored = { ...customer };
+      // Answers like Postgres would for this one row.
       prisma.tenant.findFirst.mockImplementation(
         ({ where }: Prisma.TenantFindFirstArgs) =>
           Promise.resolve(
-            where?.id === stored.id && where?.ownerId === stored.ownerId
+            where?.id === stored.id &&
+              where?.organisationId === stored.organisationId &&
+              where?.isWorkspace === stored.isWorkspace
               ? stored
               : null,
           ),
@@ -523,21 +574,19 @@ describe('TenantsService', () => {
     });
 
     it.each(Object.entries(scoped))(
-      '%s serves the owner',
+      '%s serves any user of the organisation',
       async (_name, call) => {
-        await expect(call('owner-1')).resolves.toBeTruthy();
+        await expect(call('org-1')).resolves.toBeTruthy();
         expect(prisma.tenant.findFirst).toHaveBeenCalledWith(
-          expect.objectContaining({ where: { id: 't', ownerId: 'owner-1' } }),
+          expect.objectContaining({ where: { id: 't', ...inOrg } }),
         );
       },
     );
 
     it.each(Object.entries(scoped))(
-      '%s returns 404 to another account and changes nothing',
+      '%s returns 404 to another organisation and changes nothing',
       async (_name, call) => {
-        await expect(call('intruder')).rejects.toBeInstanceOf(
-          NotFoundException,
-        );
+        await expect(call('org-2')).rejects.toBeInstanceOf(NotFoundException);
         expect(prisma.tenant.update).not.toHaveBeenCalled();
         expect(prisma.tenant.delete).not.toHaveBeenCalled();
         expect(amqp.publish).not.toHaveBeenCalled();
@@ -545,37 +594,46 @@ describe('TenantsService', () => {
     );
 
     it.each(Object.entries(scoped))(
-      '%s hides a tenant without an owner from everyone',
+      '%s hides a tenant without an organisation from everyone',
       async (_name, call) => {
-        stored.ownerId = null;
+        stored.organisationId = null;
 
-        await expect(call('owner-1')).rejects.toBeInstanceOf(NotFoundException);
+        await expect(call('org-1')).rejects.toBeInstanceOf(NotFoundException);
       },
     );
 
-    it('findEvents returns the owned tenant’s events', async () => {
-      await expect(service.findEvents('t', 'owner-1')).resolves.toEqual(
-        owned.events,
+    it.each(Object.entries(scoped))(
+      "%s hides the company's own legacy workspace tenant",
+      async (_name, call) => {
+        stored.isWorkspace = true;
+
+        await expect(call('org-1')).rejects.toBeInstanceOf(NotFoundException);
+      },
+    );
+
+    it('findEvents returns the tenant’s events', async () => {
+      await expect(service.findEvents('t', 'org-1')).resolves.toEqual(
+        customer.events,
       );
     });
 
-    it("lists only the caller's tenants", async () => {
+    it("lists only the organisation's customer tenants", async () => {
       prisma.tenant.findMany.mockResolvedValueOnce([]);
 
-      await service.findAll('owner-1');
+      await service.findAll('org-1');
 
       expect(prisma.tenant.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { ownerId: 'owner-1' } }),
+        expect.objectContaining({ where: inOrg }),
       );
     });
 
-    it("limits the cross-tenant event log to the caller's tenants", async () => {
+    it("limits the cross-tenant event log to the organisation's customers", async () => {
       prisma.eventLog.findMany.mockResolvedValueOnce([]);
 
-      await service.findAllEvents('owner-1');
+      await service.findAllEvents('org-1');
 
       expect(prisma.eventLog.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { tenant: { ownerId: 'owner-1' } } }),
+        expect.objectContaining({ where: { tenant: inOrg } }),
       );
     });
   });
@@ -584,7 +642,8 @@ describe('TenantsService', () => {
     const provisioningTenant = {
       id: 't',
       subdomain: 'acme',
-      ownerId: 'owner-1',
+      organisationId: 'org-1',
+      isWorkspace: false,
       status: TenantStatus.PROVISIONING,
       dbStatus: StepStatus.SUCCESS,
       dnsStatus: StepStatus.IN_PROGRESS,
@@ -600,7 +659,7 @@ describe('TenantsService', () => {
         status: TenantStatus.CANCELLED,
       });
 
-      await service.cancel('t', 'owner-1', 'user changed mind');
+      await service.cancel('t', 'org-1', 'user changed mind');
 
       const [[{ data: update }]] = prisma.tenant.update.mock.calls;
       expect(update.status).toBe(TenantStatus.CANCELLED);
@@ -621,7 +680,7 @@ describe('TenantsService', () => {
       prisma.tenant.findFirst.mockResolvedValueOnce(provisioningTenant);
       prisma.tenant.update.mockResolvedValueOnce({});
 
-      await service.cancel('t', 'owner-1');
+      await service.cancel('t', 'org-1');
 
       const [[{ data: update }]] = prisma.tenant.update.mock.calls;
       expect(update.cancelReason).toBe('Cancelled by user');
@@ -633,16 +692,16 @@ describe('TenantsService', () => {
         status: TenantStatus.ACTIVE,
       });
 
-      await expect(service.cancel('t', 'owner-1')).rejects.toBeInstanceOf(
+      await expect(service.cancel('t', 'org-1')).rejects.toBeInstanceOf(
         BadRequestException,
       );
       expect(prisma.tenant.update).not.toHaveBeenCalled();
     });
 
-    it('lets the timeout sweeper cancel any tenant, owned or not', async () => {
+    it('lets the timeout sweeper cancel any tenant, in an organisation or not', async () => {
       prisma.tenant.findUnique.mockResolvedValueOnce({
         ...provisioningTenant,
-        ownerId: null,
+        organisationId: null,
       });
       prisma.tenant.update.mockResolvedValueOnce({});
 
@@ -670,11 +729,11 @@ describe('TenantsService', () => {
       prisma.tenant.findFirst.mockResolvedValueOnce({
         id: 't',
         subdomain: 'acme',
-        ownerId: 'owner-1',
+        organisationId: 'org-1',
       });
       prisma.tenant.delete.mockResolvedValueOnce({ id: 't' });
 
-      await service.delete('t', 'owner-1');
+      await service.delete('t', 'org-1');
 
       // Order matters: publish must precede delete.
       const publishOrder = amqp.publish.mock.invocationCallOrder[0];

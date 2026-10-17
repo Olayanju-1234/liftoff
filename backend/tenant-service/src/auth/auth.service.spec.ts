@@ -1,37 +1,33 @@
-import {
-  ConflictException,
-  Logger,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
-import { StepStatus, type Prisma } from '.prisma/tenant-client';
+import type { Prisma } from '.prisma/tenant-client';
 import * as bcrypt from 'bcrypt';
 
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma.service';
-import { TenantsService } from '../tenants/tenants.service';
+import { OrganisationsService } from '../organisations/organisations.service';
 
 type MockPrisma = {
   user: {
     findUnique: jest.Mock;
-    create: jest.Mock;
+    create: jest.Mock<Promise<unknown>, [Prisma.UserCreateArgs]>;
     update: jest.Mock<Promise<unknown>, [Prisma.UserUpdateArgs]>;
   };
   tenant: { findUnique: jest.Mock; create: jest.Mock };
-  plan: { upsert: jest.Mock<Promise<unknown>, [Prisma.PlanUpsertArgs]> };
+  plan: { upsert: jest.Mock };
   $transaction: jest.Mock;
 };
 
 const buildPrisma = (): MockPrisma => ({
   user: {
     findUnique: jest.fn(),
-    create: jest.fn(),
+    create: jest.fn<Promise<unknown>, [Prisma.UserCreateArgs]>(),
     update: jest.fn<Promise<unknown>, [Prisma.UserUpdateArgs]>(),
   },
   tenant: { findUnique: jest.fn(), create: jest.fn() },
-  plan: { upsert: jest.fn<Promise<unknown>, [Prisma.PlanUpsertArgs]>() },
+  plan: { upsert: jest.fn() },
   $transaction: jest.fn(),
 });
 
@@ -40,14 +36,14 @@ describe('AuthService', () => {
   let prisma: MockPrisma;
   let jwt: { signAsync: jest.Mock; verify: jest.Mock };
   let config: { getOrThrow: jest.Mock; get: jest.Mock };
-  let tenants: { startProvisioning: jest.Mock };
+  let organisations: { assertHandleFree: jest.Mock };
 
   const validRegisterDto = {
     email: 'admin@acme.com',
     password: 'CorrectHorse9!',
     name: 'Jane Doe',
-    tenantName: 'Acme Corp',
-    subdomain: 'acme',
+    companyName: 'Acme Corp',
+    handle: 'acme',
   };
 
   beforeEach(async () => {
@@ -64,8 +60,8 @@ describe('AuthService', () => {
       }),
       get: jest.fn(),
     };
-    tenants = {
-      startProvisioning: jest.fn().mockResolvedValue(undefined),
+    organisations = {
+      assertHandleFree: jest.fn().mockResolvedValue(undefined),
     };
 
     const moduleRef = await Test.createTestingModule({
@@ -74,7 +70,7 @@ describe('AuthService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: JwtService, useValue: jwt },
         { provide: ConfigService, useValue: config },
-        { provide: TenantsService, useValue: tenants },
+        { provide: OrganisationsService, useValue: organisations },
       ],
     }).compile();
 
@@ -82,114 +78,96 @@ describe('AuthService', () => {
   });
 
   describe('register', () => {
-    const workspace = {
-      id: 'tenant-1',
-      name: 'Acme Corp',
-      subdomain: 'acme',
-      planId: 'starter',
+    const createdUser = {
+      id: 'user-1',
+      email: validRegisterDto.email,
+      name: validRegisterDto.name,
+      role: 'ADMIN',
+      organisationId: 'org-1',
+      tenantId: null,
     };
-    let tenantCreate: jest.Mock<Promise<unknown>, [Prisma.TenantCreateArgs]>;
-    let tenantUpdate: jest.Mock<Promise<unknown>, [Prisma.TenantUpdateArgs]>;
 
     const arrangeRegister = () => {
       prisma.user.findUnique.mockResolvedValueOnce(null);
-      prisma.tenant.findUnique.mockResolvedValueOnce(null);
-      prisma.plan.upsert.mockResolvedValueOnce({ id: 'starter' });
-      tenantCreate = jest
-        .fn<Promise<unknown>, [Prisma.TenantCreateArgs]>()
-        .mockResolvedValueOnce(workspace);
-      tenantUpdate = jest
-        .fn<Promise<unknown>, [Prisma.TenantUpdateArgs]>()
-        .mockResolvedValueOnce({ ...workspace, ownerId: 'user-1' });
-      prisma.$transaction.mockImplementationOnce(
-        (fn: (tx: unknown) => Promise<unknown>) =>
-          fn({
-            tenant: { create: tenantCreate, update: tenantUpdate },
-            user: {
-              create: jest.fn().mockResolvedValueOnce({
-                id: 'user-1',
-                email: validRegisterDto.email,
-                name: validRegisterDto.name,
-                role: 'ADMIN',
-                tenantId: 'tenant-1',
-              }),
-            },
-          }),
-      );
+      prisma.user.create.mockResolvedValueOnce(createdUser);
       prisma.user.update.mockResolvedValueOnce({});
     };
 
-    it('hashes the password, creates tenant + user atomically, and returns tokens', async () => {
+    it('hashes the password, creates the user with their organisation, and returns tokens', async () => {
       arrangeRegister();
 
       const result = await service.register(validRegisterDto);
 
-      expect(result.user).toMatchObject({
+      expect(result.user).toEqual({
         id: 'user-1',
         email: 'admin@acme.com',
+        name: 'Jane Doe',
         role: 'ADMIN',
-        tenantId: 'tenant-1',
+        organisationId: 'org-1',
+        tenantId: null,
       });
       expect(result.accessToken).toBe('signed.jwt.token');
       expect(result.refreshToken).toBe('signed.jwt.token');
       expect(jwt.signAsync).toHaveBeenCalledTimes(2);
-      expect(prisma.user.update).toHaveBeenCalledTimes(1);
+
+      const [[createArgs]] = prisma.user.create.mock.calls;
+      expect(createArgs.data).toMatchObject({
+        email: 'admin@acme.com',
+        role: 'ADMIN',
+        organisation: { create: { name: 'Acme Corp', handle: 'acme' } },
+      });
+      expect(createArgs.data.password).not.toBe('CorrectHorse9!');
+
+      // Refresh token must be stored hashed, never in plaintext.
       const [[updateArgs]] = prisma.user.update.mock.calls;
       expect(updateArgs.where).toEqual({ id: 'user-1' });
-      // Refresh token must be stored hashed, never in plaintext.
-      const storedRefreshToken = updateArgs.data.refreshToken;
-      expect(typeof storedRefreshToken).toBe('string');
-      expect(storedRefreshToken).not.toEqual('signed.jwt.token');
+      expect(typeof updateArgs.data.refreshToken).toBe('string');
+      expect(updateArgs.data.refreshToken).not.toEqual('signed.jwt.token');
     });
 
-    it('puts the workspace on the starter plan, which billing can price', async () => {
+    it('provisions no tenant for the signer: the company has no customers yet', async () => {
       arrangeRegister();
 
       await service.register(validRegisterDto);
 
-      const [[upsertArgs]] = prisma.plan.upsert.mock.calls;
-      expect(upsertArgs.where).toEqual({ id: 'starter' });
-      expect(upsertArgs.create).toMatchObject({ id: 'starter' });
-      const [[createArgs]] = tenantCreate.mock.calls;
-      expect(createArgs.data.planId).toBe('starter');
+      expect(prisma.tenant.create).not.toHaveBeenCalled();
+      expect(prisma.plan.upsert).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      const [[createArgs]] = prisma.user.create.mock.calls;
+      expect(createArgs.data).not.toHaveProperty('tenant');
+      expect(createArgs.data).not.toHaveProperty('tenantId');
     });
 
-    it('makes the new user the owner of the workspace tenant', async () => {
+    it('puts the organisation id in the JWT', async () => {
       arrangeRegister();
 
       await service.register(validRegisterDto);
 
-      expect(tenantUpdate).toHaveBeenCalledWith({
-        where: { id: 'tenant-1' },
-        data: { ownerId: 'user-1' },
+      const [[payload]] = jwt.signAsync.mock.calls as [
+        [Record<string, unknown>],
+      ];
+      expect(payload).toMatchObject({
+        sub: 'user-1',
+        organisationId: 'org-1',
+        tenantId: null,
       });
     });
 
-    it('starts the provisioning saga for the workspace tenant', async () => {
+    it('still accepts the older tenantName and subdomain fields, lowercasing the handle', async () => {
       arrangeRegister();
 
-      await service.register(validRegisterDto);
-
-      const [[createArgs]] = tenantCreate.mock.calls;
-      expect(createArgs.data.dbStatus).toBe(StepStatus.IN_PROGRESS);
-      expect(tenants.startProvisioning).toHaveBeenCalledWith(workspace);
-    });
-
-    it('still returns tokens when the workspace saga cannot start', async () => {
-      const logError = jest
-        .spyOn(Logger.prototype, 'error')
-        .mockImplementation(() => undefined);
-      arrangeRegister();
-      tenants.startProvisioning.mockRejectedValueOnce(new Error('timeout'));
-
-      await expect(service.register(validRegisterDto)).resolves.toMatchObject({
-        accessToken: 'signed.jwt.token',
-        user: { tenantId: 'tenant-1' },
+      await service.register({
+        email: validRegisterDto.email,
+        password: validRegisterDto.password,
+        tenantName: 'Globex',
+        subdomain: 'Globex',
       });
-      expect(logError).toHaveBeenCalledWith(
-        'Could not start provisioning workspace tenant-1: timeout',
-      );
-      logError.mockRestore();
+
+      expect(organisations.assertHandleFree).toHaveBeenCalledWith('globex');
+      const [[createArgs]] = prisma.user.create.mock.calls;
+      expect(createArgs.data.organisation).toEqual({
+        create: { name: 'Globex', handle: 'globex' },
+      });
     });
 
     it('rejects duplicate email with ConflictException', async () => {
@@ -198,18 +176,19 @@ describe('AuthService', () => {
       await expect(service.register(validRegisterDto)).rejects.toBeInstanceOf(
         ConflictException,
       );
-      expect(prisma.$transaction).not.toHaveBeenCalled();
-      expect(tenants.startProvisioning).not.toHaveBeenCalled();
+      expect(prisma.user.create).not.toHaveBeenCalled();
     });
 
-    it('rejects duplicate subdomain with ConflictException', async () => {
+    it('rejects a taken handle with ConflictException', async () => {
       prisma.user.findUnique.mockResolvedValueOnce(null);
-      prisma.tenant.findUnique.mockResolvedValueOnce({ id: 'existing' });
+      organisations.assertHandleFree.mockRejectedValueOnce(
+        new ConflictException('Handle already taken'),
+      );
 
       await expect(service.register(validRegisterDto)).rejects.toBeInstanceOf(
         ConflictException,
       );
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.user.create).not.toHaveBeenCalled();
     });
   });
 
@@ -221,6 +200,7 @@ describe('AuthService', () => {
         email: 'admin@acme.com',
         name: 'Jane',
         role: 'ADMIN',
+        organisationId: 'org-1',
         tenantId: 'tenant-1',
         password: hashedPassword,
       });
@@ -231,7 +211,11 @@ describe('AuthService', () => {
         password: 'CorrectHorse9!',
       });
 
-      expect(result.user.id).toBe('user-1');
+      expect(result.user).toMatchObject({
+        id: 'user-1',
+        organisationId: 'org-1',
+        tenantId: 'tenant-1',
+      });
       expect(result.accessToken).toBeDefined();
     });
 

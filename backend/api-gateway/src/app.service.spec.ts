@@ -53,6 +53,8 @@ describe('AppService', () => {
 
   const bearer = 'Bearer user.jwt.token';
   const withAuth = { headers: { Authorization: bearer } };
+  const apiKey = 'lk_company_key';
+  const withApiKey = { headers: { 'x-api-key': apiKey } };
 
   beforeEach(async () => {
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
@@ -90,17 +92,69 @@ describe('AppService', () => {
         ok({ id: 'tenant-1', status: 'PROVISIONING' }),
       );
 
-      const result = await service.createTenant(dto, bearer);
+      const result = await service.createTenant(dto, { auth: bearer });
 
       expect(result).toEqual({ id: 'tenant-1', status: 'PROVISIONING' });
       expect(http.post).toHaveBeenCalledWith('/tenants', dto, withAuth);
+    });
+
+    it('forwards a company API key on tenant create and get', async () => {
+      const dto = { name: 'Acme', subdomain: 'acme', planId: 'starter' };
+      http.post.mockReturnValueOnce(ok({ id: 'tenant-1' }));
+      http.get.mockReturnValueOnce(ok({ id: 'tenant-1' }));
+
+      await service.createTenant(dto, { apiKey });
+      await service.getTenant('tenant-1', { auth: undefined, apiKey });
+
+      expect(http.post).toHaveBeenCalledWith('/tenants', dto, withApiKey);
+      expect(http.get).toHaveBeenCalledWith('/tenants/tenant-1', withApiKey);
+    });
+
+    it('forwards both headers when a caller sends both', async () => {
+      http.get.mockReturnValueOnce(ok({ id: 'tenant-1' }));
+
+      await service.getTenant('tenant-1', { auth: bearer, apiKey });
+
+      expect(http.get).toHaveBeenCalledWith('/tenants/tenant-1', {
+        headers: { Authorization: bearer, 'x-api-key': apiKey },
+      });
+    });
+
+    it('proxies the organisation and API key routes with the user token only', async () => {
+      http.get.mockReturnValue(ok([]));
+      http.put.mockReturnValueOnce(ok({ webhookSecret: 'whsec_x' }));
+      http.post.mockReturnValueOnce(ok({ key: 'lk_new' }));
+      http.delete.mockReturnValueOnce(ok(undefined));
+
+      await service.getOrganisation(bearer);
+      await service.updateOrganisation(
+        { webhookUrl: 'https://h.acme.com/x' },
+        bearer,
+      );
+      await service.createApiKey({ name: 'CI' }, bearer);
+      await service.listApiKeys(bearer);
+      await service.revokeApiKey('key-1', bearer);
+
+      expect(http.get).toHaveBeenCalledWith('/organisation', withAuth);
+      expect(http.put).toHaveBeenCalledWith(
+        '/organisation',
+        { webhookUrl: 'https://h.acme.com/x' },
+        withAuth,
+      );
+      expect(http.post).toHaveBeenCalledWith(
+        '/api-keys',
+        { name: 'CI' },
+        withAuth,
+      );
+      expect(http.get).toHaveBeenCalledWith('/api-keys', withAuth);
+      expect(http.delete).toHaveBeenCalledWith('/api-keys/key-1', withAuth);
     });
 
     it('sends GET and DELETE without a body', async () => {
       http.get.mockReturnValueOnce(ok({ id: 'tenant-1' }));
       http.delete.mockReturnValueOnce(ok({ deleted: true }));
 
-      await service.getTenant('tenant-1', bearer);
+      await service.getTenant('tenant-1', { auth: bearer });
       await service.deleteTenant('tenant-1', bearer);
 
       expect(http.get).toHaveBeenCalledWith('/tenants/tenant-1', withAuth);
@@ -166,7 +220,7 @@ describe('AppService', () => {
       const error = await rejectionOf(
         service.createTenant(
           { name: 'Acme', subdomain: 'acme', planId: 'starter' },
-          bearer,
+          { auth: bearer },
         ),
       );
 

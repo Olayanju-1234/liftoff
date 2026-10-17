@@ -23,9 +23,16 @@ model Tenant {
   users     User[]   @relation("TenantMembers") // A tenant can have many users
   events    EventLog[]
 
-  // Only the owner can see or change a tenant; a tenant without one is hidden from everyone.
+  // Tenants are a company's customers: everyone in the organisation sees them.
+  // A tenant without an organisation is hidden from everyone.
+  organisationId String?
+  organisation   Organisation? @relation(fields: [organisationId], references: [id], onDelete: SetNull)
+  // The user who created it (null when made with an API key). Kept for audit, no longer scopes reads.
   ownerId   String?
   owner     User?    @relation("TenantOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  // Signup used to provision a tenant for the signer's own company; those rows stay but are
+  // not customers, so every listing skips them.
+  isWorkspace Boolean @default(false)
 
   // Provisioning Steps Status
   dbStatus          StepStatus @default(PENDING)
@@ -43,6 +50,39 @@ model Tenant {
   updatedAt DateTime @updatedAt
 
   @@index([ownerId])
+  @@index([organisationId])
+}
+
+// The account holder: a SaaS company whose customers are its tenants.
+model Organisation {
+  id     String @id @default(cuid())
+  name   String
+  handle String @unique
+
+  // Stored raw, not hashed, because every delivery is signed with it. The API returns it once.
+  webhookUrl    String?
+  webhookSecret String?
+
+  users   User[]
+  tenants Tenant[]
+  apiKeys ApiKey[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ApiKey {
+  id             String       @id @default(cuid())
+  organisationId String
+  organisation   Organisation @relation(fields: [organisationId], references: [id], onDelete: Cascade)
+  name           String
+  // Enough of the key to recognise it in a list; the rest is only ever stored hashed.
+  prefix     String
+  keyHash    String    @unique
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([organisationId])
 }
 
 model User {
@@ -69,8 +109,12 @@ model User {
   resetToken       String?
   resetTokenExpiry DateTime?
   
-  tenantId  String
-  tenant    Tenant   @relation("TenantMembers", fields: [tenantId], references: [id], onDelete: Cascade)
+  organisationId String?
+  organisation   Organisation? @relation(fields: [organisationId], references: [id], onDelete: SetNull)
+
+  // Legacy: the workspace tenant signup used to provision. New users have none.
+  tenantId  String?
+  tenant    Tenant?  @relation("TenantMembers", fields: [tenantId], references: [id], onDelete: Cascade)
   ownedTenants Tenant[] @relation("TenantOwner")
   settings  Settings?
   

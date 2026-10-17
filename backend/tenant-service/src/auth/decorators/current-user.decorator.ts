@@ -1,12 +1,17 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 import type { User } from '.prisma/tenant-client';
+import { isApiKeyPrincipal, type Principal } from '../principal';
 
+// The signed-in user, or undefined when the caller is an API key.
 export const CurrentUser = createParamDecorator(
   (data: keyof User | undefined, ctx: ExecutionContext) => {
-    const request = ctx.switchToHttp().getRequest<{ user?: User }>();
-    if (data) {
-      return request.user?.[data];
+    const { user } = ctx.switchToHttp().getRequest<{ user?: Principal }>();
+    if (!user || isApiKeyPrincipal(user)) {
+      return undefined;
     }
-    return request.user;
+    if (data) {
+      return user[data];
+    }
+    return user;
   },
 );
