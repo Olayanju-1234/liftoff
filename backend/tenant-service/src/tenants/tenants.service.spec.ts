@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -75,6 +76,12 @@ describe('TenantsService', () => {
   const creator = { organisationId: 'org-1', ownerId: 'owner-1' };
   // How every read is scoped: the company's customers, never its legacy workspace tenant.
   const inOrg = { organisationId: 'org-1', isWorkspace: false };
+  // The only statuses a worker's step result may change.
+  const live = [
+    TenantStatus.PROVISIONING,
+    TenantStatus.FAILED,
+    TenantStatus.ACTIVE,
+  ];
 
   beforeEach(async () => {
     prisma = buildPrisma();
@@ -289,9 +296,8 @@ describe('TenantsService', () => {
   });
 
   describe('saga handlers', () => {
-    it('handleDbReady completes db and starts dns only while dns is PENDING', async () => {
-      prisma.tenant.update.mockResolvedValueOnce({});
-      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+    it('handleDbReady completes db on an in-flight tenant and starts dns only while dns is PENDING', async () => {
+      prisma.tenant.updateMany.mockResolvedValue({ count: 1 });
 
       await service.handleDbReady({
         tenantId: 't',
@@ -299,13 +305,18 @@ describe('TenantsService', () => {
         planId: 'p',
       });
 
-      expect(prisma.tenant.update).toHaveBeenCalledWith({
-        where: { id: 't' },
+      expect(prisma.tenant.updateMany).toHaveBeenNthCalledWith(1, {
+        where: { id: 't', status: { in: live } },
         data: { dbStatus: StepStatus.SUCCESS },
       });
-      expect(prisma.tenant.updateMany).toHaveBeenCalledWith({
+      expect(prisma.tenant.updateMany).toHaveBeenNthCalledWith(2, {
         where: { id: 't', dnsStatus: StepStatus.PENDING },
         data: { dnsStatus: StepStatus.IN_PROGRESS },
+      });
+      expect(prisma.eventLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'tenant.db.ready',
+        }) as unknown,
       });
     });
 
@@ -389,6 +400,52 @@ describe('TenantsService', () => {
     });
   });
 
+  // A worker that was mid-step when the tenant was cancelled or removed still reports in
+  // (seen on production: "<Customer> is ready" for a deleted tenant). Nothing may change.
+  describe('late step results for a tenant that is no longer live', () => {
+    const saga = { tenantId: 't', subdomain: 's', planId: 'starter' };
+    let debug: jest.SpyInstance;
+
+    beforeEach(() => {
+      debug = jest
+        .spyOn(Logger.prototype, 'debug')
+        .mockImplementation(() => undefined);
+      prisma.tenant.updateMany.mockResolvedValue({ count: 0 });
+    });
+
+    const late = {
+      'tenant.db.ready': () => service.handleDbReady(saga),
+      'tenant.dns.ready': () => service.handleDnsReady(saga),
+      'tenant.credentials.ready': () => service.handleCredentialsReady(saga),
+      'tenant.billing.active': () =>
+        service.handleBillingActive({
+          ...saga,
+          stripeCustomerId: 'cus_late',
+          stripeSubscriptionId: 'sub_late',
+          subscriptionStatus: 'trialing',
+          trialEnd: null,
+        }),
+    };
+
+    it.each(Object.keys(late))(
+      'ignores %s: no step change, no next step, no event, logged at debug',
+      async (event) => {
+        await late[event as keyof typeof late]();
+
+        expect(prisma.tenant.updateMany).toHaveBeenCalledTimes(1);
+        const [[call]] = prisma.tenant.updateMany.mock.calls;
+        expect(call.where).toEqual({ id: 't', status: { in: live } });
+        expect(prisma.tenant.update).not.toHaveBeenCalled();
+        expect(prisma.eventLog.create).not.toHaveBeenCalled();
+        expect(webhooks.notify).not.toHaveBeenCalled();
+        expect(amqp.publish).not.toHaveBeenCalled();
+        expect(debug).toHaveBeenCalledWith(
+          expect.stringContaining(`${event} for tenant t ignored`),
+        );
+      },
+    );
+  });
+
   describe('out-of-order events', () => {
     type TenantRow = Record<ProvisioningStep | 'id' | 'status', string>;
     let row: TenantRow;
@@ -442,10 +499,6 @@ describe('TenantsService', () => {
         billingStatus: StepStatus.PENDING,
         notificationStatus: StepStatus.PENDING,
       };
-      prisma.tenant.update.mockImplementation(({ data }) => {
-        Object.assign(row, data);
-        return Promise.resolve(row);
-      });
       prisma.tenant.updateMany.mockImplementation(({ where = {}, data }) => {
         if (!matches(where)) {
           return Promise.resolve({ count: 0 });
@@ -456,9 +509,6 @@ describe('TenantsService', () => {
     });
 
     it('stores the Stripe ids on the tenant when billing created a subscription', async () => {
-      prisma.tenant.update.mockResolvedValueOnce({});
-      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
-
       await service.handleBillingActive({
         ...saga,
         stripeCustomerId: 'cus_1',
@@ -467,13 +517,18 @@ describe('TenantsService', () => {
         trialEnd: null,
       });
 
-      expect(prisma.tenant.update).toHaveBeenCalledWith({
-        where: { id: 't' },
+      expect(prisma.tenant.updateMany).toHaveBeenNthCalledWith(1, {
+        where: { id: 't', status: { in: live } },
         data: {
           billingStatus: StepStatus.SUCCESS,
           stripeCustomerId: 'cus_1',
           stripeSubscriptionId: 'sub_1',
         },
+      });
+      expect(row).toMatchObject({
+        billingStatus: StepStatus.SUCCESS,
+        stripeCustomerId: 'cus_1',
+        notificationStatus: StepStatus.IN_PROGRESS,
       });
       expect(prisma.eventLog.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
@@ -483,9 +538,6 @@ describe('TenantsService', () => {
     });
 
     it('records billing as SKIPPED with no Stripe ids when the company has not connected Stripe', async () => {
-      prisma.tenant.update.mockResolvedValueOnce({});
-      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
-
       await service.handleBillingActive({
         ...saga,
         stripeCustomerId: null,
@@ -496,10 +548,11 @@ describe('TenantsService', () => {
         skipReason: 'not-connected',
       });
 
-      expect(prisma.tenant.update).toHaveBeenCalledWith({
-        where: { id: 't' },
+      expect(prisma.tenant.updateMany).toHaveBeenNthCalledWith(1, {
+        where: { id: 't', status: { in: live } },
         data: { billingStatus: StepStatus.SKIPPED },
       });
+      expect(row).not.toHaveProperty('stripeCustomerId');
       expect(prisma.eventLog.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
           eventType: 'tenant.billing.skipped',
@@ -589,6 +642,38 @@ describe('TenantsService', () => {
 
       expect(row).toMatchObject(everyStepSucceeded);
     });
+
+    it.each([
+      TenantStatus.CANCELLED,
+      TenantStatus.DEPROVISIONING,
+      TenantStatus.DELETED,
+    ])(
+      'leaves a %s tenant exactly as it is when the workers report in late',
+      async (status) => {
+        await deliver.dbReady();
+        // Cancelled or removed while dns ran: open steps are CANCELLED, nothing else moves.
+        Object.assign(row, {
+          status,
+          dnsStatus: StepStatus.CANCELLED,
+          credentialsStatus: StepStatus.CANCELLED,
+          billingStatus: StepStatus.CANCELLED,
+          notificationStatus: StepStatus.CANCELLED,
+        });
+        const before = { ...row };
+        prisma.eventLog.create.mockClear();
+
+        await deliver.dnsReady();
+        await deliver.credentialsReady();
+        await deliver.billingActive();
+        await deliver.complete();
+        await deliver.billingFailed();
+
+        expect(row).toEqual(before);
+        expect(prisma.eventLog.create).not.toHaveBeenCalled();
+        expect(webhooks.notify).not.toHaveBeenCalled();
+        expect(amqp.publish).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('failStep', () => {

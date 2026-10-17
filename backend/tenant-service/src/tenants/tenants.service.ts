@@ -16,8 +16,9 @@ import {
   TenantStatus,
   type Tenant,
 } from '.prisma/tenant-client';
-import type {
-  ProvisioningCompletePayload,
+import {
+  LIVE_TENANT_STATUSES,
+  type ProvisioningCompletePayload,
   TenantDeprovisionDonePayload,
   TenantDeprovisionPayload,
   TenantFailedPayload,
@@ -53,6 +54,14 @@ const PROVISIONING_STEPS: ProvisioningStep[] = [
   'notificationStatus',
 ];
 const TEARDOWN_STEPS: TeardownStep[] = Object.values(TEARDOWN_STEP_BY_PART);
+// Step results are recorded for these; the rest are gone and ignore late workers.
+const LIVE: TenantStatus[] = [...LIVE_TENANT_STATUSES];
+// Only these can still be failed or activated. FAILED stays eligible so a replayed
+// step can finish (or fail) the saga again; ACTIVE is never failed by a late dead letter.
+const SAGA_OPEN: TenantStatus[] = [
+  TenantStatus.PROVISIONING,
+  TenantStatus.FAILED,
+];
 const TEARDOWN_FINISHED: StepStatus[] = [
   StepStatus.SUCCESS,
   StepStatus.SKIPPED,
@@ -230,12 +239,8 @@ export class TenantsService {
     };
     data[step] = StepStatus.FAILED;
 
-    // FAILED stays eligible so a replayed message that fails again is recorded.
     const { count } = await this.prisma.tenant.updateMany({
-      where: {
-        id: tenantId,
-        status: { in: [TenantStatus.PROVISIONING, TenantStatus.FAILED] },
-      },
+      where: { id: tenantId, status: { in: SAGA_OPEN } },
       data,
     });
     if (count === 0) {
@@ -271,6 +276,7 @@ export class TenantsService {
 
   // Each worker consumes the same event in parallel with this service, so the
   // next step may already be SUCCESS or FAILED; only start it while PENDING.
+  // Returns false, having changed nothing, when the tenant is no longer live.
   private async completeStep(
     tenantId: string,
     step: ProvisioningStep,
@@ -278,17 +284,31 @@ export class TenantsService {
     outcome:
       | typeof StepStatus.SUCCESS
       | typeof StepStatus.SKIPPED = StepStatus.SUCCESS,
-    extra: Prisma.TenantUpdateInput = {},
-  ) {
-    const data: Prisma.TenantUpdateInput = { ...extra };
+    extra: Prisma.TenantUpdateManyMutationInput = {},
+  ): Promise<boolean> {
+    const data: Prisma.TenantUpdateManyMutationInput = { ...extra };
     data[step] = outcome;
-    await this.prisma.tenant.update({ where: { id: tenantId }, data });
+    const { count } = await this.prisma.tenant.updateMany({
+      where: { id: tenantId, status: { in: LIVE } },
+      data,
+    });
+    if (count === 0) {
+      return false;
+    }
 
     const where: Prisma.TenantWhereInput = { id: tenantId };
     where[next] = StepStatus.PENDING;
     const start: Prisma.TenantUpdateManyMutationInput = {};
     start[next] = StepStatus.IN_PROGRESS;
     await this.prisma.tenant.updateMany({ where, data: start });
+    return true;
+  }
+
+  // A worker that was mid-step when the tenant was cancelled or removed still reports in.
+  private ignoreStepResult(event: string, tenantId: string): void {
+    this.logger.debug(
+      `${event} for tenant ${tenantId} ignored: tenant is cancelled, removed or being removed`,
+    );
   }
 
   private async logEvent(
@@ -322,7 +342,15 @@ export class TenantsService {
   public async handleDbReady(payload: TenantDbReadyPayload) {
     this.logger.log(`DB ready for tenant ${payload.tenantId}`);
     try {
-      await this.completeStep(payload.tenantId, 'dbStatus', 'dnsStatus');
+      const completed = await this.completeStep(
+        payload.tenantId,
+        'dbStatus',
+        'dnsStatus',
+      );
+      if (!completed) {
+        this.ignoreStepResult('tenant.db.ready', payload.tenantId);
+        return;
+      }
       await this.logEvent(
         payload.tenantId,
         'tenant.db.ready',
@@ -343,7 +371,15 @@ export class TenantsService {
     queue: 'tenant-service-dns-ready-queue',
   })
   public async handleDnsReady(payload: TenantDnsReadyPayload) {
-    await this.completeStep(payload.tenantId, 'dnsStatus', 'credentialsStatus');
+    const completed = await this.completeStep(
+      payload.tenantId,
+      'dnsStatus',
+      'credentialsStatus',
+    );
+    if (!completed) {
+      this.ignoreStepResult('tenant.dns.ready', payload.tenantId);
+      return;
+    }
     await this.logEvent(
       payload.tenantId,
       'tenant.dns.ready',
@@ -358,11 +394,15 @@ export class TenantsService {
     queue: 'tenant-service-credentials-ready-queue',
   })
   public async handleCredentialsReady(payload: TenantCredentialsReadyPayload) {
-    await this.completeStep(
+    const completed = await this.completeStep(
       payload.tenantId,
       'credentialsStatus',
       'billingStatus',
     );
+    if (!completed) {
+      this.ignoreStepResult('tenant.credentials.ready', payload.tenantId);
+      return;
+    }
     await this.logEvent(
       payload.tenantId,
       'tenant.credentials.ready',
@@ -380,7 +420,7 @@ export class TenantsService {
     // Billing is skipped, never simulated: a test tenant, or a company without Stripe.
     // The row says so and the saga moves on.
     const skipped = payload.skipped === true;
-    await this.completeStep(
+    const completed = await this.completeStep(
       payload.tenantId,
       'billingStatus',
       'notificationStatus',
@@ -392,6 +432,10 @@ export class TenantsService {
             stripeSubscriptionId: payload.stripeSubscriptionId,
           },
     );
+    if (!completed) {
+      this.ignoreStepResult('tenant.billing.active', payload.tenantId);
+      return;
+    }
     await this.logEvent(
       payload.tenantId,
       skipped ? 'tenant.billing.skipped' : 'tenant.billing.active',
@@ -419,10 +463,7 @@ export class TenantsService {
       // FAILED stays eligible so a replayed step can finish the saga. A cancelled, removed
       // or removing tenant is never brought back by a late message.
       const { count } = await this.prisma.tenant.updateMany({
-        where: {
-          id: payload.tenantId,
-          status: { in: [TenantStatus.PROVISIONING, TenantStatus.FAILED] },
-        },
+        where: { id: payload.tenantId, status: { in: SAGA_OPEN } },
         data: {
           status: TenantStatus.ACTIVE,
           notificationStatus: emailed ? StepStatus.SUCCESS : StepStatus.SKIPPED,
