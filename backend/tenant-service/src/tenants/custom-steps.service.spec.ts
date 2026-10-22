@@ -263,3 +263,106 @@ describe('CustomStepsService', () => {
     ).resolves.toEqual(['database', 'credentials', 'welcome']);
   });
 });
+
+describe('CustomStepsService.sendAttempt (durable)', () => {
+  const input = { callId: 'call-1', deadline: '', deliveryId: 'call-1' };
+  let findCall: jest.Mock;
+  let attemptOnce: jest.Mock;
+
+  const build = () =>
+    new CustomStepsService(
+      {
+        tenant: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: call.tenantId,
+            subdomain: 'globex',
+            planId: 'starter',
+            organisation: {
+              webhookUrl: 'https://hooks.acme.com/liftoff',
+              webhookSecret: 'whsec_test',
+              baseDomain: null,
+              plans: null,
+            },
+          }),
+        },
+        customStepCall: { findUnique: findCall },
+      } as unknown as PrismaService,
+      {
+        attemptOnce,
+        tenantRecord: (tenant: { id: string }) => ({ id: tenant.id }),
+      } as unknown as WebhookService,
+      { get: () => 'https://api.liftoff.test' } as unknown as ConfigService,
+    );
+
+  beforeEach(() => {
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    findCall = jest.fn().mockResolvedValue(call);
+    attemptOnce = jest
+      .fn()
+      .mockResolvedValue({ delivered: true, retryable: false, status: 202 });
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  it('makes one signed attempt under the workflow delivery id', async () => {
+    await expect(build().sendAttempt(input)).resolves.toEqual({
+      delivered: true,
+      status: 202,
+    });
+    const [request, deliveryId] = attemptOnce.mock.calls[0] as [
+      { url: URL; body: string },
+      string,
+    ];
+    expect(deliveryId).toBe('call-1');
+    expect(request.url.href).toBe(call.url);
+    expect(JSON.parse(request.body)).toMatchObject({
+      requestId: 'call-1',
+      callbackUrl: `https://api.liftoff.test/tenants/${call.tenantId}/steps/address`,
+    });
+  });
+
+  it('throws on a retryable failure, so the engine retries it', async () => {
+    attemptOnce.mockResolvedValue({
+      delivered: false,
+      retryable: true,
+      status: 503,
+      error: 'answered 503',
+    });
+
+    await expect(build().sendAttempt(input)).rejects.toThrow('answered 503');
+  });
+
+  it('answers without retrying when the company rejects it', async () => {
+    attemptOnce.mockResolvedValue({
+      delivered: false,
+      retryable: false,
+      status: 400,
+      error: 'rejected with 400',
+    });
+
+    await expect(build().sendAttempt(input)).resolves.toEqual({
+      delivered: false,
+      status: 400,
+      error: 'rejected with 400',
+    });
+  });
+
+  it('is abandoned once a callback, the deadline or a cancel closed the call', async () => {
+    findCall.mockResolvedValue({ ...call, status: StepStatus.SUCCESS });
+
+    await expect(build().sendAttempt(input)).resolves.toEqual({
+      delivered: false,
+      abandoned: true,
+    });
+    expect(attemptOnce).not.toHaveBeenCalled();
+  });
+
+  it('treats a bad URL as an answer, not something to retry', async () => {
+    findCall.mockResolvedValue({ ...call, url: 'not a url' });
+
+    const outcome = await build().sendAttempt(input);
+
+    expect(outcome.delivered).toBe(false);
+    expect(outcome.error).toBeTruthy();
+    expect(attemptOnce).not.toHaveBeenCalled();
+  });
+});

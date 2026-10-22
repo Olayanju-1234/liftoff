@@ -448,7 +448,7 @@ const expected = 'sha256=' + crypto.createHmac('sha256', process.env.LIFTOFF_WEB
 const ok = expected.length === signature.length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
 ```
 
-Answer with any 2xx. A 5xx, timeout or network error is retried after 1 s, 5 s and 25 s (four attempts in all, 10 s each); a 4xx is not retried. Redirects are not followed. The URL's host is resolved on every attempt and must not point at a private, loopback, link-local or metadata address. Delivery never blocks the saga: failures are logged by tenant-service and the tenant's status is still the source of truth, so poll `GET /tenants/:id` if a webhook does not arrive. Rotate the secret with `PUT /organisation {"rotateWebhookSecret": true}`.
+Answer with any 2xx. A 5xx, timeout or network error is retried after 1 s, 5 s and 25 s (four attempts in all, 10 s each); a 4xx is not retried. With durable deliveries on (see `WORKFLOWD_ADDR` below), a workflowd engine keeps the retries instead: six attempts over about two and a half minutes (5 s, then doubling up to 60 s), and they survive a restart of liftoff. Every attempt carries the same `x-liftoff-delivery` id, so drop repeats by it. Redirects are not followed. The URL's host is resolved on every attempt and must not point at a private, loopback, link-local or metadata address. Delivery never blocks the saga: failures are logged by tenant-service and the tenant's status is still the source of truth, so poll `GET /tenants/:id` if a webhook does not arrive. Rotate the secret with `PUT /organisation {"rotateWebhookSecret": true}`.
 
 **4. Run a step yourself (custom steps).** Each of the five steps (`database`, `address`, `credentials`, `billing`, `welcome`) is `builtin` by default. Set one to `skipped` to leave it out, or to `custom` to run it on your own infrastructure. Custom requests are signed with the webhook secret, so set the webhook first:
 
@@ -555,6 +555,10 @@ migration steps are written up in
 
 **Tenant Service (custom steps):**
 - `PUBLIC_API_URL`: the gateway's public address (`https://api.liftoff.ojusentinel.com` in production). Custom step requests carry `callbackUrl` under it; unset, it is `http://localhost:4000` and a warning is logged.
+
+**Tenant Service (durable deliveries, optional):**
+- `WORKFLOWD_ADDR`: the HTTP address of a [workflowd](https://github.com/Olayanju-1234/durable-workflow-engine) engine, e.g. `http://127.0.0.1:8233`. When set, company webhooks and custom step requests run as workflows (`src/durable/`): retries, the custom step deadline and the wait for the company's callback live in the engine, so a tenant-service restart mid-retry no longer loses the request. Unset, or with the engine unreachable when a delivery starts, everything runs in memory as before. The 30-second deadline sweep stays on as a backstop.
+- `WORKFLOWD_TOKEN`: the bearer token, for an engine started with `--auth-token-file`.
 
 **Tenant Service (per-organisation secrets and the internal API):**
 - `ORG_SECRETS_KEY` (32+ chars): encrypts each company's Stripe key at rest. Without it, connecting Stripe answers 503 and billing is `SKIPPED` for everyone.
@@ -672,6 +676,8 @@ These are the items that would come next if I were continuing on this codebase.
 Calling them out explicitly because senior engineering is as much about knowing
 where the cracks are as it is about the code that ships.
 
+- **Durable webhooks and custom steps** are opt-in through workflowd (`WORKFLOWD_ADDR`).
+  The next candidates for it are the provisioning saga itself and the failure email.
 - **Transactional outbox for event publication.** Today the DB write and the
   RabbitMQ publish are not atomic — a process crash between them leaves the
   saga stuck until the 30-min timeout sweep. Design captured in

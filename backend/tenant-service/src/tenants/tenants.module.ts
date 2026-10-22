@@ -10,6 +10,7 @@ import { IdempotencyService } from './idempotency.service';
 import { QuotasService } from './quotas.service';
 import { DEAD_LETTER_EXCHANGE, DEAD_LETTER_QUEUE } from './dead-letters';
 import { WebhooksModule } from '../webhooks/webhooks.module';
+import { DurableModule } from '../durable/durable.module';
 import { StatusModule } from '../status/status.module';
 import { CustomStepsService } from './custom-steps.service';
 import { StepBindingsService } from './step-bindings.service';
@@ -21,6 +22,7 @@ import { StepBindingsService } from './step-bindings.service';
     }),
     ScheduleModule.forRoot(),
     WebhooksModule,
+    DurableModule,
     StatusModule,
     RabbitMQModule.forRoot({
       exchanges: [

@@ -58,6 +58,15 @@ export const envValidationSchema = Joi.object({
   // Without it the internal API answers 503 and billing fails for real tenants.
   INTERNAL_API_TOKEN: Joi.string().min(32).optional().allow(''),
 
+  // Durable deliveries (optional): the HTTP address of a workflowd engine, e.g.
+  // http://127.0.0.1:8233. Unset keeps webhook and custom step retries in memory.
+  WORKFLOWD_ADDR: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .optional()
+    .allow(''),
+  // Bearer token for an engine started with --auth-token-file.
+  WORKFLOWD_TOKEN: Joi.string().optional().allow(''),
+
   // OAuth — optional; routes 401 if a strategy is enabled without creds.
   GOOGLE_CLIENT_ID: Joi.string().optional().allow(''),
   GOOGLE_CLIENT_SECRET: Joi.string().optional().allow(''),

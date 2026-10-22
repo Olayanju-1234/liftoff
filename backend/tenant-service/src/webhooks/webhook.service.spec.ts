@@ -6,7 +6,10 @@ import {
   WEBHOOK_BACKOFF_MS,
   WEBHOOK_TIMEOUT_MS,
   WebhookService,
+  settle,
 } from './webhook.service';
+import { DurableService } from '../durable/durable.service';
+import { ACTIVITY, TENANT_WEBHOOK_WORKFLOW } from '../durable/workflows';
 import { signWebhookBody, verifyWebhookSignature } from './signature';
 import * as destination from './destination';
 import { PrismaService } from '../prisma.service';
@@ -271,6 +274,137 @@ describe('WebhookService', () => {
       expect(error).toHaveBeenCalledWith(
         'Webhook tenant.failed for tenant t1 failed: db down',
       );
+    });
+  });
+});
+
+describe('WebhookService with workflowd', () => {
+  let service: WebhookService;
+  let prisma: { tenant: { findUnique: jest.Mock } };
+  let fetchImpl: jest.Mock;
+  let durable: { enabled: boolean; start: jest.Mock; activity: jest.Mock };
+
+  beforeEach(async () => {
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    jest.spyOn(destination, 'assertPublicDestination').mockResolvedValue();
+    prisma = {
+      tenant: { findUnique: jest.fn().mockResolvedValue(withWebhook) },
+    };
+    durable = {
+      enabled: true,
+      start: jest.fn().mockResolvedValue(true),
+      activity: jest.fn(),
+    };
+    const moduleRef = await Test.createTestingModule({
+      providers: [
+        WebhookService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: DurableService, useValue: durable },
+        {
+          provide: StatusTokenService,
+          useValue: { urlFor: (id: string) => `https://app.test/status/${id}` },
+        },
+      ],
+    }).compile();
+    service = moduleRef.get(WebhookService);
+    fetchImpl = jest.fn().mockResolvedValue(response(200));
+    service.fetchImpl = fetchImpl;
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  it('registers its delivery activity', () => {
+    service.onModuleInit();
+    expect(durable.activity).toHaveBeenCalledWith(
+      ACTIVITY.deliverWebhook,
+      expect.any(Function),
+    );
+  });
+
+  it('hands notify to a durable workflow instead of posting in memory', async () => {
+    service.notify('t1', 'tenant.active');
+    await flush();
+
+    const [type, input, id] = durable.start.mock.calls[0] as [
+      string,
+      { tenantId: string; event: string; deliveryId: string },
+      string,
+    ];
+    expect(type).toBe(TENANT_WEBHOOK_WORKFLOW);
+    expect(input).toMatchObject({ tenantId: 't1', event: 'tenant.active' });
+    expect(id).toBe(`liftoff-webhook-${input.deliveryId}`);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('falls back to delivering in memory when the engine refuses', async () => {
+    durable.start.mockResolvedValue(false);
+
+    service.notify('t1', 'tenant.active');
+    await flush();
+    await flush();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  describe('deliverAttempt', () => {
+    const input = {
+      tenantId: 't1',
+      event: 'tenant.active' as const,
+      deliveryId: 'd-1',
+    };
+
+    it('posts once, under the workflow delivery id', async () => {
+      await expect(service.deliverAttempt(input)).resolves.toEqual({
+        delivered: true,
+        status: 200,
+      });
+      const [, init] = fetchImpl.mock.calls[0] as [
+        URL,
+        { headers: Record<string, string> },
+      ];
+      expect(init.headers['x-liftoff-delivery']).toBe('d-1');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws on a 5xx, so the engine retries it', async () => {
+      fetchImpl.mockResolvedValue(response(503));
+      await expect(service.deliverAttempt(input)).rejects.toThrow(
+        'answered 503',
+      );
+    });
+
+    it('settles on a 4xx without retrying', async () => {
+      fetchImpl.mockResolvedValue(response(410));
+      await expect(service.deliverAttempt(input)).resolves.toEqual({
+        delivered: false,
+        status: 410,
+        error: 'rejected with 410',
+      });
+    });
+
+    it('is skipped when the organisation has no webhook', async () => {
+      prisma.tenant.findUnique.mockResolvedValue({
+        ...tenantRow,
+        organisation: { webhookUrl: null, webhookSecret: null },
+      });
+      await expect(service.deliverAttempt(input)).resolves.toEqual({
+        delivered: false,
+        skipped: true,
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  });
+
+  it('settle() throws for a retryable attempt and answers otherwise', () => {
+    expect(() =>
+      settle({ delivered: false, retryable: true, error: 'timeout' }),
+    ).toThrow('timeout');
+    expect(settle({ delivered: true, retryable: false, status: 200 })).toEqual({
+      delivered: true,
+      status: 200,
     });
   });
 });

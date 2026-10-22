@@ -14,6 +14,12 @@ import { PrismaService } from '../prisma.service';
 import { WebhookService } from '../webhooks/webhook.service';
 import { QuotasService } from './quotas.service';
 import { StatusTokenService } from '../status/status-token.service';
+import { DurableService } from '../durable/durable.service';
+import {
+  ACTIVITY,
+  CUSTOM_STEP_CALLBACK_SIGNAL,
+  CUSTOM_STEP_WORKFLOW,
+} from '../durable/workflows';
 
 type Row = Record<string, unknown>;
 
@@ -64,6 +70,13 @@ describe('Custom steps (dispatch, callbacks, timeouts)', () => {
   let events: { eventType: string; status: string; payload: Row }[];
   let amqp: { publish: jest.Mock };
   let webhooks: { notify: jest.Mock; post: jest.Mock; tenantRecord: jest.Mock };
+  // Off unless a test turns it on, so every other test runs the in-memory path.
+  let durable: {
+    enabled: boolean;
+    start: jest.Mock;
+    signal: jest.Mock;
+    activity: jest.Mock;
+  };
 
   const published = (queue: string): unknown[][] =>
     (amqp.publish.mock.calls as unknown[][]).filter(([, key]) => key === queue);
@@ -220,10 +233,18 @@ describe('Custom steps (dispatch, callbacks, timeouts)', () => {
       })),
     };
 
+    durable = {
+      enabled: false,
+      start: jest.fn().mockResolvedValue(true),
+      signal: jest.fn().mockResolvedValue(undefined),
+      activity: jest.fn(),
+    };
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         TenantsService,
         CustomStepsService,
+        { provide: DurableService, useValue: durable },
         { provide: PrismaService, useValue: prisma },
         { provide: AmqpConnection, useValue: amqp },
         { provide: WebhookService, useValue: webhooks },
@@ -540,6 +561,82 @@ describe('Custom steps (dispatch, callbacks, timeouts)', () => {
         stepModes: { database: 'skipped', address: 'builtin' },
       });
       expect(published('dns-provisioner-queue')).toHaveLength(1);
+    });
+  });
+
+  describe('with workflowd', () => {
+    beforeEach(() => {
+      durable.enabled = true;
+      custom('credentials', { timeoutMs: 120_000 });
+      atStep('dnsStatus');
+    });
+
+    it('hands the request to a durable workflow instead of posting it in memory', async () => {
+      await dnsReady();
+      await settle();
+
+      const [call] = calls;
+      expect(durable.start).toHaveBeenCalledWith(
+        CUSTOM_STEP_WORKFLOW,
+        {
+          callId: call.id,
+          deadline: (call.deadlineAt as Date).toISOString(),
+          deliveryId: call.id,
+        },
+        `liftoff-custom-step-${call.id as string}`,
+      );
+      expect(webhooks.post).not.toHaveBeenCalled();
+    });
+
+    it('posts in memory after all when the engine refuses', async () => {
+      durable.start.mockResolvedValue(false);
+
+      await dnsReady();
+      await settle();
+
+      expect(webhooks.post).toHaveBeenCalledTimes(1);
+    });
+
+    it("ends the durable wait once the company's result is recorded", async () => {
+      await dnsReady();
+      await settle();
+
+      await callback('complete', 'credentials', { requestId: 'call-1' });
+
+      expect(durable.signal).toHaveBeenCalledWith(
+        'liftoff-custom-step-call-1',
+        CUSTOM_STEP_CALLBACK_SIGNAL,
+        { outcome: StepStatus.SUCCESS },
+        'call-1:SUCCESS',
+      );
+      expect(row).toMatchObject({ credentialsStatus: StepStatus.SUCCESS });
+    });
+
+    it('registers the follow-ups, and the deadline one times out an open request', async () => {
+      service.onModuleInit();
+      customSteps.onModuleInit();
+      const registered = new Map(
+        (
+          durable.activity.mock.calls as [string, (input: unknown) => unknown][]
+        ).map(([name, fn]) => [name, fn]),
+      );
+      expect([...registered.keys()].sort()).toEqual(
+        [
+          ACTIVITY.customStepDeadline,
+          ACTIVITY.customStepUndelivered,
+          ACTIVITY.sendCustomStep,
+        ].sort(),
+      );
+
+      await dnsReady();
+      await settle();
+      const deadline = registered.get(ACTIVITY.customStepDeadline)!;
+      await expect(deadline({ callId: 'call-1' })).resolves.toBe(true);
+
+      expect(calls[0]).toMatchObject({ status: StepStatus.FAILED });
+      expect(row).toMatchObject({ credentialsStatus: StepStatus.FAILED });
+      // A second firing finds the request already closed.
+      await expect(deadline({ callId: 'call-1' })).resolves.toBe(false);
     });
   });
 
