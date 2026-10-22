@@ -126,6 +126,7 @@ export declare const IDEMPOTENT_REPLAYED_HEADER = "idempotent-replayed";
 export declare const WEBHOOK_SIGNATURE_HEADER = "x-liftoff-signature";
 export declare const WEBHOOK_EVENT_HEADER = "x-liftoff-event";
 export declare const WEBHOOK_DELIVERY_HEADER = "x-liftoff-delivery";
+export declare const LOG_REDACT_PATHS: string[];
 export type TenantWebhookEvent = 'tenant.active' | 'tenant.failed' | 'tenant.deleted';
 export interface TenantWebhookPayload<TTenant = unknown> {
     event: TenantWebhookEvent;

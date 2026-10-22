@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { LOG_REDACT_PATHS } from '@liftoff/shared-types';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { AppController } from './app.controller';
@@ -37,6 +38,7 @@ import { envValidationSchema } from './config/env.validation';
               }
             : undefined,
         level: process.env.LOG_LEVEL || 'info',
+        redact: { paths: LOG_REDACT_PATHS, censor: '[redacted]' },
       },
     }),
     AuthModule,

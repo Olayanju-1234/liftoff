@@ -624,6 +624,16 @@ export const WEBHOOK_SIGNATURE_HEADER = 'x-liftoff-signature';
 export const WEBHOOK_EVENT_HEADER = 'x-liftoff-event';
 export const WEBHOOK_DELIVERY_HEADER = 'x-liftoff-delivery';
 
+// Headers that carry credentials. Every service's request logger replaces them with
+// "[redacted]", so tokens and API keys never reach the logs.
+export const LOG_REDACT_PATHS = [
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'req.headers["x-api-key"]',
+  'req.headers["x-internal-token"]',
+  'res.headers["set-cookie"]',
+];
+
 export type TenantWebhookEvent =
   | 'tenant.active'
   | 'tenant.failed'

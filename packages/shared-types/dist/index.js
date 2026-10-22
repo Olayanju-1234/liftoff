@@ -9,8 +9,8 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.LIVE_TENANT_STATUSES = exports.STATUS_TOKEN_PATTERN = exports.PLAN_IDS = exports.FailStepDto = exports.CompleteStepDto = exports.IsSmallJsonObject = exports.CUSTOM_STEP_OUTPUT_MAX_BYTES = exports.CUSTOM_STEP_EVENT = exports.CUSTOM_STEP_ACTIONS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.StepConfigDto = exports.StepConfigEntryDto = exports.CUSTOM_STEP_URL_MAX_LENGTH = exports.CUSTOM_STEP_MAX_TIMEOUT_MS = exports.CUSTOM_STEP_MIN_TIMEOUT_MS = exports.CUSTOM_STEP_DEFAULT_TIMEOUT_MS = exports.STEP_MODES = exports.PROVISIONING_STEP_NAMES = exports.IsStripePriceMap = exports.UniqueCustomerPlanIds = exports.CustomerPlanDto = exports.DEFAULT_CUSTOMER_PLANS = exports.MAX_CUSTOMER_PLANS = exports.CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH = exports.CUSTOMER_PLAN_NAME_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_PATTERN = exports.STRIPE_PRICE_ID_PATTERN = exports.STRIPE_SECRET_KEY_MAX_LENGTH = exports.STRIPE_SECRET_KEY_PATTERN = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = exports.VerifyEmailDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
-exports.INTERNAL_TOKEN_HEADER = exports.DEPROVISION_PARTS = exports.isLiveTenant = void 0;
+exports.STATUS_TOKEN_PATTERN = exports.PLAN_IDS = exports.FailStepDto = exports.CompleteStepDto = exports.IsSmallJsonObject = exports.CUSTOM_STEP_OUTPUT_MAX_BYTES = exports.CUSTOM_STEP_EVENT = exports.CUSTOM_STEP_ACTIONS = exports.LOG_REDACT_PATHS = exports.WEBHOOK_DELIVERY_HEADER = exports.WEBHOOK_EVENT_HEADER = exports.WEBHOOK_SIGNATURE_HEADER = exports.IDEMPOTENT_REPLAYED_HEADER = exports.IDEMPOTENCY_KEY_MAX_LENGTH = exports.IDEMPOTENCY_KEY_HEADER = exports.API_KEY_PREFIX = exports.API_KEY_HEADER = exports.CreateApiKeyDto = exports.UpdateOrganisationDto = exports.StepConfigDto = exports.StepConfigEntryDto = exports.CUSTOM_STEP_URL_MAX_LENGTH = exports.CUSTOM_STEP_MAX_TIMEOUT_MS = exports.CUSTOM_STEP_MIN_TIMEOUT_MS = exports.CUSTOM_STEP_DEFAULT_TIMEOUT_MS = exports.STEP_MODES = exports.PROVISIONING_STEP_NAMES = exports.IsStripePriceMap = exports.UniqueCustomerPlanIds = exports.CustomerPlanDto = exports.DEFAULT_CUSTOMER_PLANS = exports.MAX_CUSTOMER_PLANS = exports.CUSTOMER_PLAN_DESCRIPTION_MAX_LENGTH = exports.CUSTOMER_PLAN_NAME_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_MAX_LENGTH = exports.CUSTOMER_PLAN_ID_PATTERN = exports.STRIPE_PRICE_ID_PATTERN = exports.STRIPE_SECRET_KEY_MAX_LENGTH = exports.STRIPE_SECRET_KEY_PATTERN = exports.ConfirmEmailChangeDto = exports.UpdateSettingsDto = exports.ResetPasswordDto = exports.ForgotPasswordDto = exports.VerifyEmailDto = exports.RefreshTokenDto = exports.LoginDto = exports.RegisterDto = exports.HANDLE_PATTERN = exports.CancelTenantDto = exports.CreateTenantDto = void 0;
+exports.INTERNAL_TOKEN_HEADER = exports.DEPROVISION_PARTS = exports.isLiveTenant = exports.LIVE_TENANT_STATUSES = void 0;
 const swagger_1 = require("@nestjs/swagger");
 const class_transformer_1 = require("class-transformer");
 const class_validator_1 = require("class-validator");
@@ -561,6 +561,13 @@ exports.IDEMPOTENT_REPLAYED_HEADER = 'idempotent-replayed';
 exports.WEBHOOK_SIGNATURE_HEADER = 'x-liftoff-signature';
 exports.WEBHOOK_EVENT_HEADER = 'x-liftoff-event';
 exports.WEBHOOK_DELIVERY_HEADER = 'x-liftoff-delivery';
+exports.LOG_REDACT_PATHS = [
+    'req.headers.authorization',
+    'req.headers.cookie',
+    'req.headers["x-api-key"]',
+    'req.headers["x-internal-token"]',
+    'res.headers["set-cookie"]',
+];
 exports.CUSTOM_STEP_ACTIONS = ['provision', 'teardown'];
 exports.CUSTOM_STEP_EVENT = {
     provision: 'step.requested',
