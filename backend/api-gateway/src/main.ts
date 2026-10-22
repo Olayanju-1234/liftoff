@@ -70,7 +70,8 @@ async function bootstrap() {
   setupSwagger(app);
 
   const port = process.env.PORT || 10000;
-  await app.listen(port, '0.0.0.0');
+  // Production sets HOST=127.0.0.1 so only nginx on the same box can reach it.
+  await app.listen(port, process.env.HOST || '0.0.0.0');
 
   const logger = app.get(Logger);
   logger.log(`API Gateway is running on port ${port}`);

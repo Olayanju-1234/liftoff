@@ -546,6 +546,7 @@ migration steps are written up in
 
 **All services:**
 - `NODE_ENV`, `PORT`, `RABBITMQ_URL`
+- `HOST`: the address to listen on, `0.0.0.0` by default (what Docker needs). Production sets `127.0.0.1`, so a service is only reachable through nginx on the same machine.
 
 **Tenant Service, DB Provisioner, Credentials Service:**
 - `DATABASE_URL` (PostgreSQL connection string). All three use the same
