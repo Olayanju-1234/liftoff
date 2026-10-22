@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma, StepStatus, type CustomStepCall } from '.prisma/tenant-client';
 import {
@@ -12,9 +12,17 @@ import { errorMessage } from '../common/error-message';
 import { parseWebhookUrl } from '../webhooks/destination';
 import {
   WebhookService,
+  settle,
   webhookOrganisationFields,
+  type SignedPost,
   type SignedPostResult,
 } from '../webhooks/webhook.service';
+import { DurableService } from '../durable/durable.service';
+import {
+  ACTIVITY,
+  type CustomStepInput,
+  type DeliveryOutcome,
+} from '../durable/workflows';
 
 export const DEFAULT_PUBLIC_API_URL = 'http://localhost:4000';
 const OVERDUE_BATCH = 100;
@@ -39,7 +47,7 @@ export interface CustomStepView {
 }
 
 @Injectable()
-export class CustomStepsService {
+export class CustomStepsService implements OnModuleInit {
   private readonly logger = new Logger(CustomStepsService.name);
   private readonly apiUrl: string;
 
@@ -47,6 +55,7 @@ export class CustomStepsService {
     private readonly prisma: PrismaService,
     private readonly webhooks: WebhookService,
     config: ConfigService,
+    @Optional() private readonly durable?: DurableService,
   ) {
     const configured = config.get<string>('PUBLIC_API_URL')?.trim();
     if (!configured) {
@@ -55,6 +64,12 @@ export class CustomStepsService {
       );
     }
     this.apiUrl = (configured || DEFAULT_PUBLIC_API_URL).replace(/\/+$/, '');
+  }
+
+  onModuleInit(): void {
+    this.durable?.activity(ACTIVITY.sendCustomStep, (input) =>
+      this.sendAttempt(input as CustomStepInput),
+    );
   }
 
   // The company POSTs <callbackUrl>/complete or <callbackUrl>/fail.
@@ -101,45 +116,17 @@ export class CustomStepsService {
     });
   }
 
-  // POSTs the request, signed with the company's webhook secret. Never throws: the result
-  // says whether the company's system took it.
+  // POSTs the request, signed with the company's webhook secret, retrying in memory. Never
+  // throws: the result says whether the company's system took it.
   async send(call: CustomStepCall): Promise<SignedPostResult> {
-    const action = call.action as CustomStepAction;
-    const event = CUSTOM_STEP_EVENT[action];
+    const event = CUSTOM_STEP_EVENT[call.action as CustomStepAction];
     try {
-      const tenant = await this.prisma.tenant.findUnique({
-        where: { id: call.tenantId },
-        include: { organisation: { select: webhookOrganisationFields } },
-      });
-      if (!tenant) {
-        return { delivered: false, error: 'the customer is gone' };
+      const prepared = await this.prepare(call);
+      if ('error' in prepared) {
+        return { delivered: false, error: prepared.error };
       }
-      const { organisation, ...row } = tenant;
-      if (!organisation?.webhookSecret) {
-        return {
-          delivered: false,
-          error:
-            'there is no webhook secret to sign the request with; set a webhook URL under Settings',
-        };
-      }
-      const payload: CustomStepRequest = {
-        event,
-        step: call.step as ProvisioningStepName,
-        requestId: call.id,
-        callbackUrl: this.callbackUrl(
-          call.tenantId,
-          call.step as ProvisioningStepName,
-          action,
-        ),
-        deadline: call.deadlineAt.toISOString(),
-        tenant: this.webhooks.tenantRecord(row, organisation),
-      };
       return await this.webhooks.post({
-        url: parseWebhookUrl(call.url, 'url'),
-        secret: organisation.webhookSecret,
-        event,
-        body: JSON.stringify(payload),
-        label: `${event} ${call.step} for tenant ${call.tenantId}`,
+        ...prepared,
         stillWanted: () => this.isOpen(call.id),
       });
     } catch (error) {
@@ -148,6 +135,73 @@ export class CustomStepsService {
       );
       return { delivered: false, error: errorMessage(error) };
     }
+  }
+
+  // One durable attempt, run by workflowd. Throws when the attempt is worth retrying.
+  async sendAttempt(input: CustomStepInput): Promise<DeliveryOutcome> {
+    const call = await this.find(input.callId);
+    if (!call || call.status !== StepStatus.IN_PROGRESS) {
+      return { delivered: false, abandoned: true };
+    }
+    const prepared = await this.prepare(call);
+    if ('error' in prepared) {
+      return { delivered: false, error: prepared.error };
+    }
+    return settle(
+      await this.webhooks.attemptOnce(prepared, input.deliveryId, 'durable'),
+    );
+  }
+
+  find(id: string): Promise<CustomStepCall | null> {
+    return this.prisma.customStepCall.findUnique({ where: { id } });
+  }
+
+  // The signed request for a call, or why it cannot be sent.
+  private async prepare(
+    call: CustomStepCall,
+  ): Promise<SignedPost | { error: string }> {
+    const action = call.action as CustomStepAction;
+    const event = CUSTOM_STEP_EVENT[action];
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: call.tenantId },
+      include: { organisation: { select: webhookOrganisationFields } },
+    });
+    if (!tenant) {
+      return { error: 'the customer is gone' };
+    }
+    const { organisation, ...row } = tenant;
+    if (!organisation?.webhookSecret) {
+      return {
+        error:
+          'there is no webhook secret to sign the request with; set a webhook URL under Settings',
+      };
+    }
+    const payload: CustomStepRequest = {
+      event,
+      step: call.step as ProvisioningStepName,
+      requestId: call.id,
+      callbackUrl: this.callbackUrl(
+        call.tenantId,
+        call.step as ProvisioningStepName,
+        action,
+      ),
+      deadline: call.deadlineAt.toISOString(),
+      tenant: this.webhooks.tenantRecord(row, organisation),
+    };
+    let url: URL;
+    try {
+      url = parseWebhookUrl(call.url, 'url');
+    } catch (error) {
+      // A bad URL stays bad, so it is an answer rather than something to retry.
+      return { error: errorMessage(error) };
+    }
+    return {
+      url,
+      secret: organisation.webhookSecret,
+      event,
+      body: JSON.stringify(payload),
+      label: `${event} ${call.step} for tenant ${call.tenantId}`,
+    };
   }
 
   private async isOpen(id: string): Promise<boolean> {

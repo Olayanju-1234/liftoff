@@ -4,6 +4,8 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
@@ -51,6 +53,14 @@ import {
   type TeardownStep,
 } from './dead-letters';
 import { WebhookService } from '../webhooks/webhook.service';
+import { DurableService } from '../durable/durable.service';
+import {
+  ACTIVITY,
+  CUSTOM_STEP_CALLBACK_SIGNAL,
+  CUSTOM_STEP_WORKFLOW,
+  customStepWorkflowId,
+  type CustomStepInput,
+} from '../durable/workflows';
 import { legacySchemaName, schemaNameFor, withAddress } from './address';
 import { STEP_INPUT, rebuildInput, storedInput } from './retry';
 import { QuotasService } from './quotas.service';
@@ -168,7 +178,7 @@ const inOrganisation = (
 });
 
 @Injectable()
-export class TenantsService {
+export class TenantsService implements OnModuleInit {
   private readonly logger = new Logger(TenantsService.name);
 
   constructor(
@@ -178,7 +188,28 @@ export class TenantsService {
     private readonly quotas: QuotasService,
     private readonly statusTokens: StatusTokenService,
     private readonly customSteps: CustomStepsService,
+    @Optional() private readonly durable?: DurableService,
   ) {}
+
+  onModuleInit(): void {
+    if (!this.durable) {
+      return;
+    }
+    this.durable.activity(ACTIVITY.customStepUndelivered, async (input) => {
+      const { callId, error } = input as { callId: string; error: string };
+      const call = await this.customSteps.find(callId);
+      return call
+        ? this.failCustomStep(call, undeliveredMessage(call, error))
+        : false;
+    });
+    this.durable.activity(ACTIVITY.customStepDeadline, async (input) => {
+      const { callId } = input as { callId: string };
+      const call = await this.customSteps.find(callId);
+      return call?.status === StepStatus.IN_PROGRESS
+        ? this.timeOutCustomStep(call)
+        : false;
+    });
+  }
 
   // Every tenant the API returns carries its address, its public status page, the name
   // of its customer plan as the company calls it, and how each step ran.
@@ -565,6 +596,30 @@ export class TenantsService {
       url: call.url,
       deadline: call.deadlineAt.toISOString(),
     });
+    this.dispatchCustomCall(call);
+    return true;
+  }
+
+  // Sends a recorded request in the background. With workflowd the retries and the
+  // deadline are durable; otherwise the retries live in this process.
+  private dispatchCustomCall(call: CustomStepCall): void {
+    if (!this.durable?.enabled) {
+      this.sendCustomCallInBackground(call);
+      return;
+    }
+    const input: CustomStepInput = {
+      callId: call.id,
+      deadline: call.deadlineAt.toISOString(),
+      deliveryId: call.id,
+    };
+    void this.durable
+      .start(CUSTOM_STEP_WORKFLOW, input, customStepWorkflowId(call.id))
+      .then((started) =>
+        started ? undefined : this.sendCustomCallInBackground(call),
+      );
+  }
+
+  private sendCustomCallInBackground(call: CustomStepCall): void {
     void this.customSteps
       .send(call)
       .then((result) =>
@@ -572,15 +627,14 @@ export class TenantsService {
           ? undefined
           : this.failCustomStep(
               call,
-              `Your system did not take the ${step} request: ${result.error ?? 'no answer'}`,
+              undeliveredMessage(call, result.error ?? 'no answer'),
             ),
       )
       .catch((error: unknown) =>
         this.logger.error(
-          `Custom ${step} request for tenant ${tenant.id} failed: ${errorMessage(error)}`,
+          `Custom ${call.step} ${call.action} for tenant ${call.tenantId} failed: ${errorMessage(error)}`,
         ),
       );
-    return true;
   }
 
   // Closes the request as FAILED and fails the step (or its teardown), unless a callback,
@@ -731,6 +785,13 @@ export class TenantsService {
           url: call.url,
         });
       }
+      // The result is recorded; tell a durable wait it can stop waiting for it.
+      void this.durable?.signal(
+        customStepWorkflowId(call.id),
+        CUSTOM_STEP_CALLBACK_SIGNAL,
+        { outcome },
+        `${call.id}:${outcome}`,
+      );
       const after = await this.prisma.tenant.findUnique({
         where: { id: tenantId },
         select: { status: true },
@@ -1416,21 +1477,7 @@ export class TenantsService {
         deadline: call.deadlineAt.toISOString(),
       },
     );
-    void this.customSteps
-      .send(call)
-      .then((result) =>
-        result.delivered || result.abandoned
-          ? undefined
-          : this.failCustomStep(
-              call,
-              `Your system did not take the ${step} teardown: ${result.error ?? 'no answer'}`,
-            ),
-      )
-      .catch((error: unknown) =>
-        this.logger.error(
-          `Custom ${step} teardown for tenant ${tenant.id} failed: ${errorMessage(error)}`,
-        ),
-      );
+    this.dispatchCustomCall(call);
   }
 
   private async skipTeardown(
@@ -1644,3 +1691,12 @@ export class TenantsService {
 
 const failureReason = (body: FailStepDto): string =>
   body.error?.trim() || 'Your system reported that the step failed';
+
+// Why a request the company's system never took fails its step (or its teardown).
+function undeliveredMessage(
+  call: Pick<CustomStepCall, 'step' | 'action'>,
+  error: string,
+): string {
+  const what = call.action === 'teardown' ? 'teardown' : 'request';
+  return `Your system did not take the ${call.step} ${what}: ${error}`;
+}
