@@ -4,6 +4,7 @@ import { AppService } from './app.service';
 import { RabbitMQModule } from '@golevelup/nestjs-rabbitmq';
 import { PrismaService } from './prisma.service';
 import { LoggerModule } from 'nestjs-pino';
+import { LOG_REDACT_PATHS } from '@liftoff/shared-types';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { LoggerModule } from 'nestjs-pino';
                 },
               }
             : undefined,
+        redact: { paths: LOG_REDACT_PATHS, censor: '[redacted]' },
       },
     }),
     RabbitMQModule.forRoot({

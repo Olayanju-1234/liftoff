@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { LOG_REDACT_PATHS } from '@liftoff/shared-types';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HttpModule } from '@nestjs/axios';
@@ -56,6 +57,7 @@ const getEnvPath = (): string => {
               }
             : undefined,
         level: process.env.LOG_LEVEL || 'info',
+        redact: { paths: LOG_REDACT_PATHS, censor: '[redacted]' },
       },
     }),
     HttpModule.registerAsync({
