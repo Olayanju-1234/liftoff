@@ -375,6 +375,18 @@ Quotas: an organisation may have 10 active tenants (`PROVISIONING` or `ACTIVE`) 
 | GET | `/tenants/:id/events` | Get event log for tenant |
 | GET | `/events` | Event log across the organisation's tenants |
 
+### Live demo
+
+No account: the landing page's **Try it live** button calls `POST /demo/tenants`, which creates a test tenant in the seeded `liftoff-demo` organisation ("Your SaaS", all steps builtin, no users, no webhook, no Stripe) and runs it through the real pipeline. The live view at `/demo/:token` reads it back. An optional `failStep` (`db`, `dns`, `credentials`, `billing` or `notification`) makes that worker fail once: tenant-service publishes the step's input to `dlx.provisioning` under the worker's key instead of to its queue, so the tenant goes `FAILED` through the normal dead-letter path, and Retry sends it to the real worker. Only a test tenant in the demo organisation with a `DemoTenant` row can be failed this way.
+
+Test tenants skip the organisation quotas, so the demo has its own: 5 per visitor an hour (by a keyed hash of the IP nginx saw), 20 live at once, both answering 429 with `Retry-After`. Demo tenants are removed after 15 minutes through the deprovisioning saga, so their schemas are dropped.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/demo/tenants` | Start a demo customer. Body `{ failStep? }`. Answers `{ token, liveUrl, statusUrl, name, failStep, expiresAt }` |
+| GET | `/demo/tenants/:token` | The demo customer: step statuses, event log, `failStep`, `expiresAt` |
+| POST | `/demo/tenants/:token/retry` | Retry its failed step, the same as `POST /tenants/:id/retry` |
+
 ### Settings
 
 Settings belong to the caller. A new email doesn't replace the sign-in email right away: it is held as `pendingEmail`, and a link is sent to the new address. The sign-in email changes when that link is opened, within 24 hours. With no email provider configured nothing is sent, so the change is refused with a 503 instead of waiting on a link nobody received.

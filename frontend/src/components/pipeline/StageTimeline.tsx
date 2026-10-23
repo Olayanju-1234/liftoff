@@ -42,7 +42,11 @@ export default function StageTimeline({ tenant, timeline, now }: StageTimelinePr
                     {ticks.map((f) => (
                         <span
                             key={f}
-                            className="num absolute top-0 -translate-x-1/2 font-mono text-[10px] text-ink-3 first:translate-x-0 last:-translate-x-full"
+                            className={cn(
+                                'num absolute top-0 -translate-x-1/2 font-mono text-[10px] text-ink-3 first:translate-x-0 last:-translate-x-full',
+                                // Only the ends fit on a phone.
+                                f > 0 && f < 1 && 'hidden sm:block',
+                            )}
                             style={{ left: `${f * 100}%` }}
                         >
                             {fmtOffset(span * f)}

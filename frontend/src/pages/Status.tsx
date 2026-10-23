@@ -83,7 +83,7 @@ const HEADLINE: Record<PublicTenantStatus['state'], { eyebrow: (company: string)
     removed: { eyebrow: (c) => c || 'Your provider', title: 'This workspace is no longer available' },
 };
 
-function Progress({ status }: { status: PublicTenantStatus }) {
+export function Progress({ status }: { status: PublicTenantStatus }) {
     const head = HEADLINE[status.state];
     const body: Record<PublicTenantStatus['state'], string> = {
         'setting-up': `${status.done} of ${status.total} done. This usually takes less than a minute; this page updates on its own.`,
@@ -100,7 +100,7 @@ function Progress({ status }: { status: PublicTenantStatus }) {
             {status.state === 'ready' && status.address && (
                 <a
                     href={`https://${status.address}`}
-                    className="mt-3 inline-block font-mono text-[14px] font-medium text-blueprint hover:underline"
+                    className="mt-3 inline-block break-all font-mono text-[14px] font-medium text-blueprint hover:underline"
                     rel="noreferrer"
                 >
                     https://{status.address}

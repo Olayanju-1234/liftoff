@@ -3,6 +3,9 @@ import type {
     ApiKey,
     CreatedApiKey,
     CustomerPlan,
+    DemoFailStep,
+    DemoStarted,
+    DemoView,
     Tenant,
     EventLog,
     Organisation,
@@ -32,6 +35,12 @@ export const cancelTenant = (id: string, reason?: string) =>
 
 // Public status page: no credentials. The interceptor adds none when there is no session.
 export const getPublicStatus = (token: string) => api.get<PublicTenantStatus>(`/status/${encodeURIComponent(token)}`).then((res) => res.data);
+
+// The public live demo: no credentials, a token per demo customer.
+export const startDemo = (failStep?: DemoFailStep) =>
+    api.post<DemoStarted>('/demo/tenants', failStep ? { failStep } : {}).then((res) => res.data);
+export const getDemo = (token: string) => api.get<DemoView>(`/demo/tenants/${encodeURIComponent(token)}`).then((res) => res.data);
+export const retryDemo = (token: string) => api.post<DemoView>(`/demo/tenants/${encodeURIComponent(token)}/retry`).then((res) => res.data);
 
 // Event APIs
 export const getEvents = () => api.get<EventLog[]>('/events').then(res => res.data);

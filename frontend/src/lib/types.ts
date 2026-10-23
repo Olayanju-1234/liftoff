@@ -150,6 +150,28 @@ export interface PublicTenantStatus {
     updatedAt: string;
 }
 
+// The public live demo: a real test customer in a demo company, no account needed.
+// failStep makes that worker's first message go to the dead-letter exchange.
+export type DemoFailStep = 'db' | 'dns' | 'credentials' | 'billing' | 'notification';
+
+export interface DemoStarted {
+    token: string;
+    liveUrl: string;
+    statusUrl: string;
+    name: string;
+    failStep: DemoFailStep | null;
+    expiresAt: string;
+}
+
+export interface DemoView {
+    tenant: Tenant & { address: string; statusUrl: string };
+    events: EventLog[];
+    failStep: DemoFailStep | null;
+    // True once the chosen worker's message has been dead-lettered.
+    failInjected: boolean;
+    expiresAt: string;
+}
+
 // Plan types
 export interface Plan {
     id: string;

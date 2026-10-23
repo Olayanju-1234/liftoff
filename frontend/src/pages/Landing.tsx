@@ -1,9 +1,12 @@
-import { Link } from 'react-router-dom';
-import { ArrowRight, ArrowUpRight, Check } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { ArrowRight, ArrowUpRight, Check, Loader2, Play } from 'lucide-react';
 import { useAuth } from '../lib/auth-context';
 import { DLX, STAGES, STALL_AFTER_MS } from '../lib/pipeline';
 import { buttonClass } from '../lib/ui';
 import { useNow } from '../lib/hooks';
+import { FAIL_CHOICES, useStartDemo } from '../lib/demo';
+import type { FailChoice } from '../lib/demo';
 import { fmtDuration } from '../lib/time';
 import type { Tenant } from '../lib/types';
 import DemoSequence from '../components/pipeline/DemoSequence';
@@ -12,6 +15,8 @@ import SiteShell, { Code, SectionHead, Soon } from '../components/site/SiteShell
 import CodeBlock from '../components/site/CodeBlock';
 import PricingTable from '../components/site/PricingTable';
 import { API_BASE, REPO } from '../components/site/site';
+import Button from '../components/ui/Button';
+import { Segmented } from '../components/ui/Field';
 import { cn } from '../lib/cn';
 
 const TICKET = [
@@ -112,6 +117,19 @@ export default function Landing() {
     const stalledAgo = new Date(now - STALL_AFTER_MS - 14_000).toISOString();
     const primaryTo = isAuthenticated ? '/' : '/register';
     const primaryLabel = isAuthenticated ? 'Open the dashboard' : 'Start free';
+    const demo = useStartDemo();
+    const [failChoice, setFailChoice] = useState<FailChoice>('none');
+    const { hash } = useLocation();
+
+    // The router doesn't scroll to a #section on its own, e.g. "Watch the replay" from a demo that ended.
+    useEffect(() => {
+        if (hash) document.getElementById(hash.slice(1))?.scrollIntoView({ block: 'start' });
+    }, [hash]);
+
+    // No live demo (down or rate-limited): the replay below is the fallback, so take them there.
+    useEffect(() => {
+        if (demo.error) document.getElementById('demo-replay')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, [demo.error]);
 
     return (
         <SiteShell sheet="1">
@@ -138,17 +156,27 @@ export default function Landing() {
                         asking engineering.
                     </p>
                     <div className="mt-8 flex flex-wrap items-center gap-3">
-                        <Link to={primaryTo} className={cn(buttonClass('primary', 'md'), 'h-11 pl-5 pr-1.5 text-[15px]')}>
-                            {primaryLabel}
+                        <button
+                            type="button"
+                            onClick={() => void demo.start()}
+                            disabled={demo.starting !== null}
+                            className={cn(buttonClass('primary', 'md'), 'h-11 pl-5 pr-1.5 text-[15px]')}
+                        >
+                            Try it live, no signup
                             <span className="ml-2 inline-flex h-8 w-8 items-center justify-center rounded-sm bg-ignite text-card">
-                                <ArrowRight size={16} />
+                                {demo.starting === 'none' ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Play size={16} />}
                             </span>
+                        </button>
+                        <Link to={primaryTo} className={cn(buttonClass('secondary', 'md'), 'h-11')}>
+                            {primaryLabel}
                         </Link>
-                        <Link to="/docs" className={cn(buttonClass('secondary', 'md'), 'h-11')}>
+                        <Link to="/docs" className={cn(buttonClass('ghost', 'md'), 'h-11')}>
                             Read the docs
                         </Link>
                     </div>
-                    <p className="mt-4 font-mono text-[11.5px] text-ink-3">Free for 10 active tenants · No card · Open source</p>
+                    <p className="mt-4 font-mono text-[11.5px] text-ink-3">
+                        One click sends a real customer through the real pipeline · Free for 10 active tenants · No card · Open source
+                    </p>
                 </div>
 
                 <aside className="self-end lg:col-span-5" aria-label="Sample delivery ticket">
@@ -299,14 +327,32 @@ export default function Landing() {
                     <SectionHead
                         sheet="04"
                         title="Built on"
-                        lede="Each step is its own small service. They hand off over one message exchange with no coordinator in the middle, so a slow or broken step never takes the others down. This is the real thing, not an illustration."
+                        lede="Each step is its own small service. tenant-service hands each one its message over RabbitMQ and catches what they reject, so a slow or broken step never takes the others down. The figure replays one signup in your browser; Run it live sends a real one through."
                     />
-                    <div className="crop rounded-md border border-rule-strong bg-card shadow-lift">
+                    <div id="demo-replay" className="crop scroll-mt-24 rounded-md border border-rule-strong bg-card shadow-lift">
                         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-rule px-4 pb-3 pt-4 sm:px-5">
                             <span className="label">Fig. 1</span>
                             <h3 className="font-cond text-[22px] font-semibold leading-tight">One signup, end to end</h3>
                             <span className="text-[14px] text-ink-3">Packets carry their routing keys. Inject a failure to see where it lands.</span>
                         </div>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-rule bg-ignite/[0.05] px-4 py-3 sm:px-5">
+                            <p className="min-w-[240px] flex-1 text-[14px] text-ink-2">
+                                <span className="font-semibold text-ink">This one is a replay.</span> Run it live to send a real customer through the real
+                                services, and pick a step to break if you want to see a dead letter and a retry.
+                            </p>
+                            <div className="flex items-center gap-2">
+                                <span className="label">Fail</span>
+                                <Segmented<FailChoice> label="Make a step fail in the live run" value={failChoice} onChange={setFailChoice} options={FAIL_CHOICES} />
+                            </div>
+                            <Button variant="primary" onClick={() => void demo.start(failChoice)} busy={demo.starting !== null}>
+                                {demo.starting === null && <Play size={14} />} Run it live
+                            </Button>
+                        </div>
+                        {demo.error && (
+                            <p role="status" className="border-b border-abort/30 bg-abort/[0.05] px-4 py-2.5 text-[14px] text-abort sm:px-5">
+                                {demo.error} The replay below runs the same five steps in your browser.
+                            </p>
+                        )}
                         <DemoSequence />
                     </div>
 

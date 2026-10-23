@@ -46,6 +46,19 @@ tenant-service declares both queues when it connects. A message dead-lettered
 before tenant-service has connected to the broker at least once is dropped,
 because no queue is bound yet.
 
+### Dead letters from the live demo
+
+The public live demo (`POST /demo/tenants` with a `failStep`) makes one step
+fail on purpose. tenant-service publishes that step's input straight to
+`dlx.provisioning` with the worker's key instead of to the worker, so it lands
+in both queues like any dead letter. It has no `x-death` header; it carries
+`x-liftoff-reason: "Demo: <worker> was told to fail, …"` instead, and that
+reason is the error on the tenant. These belong to test tenants in the
+`liftoff-demo` organisation: they need no action, the visitor retries from the
+live view, and the tenant is removed after 15 minutes. They are safe to purge
+from the parking lot. Only a test tenant in that organisation with a
+`DemoTenant` row can be failed this way.
+
 ## Inspect
 
 From the API: `GET /tenants` shows the tenant as `FAILED` with the failed step.
