@@ -184,6 +184,19 @@ export interface PublicTenantStatus {
     address: string | null;
     updatedAt: string;
 }
+export declare class StartDemoDto {
+    failStep?: ProvisioningStepName;
+}
+export interface DemoStarted {
+    token: string;
+    statusUrl: string;
+    expiresAt: string;
+}
+export interface DemoInfo {
+    failStep: ProvisioningStepName | null;
+    failedOnPurposeAt: string | null;
+    expiresAt: string;
+}
 export declare const LIVE_TENANT_STATUSES: readonly ["PROVISIONING", "FAILED", "ACTIVE"];
 export type LiveTenantStatus = (typeof LIVE_TENANT_STATUSES)[number];
 export declare const isLiveTenant: (status: string) => status is LiveTenantStatus;

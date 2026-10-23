@@ -51,7 +51,9 @@ model Tenant {
   // the API's step names. Null on tenants from before custom steps, which were all builtin.
   stepModes         Json?
   customStepCalls   CustomStepCall[]
-  
+  // Set only for a run of the public live demo.
+  demo              DemoTenant?
+
   // SHA-256 of the public status-page token (derived per tenant from STATUS_TOKEN_SECRET),
   // so GET /status/:token is one indexed lookup and the token itself is never stored.
   statusTokenHash String? @unique
@@ -120,6 +122,9 @@ model Organisation {
   // it is never shown to the company again.
   onboardingDismissedAt DateTime?
 
+  // The one organisation the public live demo provisions into; it has no users.
+  isDemo Boolean @default(false)
+
   users   User[]
   tenants Tenant[]
   apiKeys ApiKey[]
@@ -130,6 +135,22 @@ model Organisation {
 
 // A request to the company's own system for a custom step, one row per attempt so a retry
 // gets a fresh requestId. IN_PROGRESS until the company calls back or the deadline passes.
+// A run of the public live demo: always a test tenant in the demo organisation. Kept after
+// the tenant is removed, so it doubles as a count of demo runs.
+model DemoTenant {
+  tenantId String @id
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // The API step name to fail once, on purpose; null runs clean.
+  failStep       String?
+  failInjectedAt DateTime?
+  expiresAt      DateTime
+  // Set when the expiry sweep removed it.
+  removedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
 model CustomStepCall {
   id          String     @id @default(cuid())
   tenantId    String

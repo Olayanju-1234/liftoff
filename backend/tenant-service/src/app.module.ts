@@ -5,6 +5,7 @@ import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TenantsModule } from './tenants/tenants.module';
+import { DemoModule } from './demo/demo.module';
 import { SettingsModule } from './settings/settings.module';
 import { OrganisationsModule } from './organisations/organisations.module';
 import { InternalModule } from './internal/internal.module';
@@ -43,6 +44,7 @@ import { envValidationSchema } from './config/env.validation';
     }),
     AuthModule,
     TenantsModule,
+    DemoModule,
     OrganisationsModule,
     InternalModule,
     SettingsModule,

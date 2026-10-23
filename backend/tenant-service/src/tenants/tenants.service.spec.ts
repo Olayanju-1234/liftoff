@@ -38,6 +38,7 @@ type MockPrisma = {
   };
   eventLog: { create: jest.Mock; findMany: jest.Mock; findFirst: jest.Mock };
   organisation: { findUnique: jest.Mock };
+  demoTenant: { updateMany: jest.Mock };
 };
 
 const buildPrisma = (): MockPrisma => ({
@@ -67,6 +68,7 @@ const buildPrisma = (): MockPrisma => ({
       plans: null,
     }),
   },
+  demoTenant: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
 });
 
 describe('TenantsService', () => {
@@ -209,6 +211,96 @@ describe('TenantsService', () => {
         { timeout: 5_000 },
       );
       expect(result.isTest).toBe(true);
+    });
+
+    describe('a live demo run', () => {
+      const expiresAt = new Date('2026-10-23T12:15:00Z');
+      const demoDto = { ...baseDto, planId: 'pro', test: true };
+      const demoCreator = { organisationId: 'org-demo', ownerId: null };
+
+      beforeEach(() => {
+        prisma.plan.findUnique.mockResolvedValueOnce({ id: 'pro' });
+        prisma.tenant.create.mockImplementationOnce(({ data }) =>
+          Promise.resolve({
+            id: 'tenant-d',
+            subdomain: 'acme',
+            planId: 'pro',
+            schemaName: data.schemaName,
+            isTest: data.isTest,
+          }),
+        );
+      });
+
+      it('writes the run in the same insert as the tenant', async () => {
+        await service.create(demoDto, demoCreator, {
+          failStep: null,
+          expiresAt,
+        });
+
+        const [[createArgs]] = prisma.tenant.create.mock.calls;
+        expect(createArgs.data.demo).toEqual({
+          create: { failStep: null, expiresAt },
+        });
+      });
+
+      it('dead-letters the chosen step once instead of sending it to the worker', async () => {
+        prisma.demoTenant.updateMany.mockResolvedValueOnce({ count: 1 });
+
+        await service.create(demoDto, demoCreator, {
+          failStep: 'database',
+          expiresAt,
+        });
+
+        expect(prisma.demoTenant.updateMany).toHaveBeenCalledWith({
+          where: {
+            tenantId: 'tenant-d',
+            failStep: 'database',
+            failInjectedAt: null,
+          },
+          data: { failInjectedAt: expect.any(Date) as unknown },
+        });
+        expect(amqp.publish).toHaveBeenCalledTimes(1);
+        expect(amqp.publish).toHaveBeenCalledWith(
+          'dlx.provisioning',
+          'db-provisioner.failed',
+          expect.objectContaining({ tenantId: 'tenant-d', test: true }),
+          {
+            timeout: 5_000,
+            headers: { 'x-liftoff-demo-failure': 'db-provisioner-queue' },
+          },
+        );
+      });
+
+      it('sends the step to its worker once the failure is used up', async () => {
+        await service.create(demoDto, demoCreator, {
+          failStep: 'database',
+          expiresAt,
+        });
+
+        expect(amqp.publish).toHaveBeenCalledWith(
+          '',
+          'db-provisioner-queue',
+          expect.objectContaining({ tenantId: 'tenant-d' }),
+          { timeout: 5_000 },
+        );
+      });
+    });
+
+    it('never looks for a demo failure on a real tenant', async () => {
+      prisma.plan.findUnique.mockResolvedValueOnce({ id: 'starter' });
+      prisma.tenant.create.mockResolvedValueOnce({
+        id: 'tenant-1',
+        subdomain: 'acme',
+        planId: 'starter',
+        schemaName: 'tenant_acme_corp_acme',
+        isTest: false,
+      });
+
+      await service.create(baseDto, creator);
+
+      const [[createArgs]] = prisma.tenant.create.mock.calls;
+      expect(createArgs.data).not.toHaveProperty('demo');
+      expect(prisma.demoTenant.updateMany).not.toHaveBeenCalled();
     });
 
     it('creates nothing when the organisation is over quota', async () => {
@@ -999,6 +1091,29 @@ describe('TenantsService', () => {
             step: 'dbStatus',
             error: 'db-provisioner-queue rejected tenant.requested',
             deadLetterKey: 'db-provisioner.failed',
+          },
+        }) as unknown,
+      });
+    });
+
+    it('says when the live demo dead-lettered a step on purpose', async () => {
+      prisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await service.handleDeadLetter(
+        payload,
+        deadLetter('billing.failed', {
+          'x-liftoff-demo-failure': 'billing-queue',
+        }),
+      );
+
+      expect(prisma.eventLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'tenant.provisioning.failed',
+          payload: {
+            step: 'billingStatus',
+            error:
+              'Live demo: sent to the dead-letter exchange as billing.failed instead of billing-queue, on purpose',
+            deadLetterKey: 'billing.failed',
           },
         }) as unknown,
       });
