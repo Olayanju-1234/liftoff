@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
-import { DurableService } from './durable.service';
+import { NonRetryableError } from 'workflowd';
+import { DurableService, loadWorkflowd, nonRetryable } from './durable.service';
 import { WORKFLOWS } from './workflows';
 
 const config = (env: Record<string, string>) =>
@@ -11,6 +12,7 @@ class FakeWorker {
   static last: FakeWorker;
   workflows: string[] = [];
   activities: Array<{ name: string; opts: unknown }> = [];
+  activityFns = new Map<string, (input: unknown, task: unknown) => unknown>();
   run = jest.fn(() => Promise.resolve());
   stop = jest.fn();
   startWorkflow = jest.fn<Promise<string>, unknown[]>(() =>
@@ -25,8 +27,13 @@ class FakeWorker {
     this.workflows.push(type);
     return this;
   }
-  activity(name: string, _fn: unknown, opts: unknown) {
+  activity(
+    name: string,
+    fn: (input: unknown, task: unknown) => unknown,
+    opts: unknown,
+  ) {
     this.activities.push({ name, opts });
+    this.activityFns.set(name, fn);
     return this;
   }
 }
@@ -85,6 +92,18 @@ describe('DurableService', () => {
       expect(worker.run).toHaveBeenCalled();
     });
 
+    it('hands each activity its task, for the attempt number and a stable id', async () => {
+      const service = enabledService();
+      const fn = jest.fn(() => Promise.resolve('ok'));
+      service.activity('liftoff.demo', fn);
+      service.onApplicationBootstrap();
+      const task = { activityId: 'wf-1/1', attempt: 2 };
+
+      await FakeWorker.last.activityFns.get('liftoff.demo')!({ a: 1 }, task);
+
+      expect(fn).toHaveBeenCalledWith({ a: 1 }, task);
+    });
+
     it('starts a workflow under the given id', async () => {
       const service = enabledService();
       service.onApplicationBootstrap();
@@ -137,6 +156,22 @@ describe('DurableService', () => {
       service.onModuleDestroy();
 
       expect(FakeWorker.last.stop).toHaveBeenCalled();
+    });
+  });
+});
+
+describe('the workflowd SDK', () => {
+  it("loads through require, from the package's CommonJS build", () => {
+    expect(typeof loadWorkflowd().Worker).toBe('function');
+  });
+
+  it('marks an activity failure as final with its own NonRetryableError', () => {
+    const error = nonRetryable('rejected with 400');
+
+    expect(error).toBeInstanceOf(NonRetryableError);
+    expect(error).toMatchObject({
+      message: 'rejected with 400',
+      nonRetryable: true,
     });
   });
 });

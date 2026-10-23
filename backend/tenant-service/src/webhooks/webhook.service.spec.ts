@@ -2,12 +2,14 @@ import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { createHmac } from 'crypto';
 
+import { NonRetryableError } from 'workflowd';
+
 import {
   WEBHOOK_BACKOFF_MS,
   WEBHOOK_TIMEOUT_MS,
   WebhookService,
-  settle,
 } from './webhook.service';
+import { deliveryIdFor } from './delivery-id';
 import { DurableService } from '../durable/durable.service';
 import { ACTIVITY, TENANT_WEBHOOK_WORKFLOW } from '../durable/workflows';
 import { signWebhookBody, verifyWebhookSignature } from './signature';
@@ -283,9 +285,12 @@ describe('WebhookService with workflowd', () => {
   let prisma: { tenant: { findUnique: jest.Mock } };
   let fetchImpl: jest.Mock;
   let durable: { enabled: boolean; start: jest.Mock; activity: jest.Mock };
+  let log: jest.SpyInstance;
 
   beforeEach(async () => {
-    jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    log = jest
+      .spyOn(Logger.prototype, 'log')
+      .mockImplementation(() => undefined);
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     jest.spyOn(destination, 'assertPublicDestination').mockResolvedValue();
@@ -330,12 +335,12 @@ describe('WebhookService with workflowd', () => {
 
     const [type, input, id] = durable.start.mock.calls[0] as [
       string,
-      { tenantId: string; event: string; deliveryId: string },
+      unknown,
       string,
     ];
     expect(type).toBe(TENANT_WEBHOOK_WORKFLOW);
-    expect(input).toMatchObject({ tenantId: 't1', event: 'tenant.active' });
-    expect(id).toBe(`liftoff-webhook-${input.deliveryId}`);
+    expect(input).toEqual({ tenantId: 't1', event: 'tenant.active' });
+    expect(id).toMatch(/^liftoff-webhook-[0-9a-f-]{36}$/);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -350,39 +355,44 @@ describe('WebhookService with workflowd', () => {
   });
 
   describe('deliverAttempt', () => {
-    const input = {
-      tenantId: 't1',
-      event: 'tenant.active' as const,
-      deliveryId: 'd-1',
-    };
+    const input = { tenantId: 't1', event: 'tenant.active' as const };
+    const task = { activityId: 'liftoff-webhook-d-1/1', attempt: 2 };
+    const deliveryHeader = (call: number) =>
+      (
+        fetchImpl.mock.calls[call] as [URL, { headers: Record<string, string> }]
+      )[1].headers['x-liftoff-delivery'];
 
-    it('posts once, under the workflow delivery id', async () => {
-      await expect(service.deliverAttempt(input)).resolves.toEqual({
-        delivered: true,
+    it('posts once, under a delivery id that is the same on every attempt', async () => {
+      await expect(service.deliverAttempt(input, task)).resolves.toEqual({
         status: 200,
       });
-      const [, init] = fetchImpl.mock.calls[0] as [
-        URL,
-        { headers: Record<string, string> },
-      ];
-      expect(init.headers['x-liftoff-delivery']).toBe('d-1');
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-    });
+      await service.deliverAttempt(input, { ...task, attempt: 3 });
 
-    it('throws on a 5xx, so the engine retries it', async () => {
-      fetchImpl.mockResolvedValue(response(503));
-      await expect(service.deliverAttempt(input)).rejects.toThrow(
-        'answered 503',
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(deliveryHeader(0)).toBe(deliveryIdFor(task.activityId));
+      expect(deliveryHeader(1)).toBe(deliveryHeader(0));
+      expect(log).toHaveBeenCalledWith(
+        'Webhook tenant.active for tenant t1 delivered (200) on attempt 2/6',
       );
     });
 
-    it('settles on a 4xx without retrying', async () => {
+    it('throws a plain error on a 5xx, so the engine retries it', async () => {
+      fetchImpl.mockResolvedValue(response(503));
+
+      const error = await service.deliverAttempt(input, task).catch(String);
+
+      expect(error).toBe('Error: answered 503');
+    });
+
+    it('fails at once on a 4xx, without retries', async () => {
       fetchImpl.mockResolvedValue(response(410));
-      await expect(service.deliverAttempt(input)).resolves.toEqual({
-        delivered: false,
-        status: 410,
-        error: 'rejected with 410',
-      });
+
+      await expect(service.deliverAttempt(input, task)).rejects.toEqual(
+        new NonRetryableError('rejected with 410'),
+      );
+      await expect(service.deliverAttempt(input, task)).rejects.toBeInstanceOf(
+        NonRetryableError,
+      );
     });
 
     it('is skipped when the organisation has no webhook', async () => {
@@ -390,21 +400,10 @@ describe('WebhookService with workflowd', () => {
         ...tenantRow,
         organisation: { webhookUrl: null, webhookSecret: null },
       });
-      await expect(service.deliverAttempt(input)).resolves.toEqual({
-        delivered: false,
+      await expect(service.deliverAttempt(input, task)).resolves.toEqual({
         skipped: true,
       });
       expect(fetchImpl).not.toHaveBeenCalled();
-    });
-  });
-
-  it('settle() throws for a retryable attempt and answers otherwise', () => {
-    expect(() =>
-      settle({ delivered: false, retryable: true, error: 'timeout' }),
-    ).toThrow('timeout');
-    expect(settle({ delivered: true, retryable: false, status: 200 })).toEqual({
-      delivered: true,
-      status: 200,
     });
   });
 });

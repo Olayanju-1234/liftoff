@@ -15,14 +15,17 @@ import { signWebhookBody } from './signature';
 import { withAddress } from '../tenants/address';
 import { StatusTokenService } from '../status/status-token.service';
 import { effectivePlans, planNameFor } from '../organisations/customer-plans';
-import { DurableService } from '../durable/durable.service';
+import { DurableService, nonRetryable } from '../durable/durable.service';
 import {
   ACTIVITY,
+  DELIVERY_RETRY,
   TENANT_WEBHOOK_WORKFLOW,
   tenantWebhookWorkflowId,
+  type DeliveryAttempt,
   type DeliveryOutcome,
   type TenantWebhookInput,
 } from '../durable/workflows';
+import { deliveryIdFor } from './delivery-id';
 
 export const WEBHOOK_TIMEOUT_MS = 10_000;
 // Four attempts: now, then after 1 s, 5 s and 25 s.
@@ -83,8 +86,8 @@ export class WebhookService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    this.durable?.activity(ACTIVITY.deliverWebhook, (input) =>
-      this.deliverAttempt(input as TenantWebhookInput),
+    this.durable?.activity(ACTIVITY.deliverWebhook, (input, task) =>
+      this.deliverAttempt(input as TenantWebhookInput, task),
     );
   }
 
@@ -92,13 +95,12 @@ export class WebhookService implements OnModuleInit {
   // With workflowd the retries are durable; otherwise they live in this process.
   notify(tenantId: string, event: TenantWebhookEvent): void {
     if (this.durable?.enabled) {
-      const deliveryId = randomUUID();
-      const input: TenantWebhookInput = { tenantId, event, deliveryId };
+      const input: TenantWebhookInput = { tenantId, event };
       void this.durable
         .start(
           TENANT_WEBHOOK_WORKFLOW,
           input,
-          tenantWebhookWorkflowId(deliveryId),
+          tenantWebhookWorkflowId(randomUUID()),
         )
         .then((started) =>
           started ? undefined : this.deliverInBackground(tenantId, event),
@@ -128,13 +130,16 @@ export class WebhookService implements OnModuleInit {
     return result.delivered;
   }
 
-  // One durable attempt, run by workflowd. Throws when the attempt is worth retrying.
-  async deliverAttempt(input: TenantWebhookInput): Promise<DeliveryOutcome> {
+  // One durable attempt, run by workflowd.
+  async deliverAttempt(
+    input: TenantWebhookInput,
+    task: DeliveryAttempt,
+  ): Promise<DeliveryOutcome> {
     const request = await this.webhookRequest(input.tenantId, input.event);
     if (!request) {
-      return { delivered: false, skipped: true };
+      return { skipped: true };
     }
-    return settle(await this.attemptOnce(request, input.deliveryId, 'durable'));
+    return this.attemptDurably(request, task);
   }
 
   private async webhookRequest(
@@ -217,6 +222,24 @@ export class WebhookService implements OnModuleInit {
     return { delivered: false, ...last };
   }
 
+  // One signed attempt for workflowd: a 2xx settles it, a 4xx fails the step without
+  // retries, and anything else is thrown for the engine to retry.
+  async attemptDurably(
+    request: SignedPost,
+    task: DeliveryAttempt,
+  ): Promise<DeliveryOutcome> {
+    const result = await this.attemptOnce(
+      request,
+      deliveryIdFor(task.activityId),
+      `${task.attempt}/${DELIVERY_RETRY.maxAttempts}`,
+    );
+    if (result.delivered) {
+      return { status: result.status };
+    }
+    const error = result.error ?? 'no answer';
+    throw result.retryable ? new Error(error) : nonRetryable(error);
+  }
+
   // One signed POST. The delivery id is the same on every attempt, so the receiver can
   // drop a repeat.
   async attemptOnce(
@@ -273,16 +296,4 @@ export class WebhookService implements OnModuleInit {
       return { delivered: false, retryable: true, error: errorMessage(error) };
     }
   }
-}
-
-// Turns an attempt into a settled outcome for workflowd, or throws so the engine retries.
-export function settle(result: SignedAttemptResult): DeliveryOutcome {
-  if (result.retryable) {
-    throw new Error(result.error ?? 'no answer');
-  }
-  return {
-    delivered: result.delivered,
-    ...(result.status !== undefined ? { status: result.status } : {}),
-    ...(result.error ? { error: result.error } : {}),
-  };
 }

@@ -1,9 +1,9 @@
-import type { Context } from 'workflowd';
+import { decide, type WorkflowFunction, type WorkflowTask } from 'workflowd';
 import {
   ACTIVITY,
   CUSTOM_STEP_CALLBACK_SIGNAL,
   CUSTOM_STEP_WORKFLOW,
-  DELIVERY_RETRY,
+  DELIVERY_ATTEMPT_TIMEOUT_MS,
   TENANT_WEBHOOK_WORKFLOW,
   WORKFLOWS,
   customStepWorkflow,
@@ -12,190 +12,240 @@ import {
   type TenantWebhookInput,
 } from './workflows';
 
-interface Script {
-  // What each activity call resolves to (or rejects with, for an Error).
-  activity: (name: string, input: unknown) => unknown;
-  // Which of the raced promises settles first: 0 the callback, 1 the deadline.
-  first?: number;
-  now?: number;
+// These replay the workflows with the SDK's own decide(): given the history so far, what
+// does the workflow ask the engine for next. It is pure, so no engine is needed.
+
+type Step = Record<string, unknown>;
+
+const STARTED = '2026-10-22T12:00:00.000Z';
+
+const task = (input: unknown, steps: Step[] = []): WorkflowTask => ({
+  workflow_id: 'wf-1',
+  started_at: STARTED,
+  input: JSON.stringify(input),
+  steps,
+});
+
+const completed = (
+  kind: string,
+  stepName: string,
+  output: unknown,
+  resolvedAt: string,
+  eventId: number,
+): Step => ({
+  kind,
+  step_name: stepName,
+  status: 'COMPLETED',
+  output: typeof output === 'string' ? output : JSON.stringify(output),
+  resolved_at: resolvedAt,
+  resolved_event_id: eventId,
+});
+
+const failed = (stepName: string, error: string, nonRetryable: boolean) => ({
+  kind: 'ACTIVITY',
+  step_name: stepName,
+  status: 'FAILED',
+  error,
+  error_type: nonRetryable ? 'NonRetryableError' : '',
+  non_retryable: nonRetryable,
+  resolved_at: '2026-10-22T12:00:01.000Z',
+  resolved_event_id: 3,
+});
+
+const scheduled = (kind: string, stepName: string): Step => ({
+  kind,
+  step_name: stepName,
+  status: 'SCHEDULED',
+});
+
+async function next(fn: WorkflowFunction, workflowTask: WorkflowTask) {
+  const decision = await decide(fn, workflowTask);
+  expect(decision.replayError).toBeUndefined();
+  return decision.commands ?? [];
 }
 
-// A stand-in for the SDK's replay context: it records what the workflow asks for, and
-// answers from the script. Waits never settle on their own, as in a real first pass.
-function fakeContext(input: unknown, script: Script) {
-  const activities: Array<{ name: string; input: unknown; opts: unknown }> = [];
-  const sleeps: Array<{ name: string; ms: number }> = [];
-  const signals: string[] = [];
-  const never = () => new Promise<never>(() => undefined);
-  const ctx = {
-    input: JSON.stringify(input),
-    workflowId: 'wf-1',
-    inputAs: () => input,
-    activity: (name: string, payload: unknown, opts: unknown) => {
-      activities.push({ name, input: payload, opts });
-      const answer = script.activity(name, payload);
-      return answer instanceof Error
-        ? Promise.reject(answer)
-        : Promise.resolve(answer);
-    },
-    sleep: (name: string, ms: number) => {
-      sleeps.push({ name, ms });
-      return never();
-    },
-    waitForSignal: (_name: string, signal: string) => {
-      signals.push(signal);
-      return never();
-    },
-    waitAny: () => Promise.resolve(script.first ?? 0),
-    sideEffect: (_name: string, fn: () => unknown) =>
-      Promise.resolve(String(script.now ?? fn())),
-  } as unknown as Context;
-  return { ctx, activities, sleeps, signals };
-}
-
-const NOW = Date.parse('2026-10-22T12:00:00.000Z');
-const call: CustomStepInput = {
-  callId: 'call-1',
-  deadline: '2026-10-22T12:05:00.000Z',
-  deliveryId: 'call-1',
+const deliveryCommand = {
+  type: 'schedule_activity',
+  retry_policy: {
+    max_attempts: 6,
+    initial_backoff_ms: 5_000,
+    max_backoff_ms: 60_000,
+  },
+  start_to_close_timeout_ms: DELIVERY_ATTEMPT_TIMEOUT_MS,
+  sequence: 1,
 };
 
 describe('customStepWorkflow', () => {
-  it('sends with the durable retry policy, then waits for the callback until the deadline', async () => {
-    const { ctx, activities, sleeps, signals } = fakeContext(call, {
-      activity: () => ({ delivered: true, status: 202 }),
-      first: 0,
-      now: NOW,
-    });
+  const call: CustomStepInput = {
+    callId: 'call-1',
+    deadline: '2026-10-22T12:05:00.000Z',
+  };
+  const sent = (output: unknown, at = '2026-10-22T12:00:30.000Z') =>
+    completed('ACTIVITY', ACTIVITY.sendCustomStep, output, at, 3);
 
-    await expect(customStepWorkflow(ctx)).resolves.toBe('called back');
-
-    expect(activities).toEqual([
+  it('sends the request with the durable retry policy and a per-attempt timeout', async () => {
+    await expect(next(customStepWorkflow, task(call))).resolves.toEqual([
       {
-        name: ACTIVITY.sendCustomStep,
-        input: call,
-        opts: { as: 'json', retry: DELIVERY_RETRY },
+        ...deliveryCommand,
+        step_name: ACTIVITY.sendCustomStep,
+        input: JSON.stringify(call),
       },
     ]);
-    expect(signals).toEqual([CUSTOM_STEP_CALLBACK_SIGNAL]);
-    expect(sleeps).toEqual([{ name: 'deadline', ms: 5 * 60_000 }]);
+  });
+
+  it('then waits for the callback until the deadline, timed from when the request went through', async () => {
+    const commands = await next(
+      customStepWorkflow,
+      task(call, [sent({ status: 202 })]),
+    );
+
+    expect(commands).toEqual([
+      {
+        type: 'await_signal',
+        step_name: 'await-callback',
+        signal_name: CUSTOM_STEP_CALLBACK_SIGNAL,
+        sequence: 2,
+      },
+      {
+        type: 'start_timer',
+        step_name: 'await-callback.timeout',
+        delay_ms: 4.5 * 60_000,
+        sequence: 3,
+      },
+    ]);
+  });
+
+  it('waits no time at all when the deadline passed before the request went through', async () => {
+    const commands = await next(
+      customStepWorkflow,
+      task(call, [sent({ status: 202 }, '2026-10-22T12:06:00.000Z')]),
+    );
+
+    expect(commands[1]).toMatchObject({ type: 'start_timer', delay_ms: 0 });
+  });
+
+  it('finishes when the company calls back, and drops the deadline', async () => {
+    const commands = await next(
+      customStepWorkflow,
+      task(call, [
+        sent({ status: 202 }),
+        completed(
+          'SIGNAL',
+          'await-callback',
+          { outcome: 'SUCCESS' },
+          '2026-10-22T12:01:00.000Z',
+          6,
+        ),
+        scheduled('TIMER', 'await-callback.timeout'),
+      ]),
+    );
+
+    expect(commands).toEqual([
+      expect.objectContaining({ type: 'cancel_step', sequence: 3 }),
+      { type: 'complete_workflow', output: 'called back' },
+    ]);
   });
 
   it('times the step out when the deadline comes first', async () => {
-    const { ctx, activities } = fakeContext(call, {
-      activity: () => ({ delivered: true, status: 200 }),
-      first: 1,
-      now: NOW,
-    });
+    const commands = await next(
+      customStepWorkflow,
+      task(call, [
+        sent({ status: 202 }),
+        scheduled('SIGNAL', 'await-callback'),
+        completed(
+          'TIMER',
+          'await-callback.timeout',
+          '',
+          '2026-10-22T12:05:00.000Z',
+          6,
+        ),
+      ]),
+    );
 
-    await expect(customStepWorkflow(ctx)).resolves.toBe('deadline passed');
-
-    expect(activities.map((a) => a.name)).toEqual([
-      ACTIVITY.sendCustomStep,
-      ACTIVITY.customStepDeadline,
+    expect(commands).toEqual([
+      expect.objectContaining({ type: 'cancel_step', sequence: 2 }),
+      expect.objectContaining({
+        type: 'schedule_activity',
+        step_name: ACTIVITY.customStepDeadline,
+        input: JSON.stringify({ callId: 'call-1' }),
+        sequence: 4,
+      }),
     ]);
-    expect(activities[1].input).toEqual({ callId: 'call-1' });
   });
 
-  it('waits no time at all when the deadline has already passed', async () => {
-    const { ctx, sleeps } = fakeContext(call, {
-      activity: () => ({ delivered: true }),
-      first: 1,
-      now: Date.parse(call.deadline) + 1_000,
-    });
+  it.each([
+    ['the company rejects it', 'rejected with 400', true],
+    ['every retry is spent', 'answered 503', false],
+  ])(
+    'fails the step when %s',
+    async (_case, error: string, nonRetryable: boolean) => {
+      const commands = await next(
+        customStepWorkflow,
+        task(call, [failed(ACTIVITY.sendCustomStep, error, nonRetryable)]),
+      );
 
-    await customStepWorkflow(ctx);
-
-    expect(sleeps).toEqual([{ name: 'deadline', ms: 0 }]);
-  });
-
-  it('fails the step when the company rejects the request', async () => {
-    const { ctx, activities, sleeps } = fakeContext(call, {
-      activity: (name) =>
-        name === ACTIVITY.sendCustomStep
-          ? { delivered: false, status: 400, error: 'rejected with 400' }
-          : true,
-    });
-
-    await expect(customStepWorkflow(ctx)).resolves.toBe('not delivered');
-
-    expect(activities[1]).toMatchObject({
-      name: ACTIVITY.customStepUndelivered,
-      input: { callId: 'call-1', error: 'rejected with 400' },
-    });
-    expect(sleeps).toEqual([]);
-  });
-
-  it('fails the step once every retry is spent', async () => {
-    const { ctx, activities } = fakeContext(call, {
-      activity: (name) =>
-        name === ACTIVITY.sendCustomStep ? new Error('answered 503') : true,
-    });
-
-    await expect(customStepWorkflow(ctx)).resolves.toBe('not delivered');
-
-    expect(activities[1]).toMatchObject({
-      name: ACTIVITY.customStepUndelivered,
-      input: { callId: 'call-1', error: 'answered 503' },
-    });
-  });
+      expect(commands).toEqual([
+        expect.objectContaining({
+          type: 'schedule_activity',
+          step_name: ACTIVITY.customStepUndelivered,
+          input: JSON.stringify({ callId: 'call-1', error }),
+          sequence: 2,
+        }),
+      ]);
+    },
+  );
 
   it('stops when the request no longer matters', async () => {
-    const { ctx, activities, sleeps } = fakeContext(call, {
-      activity: () => ({ delivered: false, abandoned: true }),
-    });
-
-    await expect(customStepWorkflow(ctx)).resolves.toBe('no longer needed');
-
-    expect(activities).toHaveLength(1);
-    expect(sleeps).toEqual([]);
+    await expect(
+      next(customStepWorkflow, task(call, [sent({ abandoned: true })])),
+    ).resolves.toEqual([
+      { type: 'complete_workflow', output: 'no longer needed' },
+    ]);
   });
 });
 
 describe('tenantWebhookWorkflow', () => {
-  const input: TenantWebhookInput = {
-    tenantId: 't1',
-    event: 'tenant.active',
-    deliveryId: 'd-1',
-  };
+  const input: TenantWebhookInput = { tenantId: 't1', event: 'tenant.active' };
+  const delivered = (output: unknown) =>
+    completed(
+      'ACTIVITY',
+      ACTIVITY.deliverWebhook,
+      output,
+      '2026-10-22T12:00:01.000Z',
+      3,
+    );
 
-  it('delivers with the durable retry policy', async () => {
-    const { ctx, activities } = fakeContext(input, {
-      activity: () => ({ delivered: true, status: 200 }),
-    });
-
-    await expect(tenantWebhookWorkflow(ctx)).resolves.toBe('delivered (200)');
-    expect(activities).toEqual([
+  it('delivers with the durable retry policy and a per-attempt timeout', async () => {
+    await expect(next(tenantWebhookWorkflow, task(input))).resolves.toEqual([
       {
-        name: ACTIVITY.deliverWebhook,
-        input,
-        opts: { as: 'json', retry: DELIVERY_RETRY },
+        ...deliveryCommand,
+        step_name: ACTIVITY.deliverWebhook,
+        input: JSON.stringify(input),
       },
     ]);
   });
 
-  it('finishes quietly when the organisation has no webhook', async () => {
-    const { ctx } = fakeContext(input, {
-      activity: () => ({ delivered: false, skipped: true }),
-    });
-
-    await expect(tenantWebhookWorkflow(ctx)).resolves.toBe(
-      'no webhook configured',
-    );
+  it.each([
+    [{ status: 200 }, 'delivered (200)'],
+    [{ skipped: true }, 'no webhook configured'],
+    // What the 0.1 code recorded; the engine's finished histories hold these.
+    [{ delivered: true, status: 204 }, 'delivered (204)'],
+    [{ delivered: false, skipped: true }, 'no webhook configured'],
+  ])('finishes on %j with "%s"', async (output, result) => {
+    await expect(
+      next(tenantWebhookWorkflow, task(input, [delivered(output)])),
+    ).resolves.toEqual([{ type: 'complete_workflow', output: result }]);
   });
 
   it('fails the workflow when the receiver rejects it', async () => {
-    const { ctx } = fakeContext(input, {
-      activity: () => ({
-        delivered: false,
-        status: 410,
-        error: 'rejected with 410',
-      }),
-    });
-
-    await expect(tenantWebhookWorkflow(ctx)).rejects.toThrow(
-      'tenant.active was not delivered: rejected with 410',
-    );
+    await expect(
+      next(
+        tenantWebhookWorkflow,
+        task(input, [
+          failed(ACTIVITY.deliverWebhook, 'rejected with 410', true),
+        ]),
+      ),
+    ).resolves.toEqual([{ type: 'fail_workflow', error: 'rejected with 410' }]);
   });
 });
 

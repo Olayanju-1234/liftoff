@@ -669,7 +669,6 @@ export class TenantsService implements OnModuleInit {
     const input: CustomStepInput = {
       callId: call.id,
       deadline: call.deadlineAt.toISOString(),
-      deliveryId: call.id,
     };
     void this.durable
       .start(CUSTOM_STEP_WORKFLOW, input, customStepWorkflowId(call.id))

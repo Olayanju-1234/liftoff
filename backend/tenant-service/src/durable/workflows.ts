@@ -1,4 +1,10 @@
-import type { Context, RetryPolicy, WorkflowFunction } from 'workflowd';
+import type {
+  ActivityOptions,
+  ActivityTask,
+  Context,
+  RetryPolicy,
+  WorkflowFunction,
+} from 'workflowd';
 import type { TenantWebhookEvent } from '@liftoff/shared-types';
 
 // Workflows run by a workflowd engine when WORKFLOWD_ADDR is set. They only orchestrate:
@@ -22,6 +28,13 @@ export const DELIVERY_RETRY: RetryPolicy = {
   initialBackoffMs: 5_000,
   maxBackoffMs: 60_000,
 };
+// The POST gives up after 10 s; this also bounds the database and DNS lookups around it.
+export const DELIVERY_ATTEMPT_TIMEOUT_MS = 30_000;
+export const DELIVERY_OPTIONS: ActivityOptions & { as: 'json' } = {
+  as: 'json',
+  retry: DELIVERY_RETRY,
+  startToCloseTimeoutMs: DELIVERY_ATTEMPT_TIMEOUT_MS,
+};
 // Follow-ups only touch liftoff's own database.
 export const FOLLOW_UP_RETRY: RetryPolicy = {
   maxAttempts: 5,
@@ -32,21 +45,21 @@ export const FOLLOW_UP_RETRY: RetryPolicy = {
 export interface CustomStepInput {
   callId: string;
   deadline: string;
-  deliveryId: string;
 }
 
 export interface TenantWebhookInput {
   tenantId: string;
   event: TenantWebhookEvent;
-  deliveryId: string;
 }
 
-// What one delivery attempt reports. A retryable failure is thrown instead, so the engine
-// retries it; these are the answers that settle the delivery.
+// What a delivery activity knows about the attempt it is making.
+export type DeliveryAttempt = Pick<ActivityTask, 'activityId' | 'attempt'>;
+
+// A delivery that went through, or one with nothing left to send. A failure is thrown
+// instead: retried by the engine, or at once final for an answer that won't change.
 export interface DeliveryOutcome {
-  delivered: boolean;
+  // The receiver's 2xx.
   status?: number;
-  error?: string;
   // The request no longer matters: a callback, the deadline or a cancel closed it.
   abandoned?: boolean;
   // Nothing to deliver to, such as an organisation without a webhook URL.
@@ -55,48 +68,44 @@ export interface DeliveryOutcome {
 
 export const customStepWorkflowId = (callId: string): string =>
   `liftoff-custom-step-${callId}`;
-export const tenantWebhookWorkflowId = (deliveryId: string): string =>
-  `liftoff-webhook-${deliveryId}`;
+export const tenantWebhookWorkflowId = (key: string): string =>
+  `liftoff-webhook-${key}`;
 
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-// Send the request, then wait for the company's callback or the deadline, whichever is
-// first. The callback itself is recorded by the HTTP handler; the signal only ends the wait.
+// Send the request, then wait for the company's callback until the deadline. The callback
+// itself is recorded by the HTTP handler; the signal only ends the wait.
 export async function customStepWorkflow(ctx: Context): Promise<string> {
   const input = ctx.inputAs<CustomStepInput>('json');
   let sent: DeliveryOutcome;
   try {
-    sent = await ctx.activity<DeliveryOutcome>(ACTIVITY.sendCustomStep, input, {
-      as: 'json',
-      retry: DELIVERY_RETRY,
-    });
+    sent = await ctx.activity<DeliveryOutcome>(
+      ACTIVITY.sendCustomStep,
+      input,
+      DELIVERY_OPTIONS,
+    );
   } catch (error) {
-    sent = { delivered: false, error: messageOf(error) };
-  }
-  if (sent.abandoned) {
-    return 'no longer needed';
-  }
-  if (!sent.delivered) {
     await ctx.activity(
       ACTIVITY.customStepUndelivered,
-      { callId: input.callId, error: sent.error ?? 'no answer' },
+      { callId: input.callId, error: messageOf(error) },
       { retry: FOLLOW_UP_RETRY },
     );
     return 'not delivered';
   }
+  if (sent.abandoned) {
+    return 'no longer needed';
+  }
 
-  // Read the clock through sideEffect, so every replay computes the same wait.
-  const now = Number(await ctx.sideEffect('now', () => Date.now()));
-  const callback = ctx.waitForSignal(
+  // ctx.now() is when the request went through, the same on every replay.
+  const callback = await ctx.waitForSignal(
     'await-callback',
     CUSTOM_STEP_CALLBACK_SIGNAL,
+    {
+      timeoutMs: Math.max(0, Date.parse(input.deadline) - ctx.now().getTime()),
+    },
   );
-  const deadline = ctx.sleep(
-    'deadline',
-    Math.max(0, Date.parse(input.deadline) - now),
-  );
-  if ((await ctx.waitAny([callback, deadline])) === 0) {
+  if (callback !== undefined) {
     return 'called back';
   }
   await ctx.activity(
@@ -107,23 +116,18 @@ export async function customStepWorkflow(ctx: Context): Promise<string> {
   return 'deadline passed';
 }
 
-// A failure after every retry fails the workflow, which is what the engine's dashboard shows.
+// A rejected delivery, or one that failed every retry, fails the workflow, which is what
+// the engine's dashboard shows.
 export async function tenantWebhookWorkflow(ctx: Context): Promise<string> {
   const input = ctx.inputAs<TenantWebhookInput>('json');
   const outcome = await ctx.activity<DeliveryOutcome>(
     ACTIVITY.deliverWebhook,
     input,
-    { as: 'json', retry: DELIVERY_RETRY },
+    DELIVERY_OPTIONS,
   );
-  if (outcome.skipped) {
-    return 'no webhook configured';
-  }
-  if (!outcome.delivered) {
-    throw new Error(
-      `${input.event} was not delivered: ${outcome.error ?? 'no answer'}`,
-    );
-  }
-  return `delivered (${outcome.status ?? 'ok'})`;
+  return outcome.skipped
+    ? 'no webhook configured'
+    : `delivered (${outcome.status ?? 'ok'})`;
 }
 
 export const WORKFLOWS: Record<string, WorkflowFunction> = {

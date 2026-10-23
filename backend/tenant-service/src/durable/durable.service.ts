@@ -6,17 +6,26 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { hostname } from 'os';
-import type { ActivityFunction, Payload, Worker } from 'workflowd';
+import type {
+  ActivityFunction,
+  ActivityTask,
+  Payload,
+  Worker,
+} from 'workflowd';
 import { errorMessage } from '../common/error-message';
 import { WORKFLOWS } from './workflows';
 
 type WorkflowdSdk = typeof import('workflowd');
 
-// The SDK is ESM-only and only needed when WORKFLOWD_ADDR is set, so it is loaded on
-// first use (Node 22.12+ can require an ES module).
+// The SDK is only needed when WORKFLOWD_ADDR is set, so it is loaded on first use.
 export const loadWorkflowd = (): WorkflowdSdk =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('workflowd') as WorkflowdSdk;
+
+// Fails an activity's step at once, without retries. Only activities call it, and they
+// run only once the worker has loaded the SDK.
+export const nonRetryable = (message: string): Error =>
+  new (loadWorkflowd().NonRetryableError)(message);
 
 const RESTART_DELAY_MS = 5_000;
 
@@ -41,8 +50,11 @@ export class DurableService implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   // Services register the activities they own during onModuleInit, before the worker starts.
-  activity(name: string, fn: (input: unknown) => Promise<unknown>): void {
-    this.activities.set(name, (input: unknown) => fn(input));
+  activity(
+    name: string,
+    fn: (input: unknown, task: ActivityTask) => Promise<unknown>,
+  ): void {
+    this.activities.set(name, fn);
   }
 
   onApplicationBootstrap(): void {

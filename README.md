@@ -558,7 +558,7 @@ migration steps are written up in
 - `PUBLIC_API_URL`: the gateway's public address (`https://api.liftoff.ojusentinel.com` in production). Custom step requests carry `callbackUrl` under it; unset, it is `http://localhost:4000` and a warning is logged.
 
 **Tenant Service (durable deliveries, optional):**
-- `WORKFLOWD_ADDR`: the HTTP address of a [workflowd](https://github.com/Olayanju-1234/durable-workflow-engine) engine, e.g. `http://127.0.0.1:8233`. When set, company webhooks and custom step requests run as workflows (`src/durable/`): retries, the custom step deadline and the wait for the company's callback live in the engine, so a tenant-service restart mid-retry no longer loses the request. Unset, or with the engine unreachable when a delivery starts, everything runs in memory as before. The 30-second deadline sweep stays on as a backstop.
+- `WORKFLOWD_ADDR`: the HTTP address of a [workflowd](https://github.com/Olayanju-1234/durable-workflow-engine) engine, e.g. `http://127.0.0.1:8233`. When set, company webhooks and custom step requests run as workflows (`src/durable/`): retries, the custom step deadline and the wait for the company's callback live in the engine, so a tenant-service restart mid-retry no longer loses the request. Unset, or with the engine unreachable when a delivery starts, everything runs in memory as before. The 30-second deadline sweep stays on as a backstop. Needs a workflowd 0.2.0 engine or newer, since the workflows use its clock (`ctx.now()`) and its per-attempt timeouts (30 s per delivery attempt).
 - `WORKFLOWD_TOKEN`: the bearer token, for an engine started with `--auth-token-file`.
 
 **Tenant Service (per-organisation secrets and the internal API):**
