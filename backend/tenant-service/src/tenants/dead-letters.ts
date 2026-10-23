@@ -22,6 +22,13 @@ export const STEP_BY_DEAD_LETTER_KEY: Record<string, ProvisioningStep> = {
   'notification.failed': 'notificationStatus',
 };
 
+export const DEAD_LETTER_KEY_BY_STEP = Object.fromEntries(
+  Object.entries(STEP_BY_DEAD_LETTER_KEY).map(([key, step]) => [step, key]),
+) as Record<ProvisioningStep, string>;
+
+// Set on a message the live demo dead-letters on purpose; the value is the worker queue skipped.
+export const DEMO_FAILURE_HEADER = 'x-liftoff-demo-failure';
+
 export type TeardownStep = keyof Pick<
   Tenant,
   'teardownDbStatus' | 'teardownCredentialsStatus' | 'teardownBillingStatus'
@@ -60,12 +67,17 @@ export interface DeadLetterMessage {
   properties: {
     headers?: {
       'x-death'?: { queue: string; reason: string; 'routing-keys': string[] }[];
+      [DEMO_FAILURE_HEADER]?: string;
     };
   };
 }
 
 // Workers nack without a reason, so x-death is all there is to report.
 export function describeDeadLetter(message: DeadLetterMessage): string {
+  const demoQueue = message.properties.headers?.[DEMO_FAILURE_HEADER];
+  if (demoQueue) {
+    return `Live demo: sent to the dead-letter exchange as ${message.fields.routingKey} instead of ${demoQueue}, on purpose`;
+  }
   const death = message.properties.headers?.['x-death']?.[0];
   if (!death) {
     return `Dead-lettered as ${message.fields.routingKey}`;

@@ -43,7 +43,9 @@ import {
 } from '@liftoff/shared-types';
 import {
   DEAD_LETTER_EXCHANGE,
+  DEAD_LETTER_KEY_BY_STEP,
   DEAD_LETTER_ROUTING_KEYS,
+  DEMO_FAILURE_HEADER,
   STEP_BY_DEAD_LETTER_KEY,
   TEARDOWN_BY_DEAD_LETTER_KEY,
   TEARDOWN_STEP_BY_PART,
@@ -169,6 +171,12 @@ export interface TenantCreator {
   ownerId: string | null;
 }
 
+// Only the live demo passes this: the run's row is written in the same insert as the tenant.
+export interface DemoRunOptions {
+  failStep: ProvisioningStepName | null;
+  expiresAt: Date;
+}
+
 // Tenants are the company's customers; its own legacy workspace tenant is not one.
 const inOrganisation = (
   organisationId: string,
@@ -229,7 +237,11 @@ export class TenantsService implements OnModuleInit {
     };
   }
 
-  async create(createTenantDto: CreateTenantDto, creator: TenantCreator) {
+  async create(
+    createTenantDto: CreateTenantDto,
+    creator: TenantCreator,
+    demo?: DemoRunOptions,
+  ) {
     const organisation = await this.prisma.organisation.findUnique({
       where: { id: creator.organisationId },
       select: { handle: true, baseDomain: true, plans: true, stepConfig: true },
@@ -275,6 +287,7 @@ export class TenantsService implements OnModuleInit {
           isTest,
           statusTokenHash: this.statusTokens.hashFor(id),
           dbStatus: StepStatus.IN_PROGRESS, // Start first step
+          ...(demo ? { demo: { create: demo } } : {}),
         },
       });
 
@@ -527,11 +540,57 @@ export class TenantsService implements OnModuleInit {
     if (config.mode === 'custom') {
       return this.requestCustomStep(tenant, step, config);
     }
-    return this.publishBuiltinStep(
-      tenant.id,
-      step,
-      input ?? rebuildInput(tenant, STEP_COLUMN[step]),
-    );
+    const payload = input ?? rebuildInput(tenant, STEP_COLUMN[step]);
+    // Only test tenants can be demo runs, so real ones never pay for the lookup.
+    if (tenant.isTest && (await this.claimDemoFailure(tenant.id, step))) {
+      return this.deadLetterOnPurpose(tenant.id, step, payload);
+    }
+    return this.publishBuiltinStep(tenant.id, step, payload);
+  }
+
+  // A demo run fails its chosen step once. The claim is atomic, so a replay or the Retry
+  // that follows runs the step for real.
+  private async claimDemoFailure(
+    tenantId: string,
+    step: ProvisioningStepName,
+  ): Promise<boolean> {
+    const { count } = await this.prisma.demoTenant.updateMany({
+      where: { tenantId, failStep: step, failInjectedAt: null },
+      data: { failInjectedAt: new Date() },
+    });
+    return count > 0;
+  }
+
+  // Published where a worker's rejected message would go, so the ordinary dead-letter
+  // handler fails the step and the message is parked like any other.
+  private async deadLetterOnPurpose(
+    tenantId: string,
+    step: ProvisioningStepName,
+    payload: object,
+  ): Promise<boolean> {
+    const column = STEP_COLUMN[step];
+    try {
+      await this.amqpConnection.publish(
+        DEAD_LETTER_EXCHANGE,
+        DEAD_LETTER_KEY_BY_STEP[column],
+        payload,
+        {
+          timeout: PUBLISH_TIMEOUT_MS,
+          headers: { [DEMO_FAILURE_HEADER]: STEP_INPUT[column].queue },
+        },
+      );
+      this.logger.log(
+        `Demo tenant ${tenantId}: ${step} dead-lettered on purpose`,
+      );
+      return true;
+    } catch (error) {
+      await this.failStep(
+        tenantId,
+        column,
+        `Could not dead-letter ${step} on purpose: ${errorMessage(error)}`,
+      );
+      return false;
+    }
   }
 
   private async recordStepMode(

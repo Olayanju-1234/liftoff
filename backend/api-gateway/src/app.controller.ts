@@ -36,6 +36,7 @@ import {
   RefreshTokenDto,
   RegisterDto,
   ResetPasswordDto,
+  StartDemoDto,
   UpdateOrganisationDto,
   UpdateSettingsDto,
   VerifyEmailDto,
@@ -80,6 +81,62 @@ export class AppController {
   @Get('status/:token')
   getPublicStatus(@Param('token', ParseStatusTokenPipe) token: string) {
     return this.appService.getPublicStatus(token);
+  }
+
+  // ============ LIVE DEMO ============
+
+  // Anyone can start one, so starts are scarce per visitor; a run's own reads are polled.
+  @ApiTags('Live demo')
+  @ApiOperation({
+    summary: 'Start a live demo run',
+    description:
+      'No credentials. Provisions a throwaway test customer through every real service, optionally failing one step once (failStep) so the run shows a dead letter and a Retry. Removed after 15 minutes. 5 starts per hour per IP, at most 20 runs at once.',
+  })
+  @ApiResponse({ status: 201, description: '{ token, statusUrl, expiresAt }' })
+  @ApiResponse({
+    status: 429,
+    description:
+      'Too many starts from this IP, or too many runs going; Retry-After',
+  })
+  @Throttle({ default: { limit: 5, ttl: 3_600_000 } })
+  @Post('demo')
+  startDemo(
+    @Body() dto: StartDemoDto,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ) {
+    return this.appService.startDemo(dto, reply);
+  }
+
+  @ApiTags('Live demo')
+  @ApiOperation({
+    summary: 'A demo run: its customer, the steps, and how the run is set up',
+  })
+  @ApiResponse({ status: 404, description: 'No demo run matches the token' })
+  @Throttle({ default: { limit: 90, ttl: 60_000 } })
+  @Get('demo/:token')
+  getDemo(@Param('token', ParseStatusTokenPipe) token: string) {
+    return this.appService.getDemo(token);
+  }
+
+  @ApiTags('Live demo')
+  @ApiOperation({ summary: "A demo run's event log, newest first" })
+  @ApiResponse({ status: 404, description: 'No demo run matches the token' })
+  @Throttle({ default: { limit: 90, ttl: 60_000 } })
+  @Get('demo/:token/events')
+  getDemoEvents(@Param('token', ParseStatusTokenPipe) token: string) {
+    return this.appService.getDemoEvents(token);
+  }
+
+  @ApiTags('Live demo')
+  @ApiOperation({ summary: 'Run the failed step of a FAILED demo run again' })
+  @ApiResponse({ status: 200, description: 'The run, PROVISIONING again' })
+  @ApiResponse({ status: 400, description: 'The run is not FAILED' })
+  @ApiResponse({ status: 404, description: 'No demo run matches the token' })
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @Post('demo/:token/retry')
+  retryDemo(@Param('token', ParseStatusTokenPipe) token: string) {
+    return this.appService.retryDemo(token);
   }
 
   // ============ AUTH ENDPOINTS ============

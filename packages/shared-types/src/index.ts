@@ -798,6 +798,36 @@ export interface PublicTenantStatus {
 }
 
 // ============================================================================
+// Live demo: a throwaway customer anyone can start without an account
+// ============================================================================
+
+export class StartDemoDto {
+  @ApiPropertyOptional({
+    enum: PROVISIONING_STEP_NAMES,
+    description:
+      'Make this step fail once, so the run shows a dead letter, the customer FAILED, and a Retry that succeeds',
+  })
+  @IsOptional()
+  @IsIn(PROVISIONING_STEP_NAMES)
+  failStep?: ProvisioningStepName;
+}
+
+// POST /demo. The token opens the run (GET /demo/:token) and is also its status-page token.
+export interface DemoStarted {
+  token: string;
+  statusUrl: string;
+  expiresAt: string;
+}
+
+export interface DemoInfo {
+  failStep: ProvisioningStepName | null;
+  // When that step was sent to the dead-letter exchange; null until then, or never.
+  failedOnPurposeAt: string | null;
+  // When the run is removed (schema dropped, keys revoked).
+  expiresAt: string;
+}
+
+// ============================================================================
 // Tenant status
 // ============================================================================
 

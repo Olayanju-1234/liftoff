@@ -159,6 +159,25 @@ export interface Plan {
 }
 
 // Event types
+// The public live demo: a throwaway test customer anyone can start, removed after 15 minutes.
+export interface DemoStarted {
+    token: string;
+    statusUrl: string;
+    expiresAt: string;
+}
+
+export interface DemoInfo {
+    // The step made to fail once, on purpose; null runs clean.
+    failStep: StepName | null;
+    failedOnPurposeAt: string | null;
+    expiresAt: string;
+}
+
+export interface DemoRun {
+    tenant: Tenant;
+    demo: DemoInfo;
+}
+
 export interface EventLog {
     id: string;
     tenantId: string;

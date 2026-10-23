@@ -1,12 +1,15 @@
 import { Link } from 'react-router-dom';
-import { ArrowRight, ArrowUpRight, Check } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Check, Play } from 'lucide-react';
 import { useAuth } from '../lib/auth-context';
 import { DLX, STAGES, STALL_AFTER_MS } from '../lib/pipeline';
 import { buttonClass } from '../lib/ui';
 import { useNow } from '../lib/hooks';
+import { useStartDemo } from '../lib/demo';
 import { fmtDuration } from '../lib/time';
 import type { Tenant } from '../lib/types';
 import DemoSequence from '../components/pipeline/DemoSequence';
+import LiveDemoPanel from '../components/site/LiveDemo';
+import Button from '../components/ui/Button';
 import SequenceTrack from '../components/pipeline/SequenceTrack';
 import SiteShell, { Code, SectionHead, Soon } from '../components/site/SiteShell';
 import CodeBlock from '../components/site/CodeBlock';
@@ -47,9 +50,8 @@ const DELIVERABLES: Deliverable[] = [
     {
         n: '02',
         title: 'An address',
-        body: 'The customer’s subdomain is reserved and recorded, so your product has somewhere to send them straight after signup.',
-        spec: 'globex.liftoff.ojusentinel.com',
-        soon: 'Your own domain',
+        body: 'The customer’s subdomain on your domain is reserved and recorded, so your product has somewhere to send them straight after signup. DNS itself is simulated for now.',
+        spec: 'globex.acme.app',
     },
     {
         n: '03',
@@ -60,16 +62,14 @@ const DELIVERABLES: Deliverable[] = [
     {
         n: '04',
         title: 'A trial subscription',
-        body: 'A billing customer and a 14-day trial exist before anyone on your team has heard the customer’s name.',
+        body: 'Connect your Stripe and a 14-day trial exists before anyone on your team has heard the customer’s name. Without Stripe the step says skipped, never a fake success.',
         spec: 'trial_end: +14 days',
-        soon: 'On your Stripe',
     },
     {
         n: '05',
         title: 'A welcome',
-        body: 'The customer flips to Active, the event is logged, and your team is told the customer is ready.',
+        body: 'The customer flips to Active, your team gets an email, and a signed webhook tells your product the customer is ready.',
         spec: 'tenant.active',
-        soon: 'Email + webhook',
     },
 ];
 
@@ -109,6 +109,7 @@ function sampleTenant(overrides: Partial<Tenant>, now: number): Tenant {
 export default function Landing() {
     const { isAuthenticated } = useAuth();
     const now = useNow();
+    const live = useStartDemo();
     const stalledAgo = new Date(now - STALL_AFTER_MS - 14_000).toISOString();
     const primaryTo = isAuthenticated ? '/' : '/register';
     const primaryLabel = isAuthenticated ? 'Open the dashboard' : 'Start free';
@@ -144,11 +145,21 @@ export default function Landing() {
                                 <ArrowRight size={16} />
                             </span>
                         </Link>
-                        <Link to="/docs" className={cn(buttonClass('secondary', 'md'), 'h-11')}>
+                        <Button busy={live.busy} onClick={() => void live.start()} className="h-11">
+                            {!live.busy && <Play size={14} />} Try it live, no signup
+                        </Button>
+                    </div>
+                    {live.error && (
+                        <p role="alert" className="mt-3 text-[14px] text-abort">
+                            {live.error}
+                        </p>
+                    )}
+                    <p className="mt-4 font-mono text-[11.5px] text-ink-3">
+                        Free for 10 active tenants · No card · Open source ·{' '}
+                        <Link to="/docs" className="link">
                             Read the docs
                         </Link>
-                    </div>
-                    <p className="mt-4 font-mono text-[11.5px] text-ink-3">Free for 10 active tenants · No card · Open source</p>
+                    </p>
                 </div>
 
                 <aside className="self-end lg:col-span-5" aria-label="Sample delivery ticket">
@@ -185,7 +196,7 @@ export default function Landing() {
                         <div className="flex items-center justify-between gap-3 border-t border-ink/70 bg-paper/60 px-4 py-2.5">
                             <span className="font-mono text-[11.5px] text-ink-2">5 of 5 items · tenant ACTIVE</span>
                             <span className="inline-flex items-center gap-2 font-mono text-[11px] text-ink-3">
-                                webhook → api.globex.com <Soon>Next release</Soon>
+                                webhook → api.globex.com
                             </span>
                         </div>
                     </div>
@@ -225,8 +236,8 @@ export default function Landing() {
                         ))}
                     </ol>
                     <p className="mt-5 text-[13.5px] text-ink-3">
-                        Honest footnote: on the hosted service today the trial is recorded without charging anyone, and the welcome is
-                        logged rather than emailed. Connecting your own Stripe and emailing your team ship with the next releases.{' '}
+                        Honest footnote: the address is recorded but not served, because DNS is simulated, and the trial needs your own
+                        Stripe connected in Settings. Any step can also be skipped, or handed to your own system and its callback.{' '}
                         <Link to="/docs#steps" className="link">
                             Details in the docs
                         </Link>
@@ -243,11 +254,8 @@ export default function Landing() {
                         lede="Three things touch your code: a key, a request and a webhook. Everything in between runs on our side and shows up on your dashboard."
                     />
                     <div className="grid gap-6 lg:grid-cols-3">
-                        <Step n="1" title="Create an API key" tag={<Soon>Next release</Soon>}>
-                            <p>
-                                In Settings, create a company key. It is shown once. Until company keys land, the same request works with the
-                                token you get from <Code>POST /auth/login</Code>.
-                            </p>
+                        <Step n="1" title="Create an API key">
+                            <p>In Settings, create a company key once your email is verified. It is shown once, so store it where your signup flow runs.</p>
                             <div className="mt-4 rounded-md border border-dashed border-rule-strong bg-paper/60 px-4 py-3 font-mono text-[12.5px] text-ink-2">
                                 lk_live_7Hq2…<span className="text-ink-4"> · shown once</span>
                             </div>
@@ -256,7 +264,7 @@ export default function Landing() {
                             <p>One request per new customer. You get a 202 straight away; the five steps run in the background.</p>
                             <CodeBlock code={CURL} title="Request" lang="curl" className="mt-4" />
                         </Step>
-                        <Step n="3" title="Get told when it's ready" tag={<Soon>Next release</Soon>}>
+                        <Step n="3" title="Get told when it's ready">
                             <p>
                                 A signed <Code>tenant.active</Code> or <Code>tenant.failed</Code> webhook hits your URL. Meanwhile the
                                 dashboard shows the customer going green, step by step.
@@ -299,7 +307,7 @@ export default function Landing() {
                     <SectionHead
                         sheet="04"
                         title="Built on"
-                        lede="Each step is its own small service. They hand off over one message exchange with no coordinator in the middle, so a slow or broken step never takes the others down. This is the real thing, not an illustration."
+                        lede="Each step is its own small service. tenant-service orchestrates them: it sends each step to its worker over RabbitMQ and decides what runs next, so a slow or broken step stops there and never takes the others down. The animation is a drawing; the run below it is the real thing."
                     />
                     <div className="crop rounded-md border border-rule-strong bg-card shadow-lift">
                         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-rule px-4 pb-3 pt-4 sm:px-5">
@@ -309,6 +317,7 @@ export default function Landing() {
                         </div>
                         <DemoSequence />
                     </div>
+                    <LiveDemoPanel />
 
                     <div className="mt-10 grid gap-5 md:grid-cols-3">
                         <Note n="1" title="A broken step stops, it doesn't loop">
