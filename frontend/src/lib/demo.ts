@@ -14,6 +14,27 @@ export const DEMO_STEP_LABEL: Record<StepName, string> = {
     welcome: 'Welcome',
 };
 
+// The same steps mid-sentence.
+export const DEMO_STEP_NOUN: Record<StepName, string> = {
+    database: 'database',
+    address: 'address',
+    credentials: 'API keys',
+    billing: 'trial',
+    welcome: 'welcome',
+};
+
+// Why a demo run skips a step, said once so the page never claims a skipped step happened.
+export const DEMO_SKIP_REASON: Partial<Record<StepName, string>> = {
+    billing: 'nobody is billed for a test customer',
+    welcome: 'the pretend company has nobody to email',
+};
+
+export function joinWords(words: string[]): string {
+    return words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+}
+
+export const capitalise = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
 // Starts a real run and opens it. Callers keep the animation on screen, so a refusal still leaves something to watch.
 export function useStartDemo() {
     const navigate = useNavigate();
