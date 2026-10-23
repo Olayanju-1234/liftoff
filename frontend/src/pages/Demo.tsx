@@ -16,7 +16,7 @@ import { buttonClass } from '../lib/ui';
 import { cn } from '../lib/cn';
 import type { DemoRun, EventLog } from '../lib/types';
 import SiteShell, { Code } from '../components/site/SiteShell';
-import { DEMO_STEP_LABEL, useStartDemo } from '../lib/demo';
+import { DEMO_SKIP_REASON, DEMO_STEP_LABEL, DEMO_STEP_NOUN, capitalise, joinWords, useStartDemo } from '../lib/demo';
 import Panel from '../components/ui/Panel';
 import Button from '../components/ui/Button';
 import Empty from '../components/ui/Empty';
@@ -136,7 +136,7 @@ export default function Demo() {
                 <div className="mt-5 flex flex-wrap items-center gap-3">
                     {failed && (
                         <Button variant="primary" busy={retrying} onClick={() => void retry()} className="h-11">
-                            {!retrying && <RotateCcw size={14} />} Retry {DEMO_STEP_LABEL[failed.api].toLowerCase()}
+                            {!retrying && <RotateCcw size={14} />} Retry {DEMO_STEP_NOUN[failed.api]}
                         </Button>
                     )}
                     <a href={`/status/${token}`} target="_blank" rel="noreferrer" className={cn(buttonClass('secondary', 'md'), 'h-11')}>
@@ -222,12 +222,19 @@ function Headline({ run, events, failed }: { run: DemoRun; events: EventLog[]; f
         tone = 'border-go/40 bg-go/[0.06]';
         const timeline = stageTimings(tenant, events);
         const took = timeline.completeAt ? ` Signup to ready took ${fmtDuration(timeline.completeAt - timeline.t0)}` : '';
+        const done = STAGES.filter((s) => tenant[s.key] === 'SUCCESS').map((s) => DEMO_STEP_NOUN[s.api]);
+        const skipped = STAGES.filter((s) => tenant[s.key] === 'SKIPPED').map((s) => s.api);
+        const reasons = skipped.flatMap((step) => DEMO_SKIP_REASON[step] ?? []);
         body = (
             <>
                 <strong>Ready.</strong>
                 {took}
-                {took && (demo.failedOnPurposeAt ? ', including the failure and your retry.' : '.')} Database, address, API keys and
-                trial are all in place, and the team was told.
+                {took && (demo.failedOnPurposeAt ? ', including the failure and your retry.' : '.')}
+                {done.length > 0 && ` ${capitalise(joinWords(done))} ${done.length === 1 ? 'is' : 'are'} in place.`}
+                {skipped.length > 0 &&
+                    ` ${capitalise(joinWords(skipped.map((step) => `the ${DEMO_STEP_NOUN[step]}`)))} ${skipped.length === 1 ? 'was' : 'were'} skipped${
+                        reasons.length ? `: ${joinWords(reasons)}` : ''
+                    }.`}
             </>
         );
     } else if (tenant.status === 'DELETED' || tenant.status === 'DEPROVISIONING') {
@@ -246,7 +253,7 @@ function Headline({ run, events, failed }: { run: DemoRun; events: EventLog[]; f
         body = (
             <>
                 <strong>Setting up.</strong> {done} of 5 done{current ? `, now ${STEP_NAMES[current.key].toLowerCase()}` : ''}.
-                {demo.failStep && !demo.failedOnPurposeAt && ` ${DEMO_STEP_LABEL[demo.failStep]} is going to fail, as you asked.`}
+                {demo.failStep && !demo.failedOnPurposeAt && ` The ${DEMO_STEP_NOUN[demo.failStep]} step is going to fail, as you asked.`}
             </>
         );
     }
