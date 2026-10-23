@@ -25,6 +25,7 @@ import {
   RegisterDto,
   ResetPasswordDto,
   UpdateOrganisationDto,
+  StartDemoDto,
   UpdateSettingsDto,
   VerifyEmailDto,
   type ProvisioningStepName,
@@ -64,6 +65,24 @@ export class AppService {
 
   getPublicStatus(token: string) {
     return this.proxy('get', `/status/${token}`);
+  }
+
+  // ============ LIVE DEMO ============
+
+  startDemo(dto: StartDemoDto, reply?: FastifyReply) {
+    return this.proxy('post', '/demo', dto, undefined, reply);
+  }
+
+  getDemo(token: string) {
+    return this.proxy('get', `/demo/${token}`);
+  }
+
+  getDemoEvents(token: string) {
+    return this.proxy('get', `/demo/${token}/events`);
+  }
+
+  retryDemo(token: string) {
+    return this.proxy('post', `/demo/${token}/retry`, {});
   }
 
   // ============ AUTH METHODS ============

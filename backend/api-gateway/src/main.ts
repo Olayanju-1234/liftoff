@@ -10,7 +10,9 @@ import { AppModule } from './app.module';
 import { setupSwagger } from './swagger';
 
 async function bootstrap() {
-  const adapter = new FastifyAdapter();
+  // nginx on the same box is the only client; trusting loopback makes request.ip the
+  // visitor's address, so rate limits are per visitor instead of one bucket for everyone.
+  const adapter = new FastifyAdapter({ trustProxy: 'loopback' });
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     adapter,
