@@ -581,7 +581,6 @@ describe('Custom steps (dispatch, callbacks, timeouts)', () => {
         {
           callId: call.id,
           deadline: (call.deadlineAt as Date).toISOString(),
-          deliveryId: call.id,
         },
         `liftoff-custom-step-${call.id as string}`,
       );

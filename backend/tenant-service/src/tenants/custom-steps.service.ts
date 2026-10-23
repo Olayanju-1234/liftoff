@@ -12,15 +12,15 @@ import { errorMessage } from '../common/error-message';
 import { parseWebhookUrl } from '../webhooks/destination';
 import {
   WebhookService,
-  settle,
   webhookOrganisationFields,
   type SignedPost,
   type SignedPostResult,
 } from '../webhooks/webhook.service';
-import { DurableService } from '../durable/durable.service';
+import { DurableService, nonRetryable } from '../durable/durable.service';
 import {
   ACTIVITY,
   type CustomStepInput,
+  type DeliveryAttempt,
   type DeliveryOutcome,
 } from '../durable/workflows';
 
@@ -67,8 +67,8 @@ export class CustomStepsService implements OnModuleInit {
   }
 
   onModuleInit(): void {
-    this.durable?.activity(ACTIVITY.sendCustomStep, (input) =>
-      this.sendAttempt(input as CustomStepInput),
+    this.durable?.activity(ACTIVITY.sendCustomStep, (input, task) =>
+      this.sendAttempt(input as CustomStepInput, task),
     );
   }
 
@@ -137,19 +137,20 @@ export class CustomStepsService implements OnModuleInit {
     }
   }
 
-  // One durable attempt, run by workflowd. Throws when the attempt is worth retrying.
-  async sendAttempt(input: CustomStepInput): Promise<DeliveryOutcome> {
+  // One durable attempt, run by workflowd. A request that can't be sent fails at once.
+  async sendAttempt(
+    input: CustomStepInput,
+    task: DeliveryAttempt,
+  ): Promise<DeliveryOutcome> {
     const call = await this.find(input.callId);
     if (!call || call.status !== StepStatus.IN_PROGRESS) {
-      return { delivered: false, abandoned: true };
+      return { abandoned: true };
     }
     const prepared = await this.prepare(call);
     if ('error' in prepared) {
-      return { delivered: false, error: prepared.error };
+      throw nonRetryable(prepared.error);
     }
-    return settle(
-      await this.webhooks.attemptOnce(prepared, input.deliveryId, 'durable'),
-    );
+    return this.webhooks.attemptDurably(prepared, task);
   }
 
   find(id: string): Promise<CustomStepCall | null> {
