@@ -6,6 +6,7 @@ import { backfillTenantOwners } from '../src/tenants/backfill-owners';
 import { backfillOrganisations } from '../src/organisations/backfill-organisations';
 import { backfillSchemaNames } from '../src/tenants/backfill-schema-names';
 import { backfillStatusTokens } from '../src/status/backfill-status-tokens';
+import { seedDemoOrganisation } from '../src/demo/seed-demo-organisation';
 
 const prisma = new PrismaClient();
 const logger = new Logger('Seed');
@@ -57,6 +58,9 @@ async function main() {
 
   const schemas = await backfillSchemaNames(prisma);
   logger.log(`Backfilled schema names on ${schemas} tenant(s)`);
+
+  const demo = await seedDemoOrganisation(prisma);
+  logger.log(`Demo organisation ${JSON.stringify(demo)}`);
 
   const statusSecret =
     process.env.STATUS_TOKEN_SECRET?.trim() || process.env.JWT_SECRET?.trim();

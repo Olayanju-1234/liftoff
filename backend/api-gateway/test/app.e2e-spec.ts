@@ -1,15 +1,13 @@
 import { HttpService } from '@nestjs/axios';
 import { ValidationPipe } from '@nestjs/common';
-import {
-  FastifyAdapter,
-  NestFastifyApplication,
-} from '@nestjs/platform-fastify';
+import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { AxiosError, AxiosHeaders } from 'axios';
 import { of, throwError } from 'rxjs';
 
 import { AppModule } from '../src/app.module';
 import { setupSwagger } from '../src/swagger';
+import { createAdapter } from '../src/adapter';
 
 const unauthorized = () => {
   const config = { headers: new AxiosHeaders() };
@@ -37,9 +35,9 @@ describe('API Gateway (e2e)', () => {
       .useValue(http)
       .compile();
 
-    app = moduleRef.createNestApplication<NestFastifyApplication>(
-      new FastifyAdapter(),
-    );
+    // The production adapter, so client IP resolution matches behind nginx.
+    app =
+      moduleRef.createNestApplication<NestFastifyApplication>(createAdapter());
     // Same pipe as main.ts, so request validation matches production.
     app.useGlobalPipes(
       new ValidationPipe({
@@ -623,6 +621,117 @@ describe('API Gateway (e2e)', () => {
         'No setup matches this link',
       );
     });
+  });
+
+  describe('live demo', () => {
+    const token = 'D'.repeat(43);
+    const started = { token, liveUrl: `https://app.test/demo/${token}` };
+
+    it('POST /demo/tenants proxies without credentials, with the visitor IP nginx appended', async () => {
+      http.post.mockReturnValueOnce(of({ data: started }));
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/demo/tenants',
+        // A client can put anything in front; only the address nginx added counts.
+        headers: {
+          'x-forwarded-for': '6.6.6.6, 203.0.113.7',
+          'x-liftoff-client-ip': '6.6.6.6',
+          authorization: 'Bearer someone.else',
+        },
+        payload: { failStep: 'dns' },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toEqual(started);
+      expect(http.post).toHaveBeenCalledWith(
+        '/demo/tenants',
+        { failStep: 'dns' },
+        { headers: { 'x-liftoff-client-ip': '203.0.113.7' } },
+      );
+    });
+
+    it('POST /demo/tenants takes no body at all for the happy path', async () => {
+      http.post.mockReturnValueOnce(of({ data: started }));
+
+      const res = await app.inject({ method: 'POST', url: '/demo/tenants' });
+
+      expect(res.statusCode).toBe(201);
+    });
+
+    it.each([
+      { failStep: 'everything' },
+      { failStep: 'dns', planId: 'enterprise' },
+    ])('POST /demo/tenants rejects %p before proxying', async (payload) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/demo/tenants',
+        payload,
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(http.post).not.toHaveBeenCalled();
+    });
+
+    it("passes tenant-service's 429 and Retry-After through", async () => {
+      const config = { headers: new AxiosHeaders() };
+      http.post.mockReturnValueOnce(
+        throwError(
+          () =>
+            new AxiosError('Too many', 'ERR_BAD_REQUEST', config, null, {
+              status: 429,
+              statusText: 'Too Many Requests',
+              data: { statusCode: 429, message: 'The live demo is full' },
+              headers: { 'retry-after': '60' },
+              config,
+            }),
+        ),
+      );
+
+      const res = await app.inject({ method: 'POST', url: '/demo/tenants' });
+
+      expect(res.statusCode).toBe(429);
+      expect(res.headers['retry-after']).toBe('60');
+      expect(res.json<{ message: string }>().message).toBe(
+        'The live demo is full',
+      );
+    });
+
+    it('GET /demo/tenants/:token and POST …/retry proxy the token with no credentials', async () => {
+      http.get.mockReturnValueOnce(of({ data: { tenant: {} } }));
+      http.post.mockReturnValueOnce(of({ data: { tenant: {} } }));
+
+      const view = await app.inject({
+        method: 'GET',
+        url: `/demo/tenants/${token}`,
+      });
+      const retried = await app.inject({
+        method: 'POST',
+        url: `/demo/tenants/${token}/retry`,
+      });
+
+      expect(view.statusCode).toBe(200);
+      expect(retried.statusCode).toBe(200);
+      expect(http.get).toHaveBeenCalledWith(`/demo/tenants/${token}`, {});
+      expect(http.post).toHaveBeenCalledWith(
+        `/demo/tenants/${token}/retry`,
+        {},
+        {},
+      );
+    });
+
+    it.each(['short', 'D'.repeat(44), `${'D'.repeat(40)}%2F..`])(
+      'GET /demo/tenants/%s answers 404 without proxying',
+      async (bad) => {
+        const res = await app.inject({
+          method: 'GET',
+          url: `/demo/tenants/${bad}`,
+        });
+
+        expect(res.statusCode).toBe(404);
+        expect(http.get).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('company API keys', () => {

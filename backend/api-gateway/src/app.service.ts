@@ -15,6 +15,8 @@ import {
   IDEMPOTENT_REPLAYED_HEADER,
   CancelTenantDto,
   CompleteStepDto,
+  CreateDemoTenantDto,
+  DEMO_CLIENT_IP_HEADER,
   ConfirmEmailChangeDto,
   CreateApiKeyDto,
   CreateTenantDto,
@@ -41,6 +43,8 @@ export interface Credentials {
 // Request headers passed to tenant-service besides the credentials.
 export interface ForwardedHeaders {
   idempotencyKey?: string;
+  // The visitor's IP as the gateway resolved it; never a header the client sent.
+  clientIp?: string;
 }
 
 // Response headers copied back from tenant-service, on success and on 4xx alike.
@@ -64,6 +68,21 @@ export class AppService {
 
   getPublicStatus(token: string) {
     return this.proxy('get', `/status/${token}`);
+  }
+
+  // ============ LIVE DEMO ============
+
+  createDemo(dto: CreateDemoTenantDto, clientIp: string, reply?: FastifyReply) {
+    this.logger.log({ failStep: dto.failStep ?? null }, 'Starting a live demo');
+    return this.proxy('post', '/demo/tenants', dto, { clientIp }, reply);
+  }
+
+  getDemo(token: string) {
+    return this.proxy('get', `/demo/tenants/${token}`);
+  }
+
+  retryDemo(token: string) {
+    return this.proxy('post', `/demo/tenants/${token}/retry`, {});
   }
 
   // ============ AUTH METHODS ============
@@ -268,6 +287,9 @@ export class AppService {
     }
     if (credentials?.idempotencyKey) {
       headers[IDEMPOTENCY_KEY_HEADER] = credentials.idempotencyKey;
+    }
+    if (credentials?.clientIp) {
+      headers[DEMO_CLIENT_IP_HEADER] = credentials.clientIp;
     }
     return Object.keys(headers).length > 0 ? { headers } : {};
   }

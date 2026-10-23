@@ -51,7 +51,9 @@ model Tenant {
   // the API's step names. Null on tenants from before custom steps, which were all builtin.
   stepModes         Json?
   customStepCalls   CustomStepCall[]
-  
+  // Set only on tenants the public live demo made, all in the demo organisation.
+  demo              DemoTenant?
+
   // SHA-256 of the public status-page token (derived per tenant from STATUS_TOKEN_SECRET),
   // so GET /status/:token is one indexed lookup and the token itself is never stored.
   statusTokenHash String? @unique
@@ -147,6 +149,23 @@ model CustomStepCall {
 
   @@index([tenantId, step, action])
   @@index([status, deadlineAt])
+}
+
+// A tenant made by POST /demo/tenants (no account). The live view finds it by tokenHash,
+// ipHash rate-limits visitors, and the demo sweeper removes it once expiresAt passes.
+model DemoTenant {
+  tenantId       String    @id
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tokenHash      String    @unique
+  // HMAC of the visitor's IP; the IP itself is never stored.
+  ipHash         String
+  // The worker whose first message is dead-lettered on purpose: db | dns | credentials | billing | notification.
+  failStep       String?
+  failInjectedAt DateTime?
+  expiresAt      DateTime
+  createdAt      DateTime  @default(now())
+
+  @@index([ipHash, createdAt])
 }
 
 model ApiKey {

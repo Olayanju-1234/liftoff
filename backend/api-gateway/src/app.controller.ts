@@ -6,6 +6,7 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
+  Ip,
   Param,
   Post,
   Put,
@@ -28,6 +29,7 @@ import {
   CancelTenantDto,
   CompleteStepDto,
   ConfirmEmailChangeDto,
+  CreateDemoTenantDto,
   CreateApiKeyDto,
   CreateTenantDto,
   FailStepDto,
@@ -43,6 +45,7 @@ import {
 } from '@liftoff/shared-types';
 import { AppService } from './app.service';
 import { ParseCuidPipe } from './common/parse-cuid.pipe';
+import { ParseDemoTokenPipe } from './common/parse-demo-token.pipe';
 import { ParseStatusTokenPipe } from './common/parse-status-token.pipe';
 import { ParseStepNamePipe } from './common/parse-step-name.pipe';
 
@@ -80,6 +83,59 @@ export class AppController {
   @Get('status/:token')
   getPublicStatus(@Param('token', ParseStatusTokenPipe) token: string) {
     return this.appService.getPublicStatus(token);
+  }
+
+  // ============ LIVE DEMO ============
+
+  // No account: a visitor runs the real pipeline. tenant-service holds the per-visitor
+  // limit (5 an hour) and the cap on live demos; this throttle only stops hammering.
+  @ApiTags('Demo')
+  @ApiOperation({
+    summary: 'Start a live demo customer, no account needed',
+    description:
+      'Creates a test tenant in a demo company and runs it through the real pipeline. Returns a token for GET /demo/tenants/:token and the statusUrl the customer would see. failStep (db, dns, credentials, billing or notification) makes that worker fail once, so the customer goes FAILED and Retry runs it for real. Removed after 15 minutes. 5 per visitor an hour, 20 live at once.',
+  })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Started: { token, liveUrl, statusUrl, name, failStep, expiresAt }',
+  })
+  @ApiResponse({
+    status: 429,
+    description:
+      'Per-visitor limit reached, or the demo is full; Retry-After says how long to wait',
+  })
+  @Throttle({ default: { limit: 30, ttl: 3_600_000 } })
+  @Post('demo/tenants')
+  createDemo(
+    @Body() dto: CreateDemoTenantDto,
+    @Ip() clientIp: string,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ) {
+    return this.appService.createDemo(dto, clientIp, reply);
+  }
+
+  @ApiTags('Demo')
+  @ApiOperation({
+    summary: 'The live demo customer: five steps, status and event log',
+  })
+  @ApiResponse({ status: 404, description: 'No demo matches the token' })
+  @Get('demo/tenants/:token')
+  getDemo(@Param('token', ParseDemoTokenPipe) token: string) {
+    return this.appService.getDemo(token);
+  }
+
+  @ApiTags('Demo')
+  @ApiOperation({
+    summary: 'Retry the failed step of a FAILED demo customer',
+    description:
+      "The same retry as POST /tenants/:id/retry: the failed step's input goes back to its worker's queue.",
+  })
+  @ApiResponse({ status: 400, description: 'The demo customer is not FAILED' })
+  @HttpCode(HttpStatus.OK)
+  @Post('demo/tenants/:token/retry')
+  retryDemo(@Param('token', ParseDemoTokenPipe) token: string) {
+    return this.appService.retryDemo(token);
   }
 
   // ============ AUTH ENDPOINTS ============

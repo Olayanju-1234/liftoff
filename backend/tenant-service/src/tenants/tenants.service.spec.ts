@@ -1442,7 +1442,10 @@ describe('TenantsService', () => {
 
       const [[{ where, data }]] = prisma.tenant.updateMany.mock.calls;
       expect(where).toEqual({ id: 't', status: TenantStatus.DEPROVISIONING });
-      expect(data).toEqual({ teardownBillingStatus: StepStatus.IN_PROGRESS });
+      expect(data).toEqual({
+        teardownBillingStatus: StepStatus.IN_PROGRESS,
+        updatedAt: expect.any(Date) as Date,
+      });
       expect(amqp.publish).toHaveBeenCalledWith(
         'provisioning.direct',
         'tenant.deprovision',
@@ -1454,6 +1457,28 @@ describe('TenantsService', () => {
           eventType: 'tenant.deprovision.retried',
         }) as unknown,
       });
+    });
+
+    it('sends a teardown again when a part is IN_PROGRESS but never reported', async () => {
+      prisma.tenant.findFirst.mockResolvedValueOnce({
+        ...active,
+        status: TenantStatus.DEPROVISIONING,
+        teardownDbStatus: StepStatus.IN_PROGRESS,
+        teardownCredentialsStatus: StepStatus.SUCCESS,
+        teardownBillingStatus: StepStatus.SKIPPED,
+      });
+
+      await service.delete('t', 'org-1');
+
+      // Something to set, so the claim reaches the database instead of reporting 0 rows.
+      const [[{ data }]] = prisma.tenant.updateMany.mock.calls;
+      expect(data).toEqual({ updatedAt: expect.any(Date) as Date });
+      expect(amqp.publish).toHaveBeenCalledWith(
+        'provisioning.direct',
+        'tenant.deprovision',
+        expect.anything(),
+        { timeout: 5_000 },
+      );
     });
 
     it('starts one teardown when two DELETEs race', async () => {

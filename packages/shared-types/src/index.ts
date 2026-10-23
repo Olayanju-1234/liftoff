@@ -798,6 +798,96 @@ export interface PublicTenantStatus {
 }
 
 // ============================================================================
+// Live demo
+// ============================================================================
+
+// POST /demo/tenants takes no account. failStep names the worker whose first message is
+// dead-lettered on purpose, so a visitor can watch a failure and a retry.
+export const DEMO_FAIL_STEPS = [
+  'db',
+  'dns',
+  'credentials',
+  'billing',
+  'notification',
+] as const;
+export type DemoFailStep = (typeof DEMO_FAIL_STEPS)[number];
+
+// The visitor's IP, set by the gateway (never taken from the client) for the per-IP limit.
+export const DEMO_CLIENT_IP_HEADER = 'x-liftoff-client-ip';
+
+// The live view's token: 32 random bytes, base64url, stored only as a hash.
+export const DEMO_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+export class CreateDemoTenantDto {
+  @ApiPropertyOptional({
+    enum: DEMO_FAIL_STEPS,
+    description:
+      'Make this worker fail once: its message goes to the dead-letter exchange, the customer reads FAILED, and Retry runs it for real.',
+  })
+  @IsOptional()
+  @IsIn(DEMO_FAIL_STEPS)
+  failStep?: DemoFailStep;
+}
+
+export interface DemoTenantCreated {
+  // Opens the live view: GET /demo/tenants/:token, and Retry while it is FAILED.
+  token: string;
+  liveUrl: string;
+  // The page the company's customer would see while they wait.
+  statusUrl: string;
+  name: string;
+  failStep: DemoFailStep | null;
+  // When the demo customer is removed through the deprovisioning saga.
+  expiresAt: string;
+}
+
+export interface DemoEvent {
+  id: string;
+  tenantId: string;
+  eventType: string;
+  status: string;
+  payload: unknown;
+  timestamp: string;
+}
+
+// The demo customer as the live view reads it: the same fields as a tenant record, minus
+// anything about billing accounts or owners.
+export interface DemoTenantRecord {
+  id: string;
+  name: string;
+  subdomain: string;
+  address: string;
+  schemaName: string | null;
+  status: string;
+  planId: string;
+  planName: string;
+  isTest: boolean;
+  dbStatus: string;
+  dnsStatus: string;
+  credentialsStatus: string;
+  billingStatus: string;
+  notificationStatus: string;
+  teardownDbStatus: string | null;
+  teardownCredentialsStatus: string | null;
+  teardownBillingStatus: string | null;
+  stepModes: Partial<Record<ProvisioningStepName, StepMode>>;
+  statusUrl: string;
+  cancelReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface DemoTenantView {
+  tenant: DemoTenantRecord;
+  events: DemoEvent[];
+  failStep: DemoFailStep | null;
+  // True once the chosen worker's message has been dead-lettered.
+  failInjected: boolean;
+  expiresAt: string;
+}
+
+// ============================================================================
 // Tenant status
 // ============================================================================
 

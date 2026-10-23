@@ -12,7 +12,7 @@ export const DEFAULT_FRONTEND_URL = 'http://localhost:5173';
 export class StatusTokenService {
   private readonly logger = new Logger(StatusTokenService.name);
   private readonly secret: string;
-  private readonly frontendUrl: string;
+  readonly frontendUrl: string;
 
   constructor(config: ConfigService) {
     const own = config.get<string>('STATUS_TOKEN_SECRET')?.trim();

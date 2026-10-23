@@ -50,6 +50,7 @@ export function setupSwagger(app: NestFastifyApplication): void {
       'Custom steps',
       'Callbacks from your own system for steps set to custom (PUT /organisation { stepConfig })',
     )
+    .addTag('Demo', 'The public live demo: one click, no account')
     .addTag('Settings', 'Per-user settings')
     .addTag('Health', 'Liveness probe')
     .build();

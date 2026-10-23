@@ -22,6 +22,14 @@ export const STEP_BY_DEAD_LETTER_KEY: Record<string, ProvisioningStep> = {
   'notification.failed': 'notificationStatus',
 };
 
+export const DEAD_LETTER_KEY_BY_STEP = Object.fromEntries(
+  Object.entries(STEP_BY_DEAD_LETTER_KEY).map(([key, step]) => [step, key]),
+) as Record<ProvisioningStep, string>;
+
+// Set by tenant-service when it dead-letters a message itself (the live demo's failStep),
+// where RabbitMQ adds no x-death.
+export const DEAD_LETTER_REASON_HEADER = 'x-liftoff-reason';
+
 export type TeardownStep = keyof Pick<
   Tenant,
   'teardownDbStatus' | 'teardownCredentialsStatus' | 'teardownBillingStatus'
@@ -60,15 +68,20 @@ export interface DeadLetterMessage {
   properties: {
     headers?: {
       'x-death'?: { queue: string; reason: string; 'routing-keys': string[] }[];
+      [DEAD_LETTER_REASON_HEADER]?: unknown;
     };
   };
 }
 
 // Workers nack without a reason, so x-death is all there is to report.
 export function describeDeadLetter(message: DeadLetterMessage): string {
-  const death = message.properties.headers?.['x-death']?.[0];
+  const headers = message.properties.headers;
+  const death = headers?.['x-death']?.[0];
   if (!death) {
-    return `Dead-lettered as ${message.fields.routingKey}`;
+    const reason = headers?.[DEAD_LETTER_REASON_HEADER];
+    return typeof reason === 'string'
+      ? reason
+      : `Dead-lettered as ${message.fields.routingKey}`;
   }
   return `${death.queue} ${death.reason} ${death['routing-keys'].join(', ')}`;
 }

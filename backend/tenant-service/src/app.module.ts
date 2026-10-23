@@ -8,6 +8,7 @@ import { TenantsModule } from './tenants/tenants.module';
 import { SettingsModule } from './settings/settings.module';
 import { OrganisationsModule } from './organisations/organisations.module';
 import { InternalModule } from './internal/internal.module';
+import { DemoModule } from './demo/demo.module';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { EmailModule } from './email/email.module';
@@ -45,6 +46,7 @@ import { envValidationSchema } from './config/env.validation';
     TenantsModule,
     OrganisationsModule,
     InternalModule,
+    DemoModule,
     SettingsModule,
     EmailModule,
     SentryModule,

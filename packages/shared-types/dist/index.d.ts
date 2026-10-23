@@ -184,6 +184,61 @@ export interface PublicTenantStatus {
     address: string | null;
     updatedAt: string;
 }
+export declare const DEMO_FAIL_STEPS: readonly ["db", "dns", "credentials", "billing", "notification"];
+export type DemoFailStep = (typeof DEMO_FAIL_STEPS)[number];
+export declare const DEMO_CLIENT_IP_HEADER = "x-liftoff-client-ip";
+export declare const DEMO_TOKEN_PATTERN: RegExp;
+export declare class CreateDemoTenantDto {
+    failStep?: DemoFailStep;
+}
+export interface DemoTenantCreated {
+    token: string;
+    liveUrl: string;
+    statusUrl: string;
+    name: string;
+    failStep: DemoFailStep | null;
+    expiresAt: string;
+}
+export interface DemoEvent {
+    id: string;
+    tenantId: string;
+    eventType: string;
+    status: string;
+    payload: unknown;
+    timestamp: string;
+}
+export interface DemoTenantRecord {
+    id: string;
+    name: string;
+    subdomain: string;
+    address: string;
+    schemaName: string | null;
+    status: string;
+    planId: string;
+    planName: string;
+    isTest: boolean;
+    dbStatus: string;
+    dnsStatus: string;
+    credentialsStatus: string;
+    billingStatus: string;
+    notificationStatus: string;
+    teardownDbStatus: string | null;
+    teardownCredentialsStatus: string | null;
+    teardownBillingStatus: string | null;
+    stepModes: Partial<Record<ProvisioningStepName, StepMode>>;
+    statusUrl: string;
+    cancelReason: string | null;
+    createdAt: string;
+    updatedAt: string;
+    deletedAt: string | null;
+}
+export interface DemoTenantView {
+    tenant: DemoTenantRecord;
+    events: DemoEvent[];
+    failStep: DemoFailStep | null;
+    failInjected: boolean;
+    expiresAt: string;
+}
 export declare const LIVE_TENANT_STATUSES: readonly ["PROVISIONING", "FAILED", "ACTIVE"];
 export type LiveTenantStatus = (typeof LIVE_TENANT_STATUSES)[number];
 export declare const isLiveTenant: (status: string) => status is LiveTenantStatus;

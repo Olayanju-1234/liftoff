@@ -43,6 +43,8 @@ import {
 } from '@liftoff/shared-types';
 import {
   DEAD_LETTER_EXCHANGE,
+  DEAD_LETTER_KEY_BY_STEP,
+  DEAD_LETTER_REASON_HEADER,
   DEAD_LETTER_ROUTING_KEYS,
   STEP_BY_DEAD_LETTER_KEY,
   TEARDOWN_BY_DEAD_LETTER_KEY,
@@ -87,6 +89,11 @@ import {
   CustomStepsService,
   type CustomStepView,
 } from './custom-steps.service';
+import {
+  DEMO_FAIL_STEP_BY_COLUMN,
+  DEMO_FAIL_WORKER,
+  DEMO_ORGANISATION_ID,
+} from '../demo/demo.constants';
 
 const PUBLISH_TIMEOUT_MS = 5_000;
 
@@ -229,7 +236,12 @@ export class TenantsService implements OnModuleInit {
     };
   }
 
-  async create(createTenantDto: CreateTenantDto, creator: TenantCreator) {
+  // `demo` is only ever passed by the public live demo, for a tenant in the demo organisation.
+  async create(
+    createTenantDto: CreateTenantDto,
+    creator: TenantCreator,
+    demo?: Prisma.DemoTenantCreateWithoutTenantInput,
+  ) {
     const organisation = await this.prisma.organisation.findUnique({
       where: { id: creator.organisationId },
       select: { handle: true, baseDomain: true, plans: true, stepConfig: true },
@@ -275,6 +287,8 @@ export class TenantsService implements OnModuleInit {
           isTest,
           statusTokenHash: this.statusTokens.hashFor(id),
           dbStatus: StepStatus.IN_PROGRESS, // Start first step
+          // In the same insert, so the first dispatch already sees a demo's failStep.
+          ...(demo ? { demo: { create: demo } } : {}),
         },
       });
 
@@ -528,7 +542,7 @@ export class TenantsService implements OnModuleInit {
       return this.requestCustomStep(tenant, step, config);
     }
     return this.publishBuiltinStep(
-      tenant.id,
+      tenant,
       step,
       input ?? rebuildInput(tenant, STEP_COLUMN[step]),
     );
@@ -549,13 +563,16 @@ export class TenantsService implements OnModuleInit {
   // Through the default exchange straight to the worker's queue: tenant-service decides
   // what runs next, so no worker listens to another's results.
   private async publishBuiltinStep(
-    tenantId: string,
+    tenant: Pick<Tenant, 'id' | 'organisationId' | 'isTest'>,
     step: ProvisioningStepName,
     payload: object,
   ): Promise<boolean> {
     const column = STEP_COLUMN[step];
     const { queue, routingKey } = STEP_INPUT[column];
     try {
+      if (await this.injectDemoFailure(tenant, column, payload)) {
+        return true;
+      }
       // Without a timeout a down broker buffers the publish and hangs the caller.
       await this.amqpConnection.publish('', queue, payload, {
         timeout: PUBLISH_TIMEOUT_MS,
@@ -563,12 +580,49 @@ export class TenantsService implements OnModuleInit {
       return true;
     } catch (error) {
       await this.failStep(
-        tenantId,
+        tenant.id,
         column,
         `Could not publish ${routingKey}: ${errorMessage(error)}`,
       );
       return false;
     }
+  }
+
+  // The live demo's failStep: that worker's first message goes to the dead-letter exchange
+  // instead of its queue, as if the worker had rejected it. Retry then runs it for real.
+  // Only a test tenant in the demo organisation with a DemoTenant row can match.
+  private async injectDemoFailure(
+    tenant: Pick<Tenant, 'id' | 'organisationId' | 'isTest'>,
+    column: ProvisioningStep,
+    payload: object,
+  ): Promise<boolean> {
+    if (tenant.organisationId !== DEMO_ORGANISATION_ID || !tenant.isTest) {
+      return false;
+    }
+    const failStep = DEMO_FAIL_STEP_BY_COLUMN[column];
+    const { count } = await this.prisma.demoTenant.updateMany({
+      where: { tenantId: tenant.id, failStep, failInjectedAt: null },
+      data: { failInjectedAt: new Date() },
+    });
+    if (count === 0) {
+      return false;
+    }
+    const deadLetterKey = DEAD_LETTER_KEY_BY_STEP[column];
+    await this.amqpConnection.publish(
+      DEAD_LETTER_EXCHANGE,
+      deadLetterKey,
+      payload,
+      {
+        timeout: PUBLISH_TIMEOUT_MS,
+        headers: {
+          [DEAD_LETTER_REASON_HEADER]: `Demo: ${DEMO_FAIL_WORKER[failStep]} was told to fail, so its message went to ${DEAD_LETTER_EXCHANGE} as ${deadLetterKey}`,
+        },
+      },
+    );
+    this.logger.log(
+      `Demo tenant ${tenant.id}: ${STEP_INPUT[column].routingKey} dead-lettered as ${deadLetterKey} on purpose`,
+    );
+    return true;
   }
 
   // The request is recorded before it is sent, so a callback that beats the response to
@@ -1276,9 +1330,9 @@ export class TenantsService implements OnModuleInit {
     return { payload: rebuildInput(tenant, step), source: 'tenant' };
   }
 
-  async delete(id: string, organisationId: string) {
+  async delete(id: string, organisationId: string, reason = 'Deleted by user') {
     const tenant = await this.findInOrganisation(id, organisationId);
-    const removed = await this.deprovision(tenant, 'Deleted by user');
+    const removed = await this.deprovision(tenant, reason);
     return this.present(
       removed,
       await this.organisationContext(organisationId),
@@ -1320,6 +1374,9 @@ export class TenantsService implements OnModuleInit {
           data[step] = StepStatus.IN_PROGRESS;
         }
       }
+      // Prisma skips an update with nothing to set and reports 0 rows, which would stop a
+      // part that is IN_PROGRESS but never reported from being sent again.
+      data.updatedAt = new Date();
     } else {
       const now = new Date();
       const teardownOf = (step: ProvisioningStepName) =>
