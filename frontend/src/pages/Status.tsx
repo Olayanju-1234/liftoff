@@ -100,7 +100,7 @@ function Progress({ status }: { status: PublicTenantStatus }) {
             {status.state === 'ready' && status.address && (
                 <a
                     href={`https://${status.address}`}
-                    className="mt-3 inline-block font-mono text-[14px] font-medium text-blueprint hover:underline"
+                    className="mt-3 inline-block break-all font-mono text-[14px] font-medium text-blueprint hover:underline"
                     rel="noreferrer"
                 >
                     https://{status.address}
