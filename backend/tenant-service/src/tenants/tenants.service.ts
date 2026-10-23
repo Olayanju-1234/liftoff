@@ -1379,6 +1379,9 @@ export class TenantsService implements OnModuleInit {
           data[step] = StepStatus.IN_PROGRESS;
         }
       }
+      // Prisma skips an update with nothing to set and reports 0 rows, which would stop a
+      // part that is IN_PROGRESS but never reported from being sent again.
+      data.updatedAt = new Date();
     } else {
       const now = new Date();
       const teardownOf = (step: ProvisioningStepName) =>
