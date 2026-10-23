@@ -17,11 +17,14 @@ interface FormState {
     tenantName: string;
     subdomain: string;
     password: string;
-    confirmPassword: string;
 }
 
-const EMPTY: FormState = { name: '', email: '', tenantName: '', subdomain: '', password: '', confirmPassword: '' };
+const EMPTY: FormState = { name: '', email: '', tenantName: '', subdomain: '', password: '' };
 
+// The server's HANDLE_PATTERN: letters and digits, single hyphens between.
+const HANDLE_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+// What someone typing in the handle box may enter; the pattern is checked on submit.
 function slugify(value: string) {
     return value
         .toLowerCase()
@@ -29,11 +32,29 @@ function slugify(value: string) {
         .slice(0, 50);
 }
 
+// "Acme Inc." becomes "acme-inc".
+function handleFrom(companyName: string) {
+    return companyName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .slice(0, 50)
+        .replace(/^-+|-+$/g, '');
+}
+
+function handleProblem(handle: string) {
+    if (handle.length < 3) return 'At least 3 characters.';
+    if (!HANDLE_PATTERN.test(handle)) return 'Letters and numbers, with single hyphens between them.';
+    return '';
+}
+
 export default function Register() {
     const navigate = useNavigate();
     const { register, isAuthenticated } = useAuth();
     const [form, setForm] = useState<FormState>(EMPTY);
     const [subdomainTouched, setSubdomainTouched] = useState(false);
+    // The handle is derived from the company name; its box only opens to change it or fix it.
+    const [editingHandle, setEditingHandle] = useState(false);
+    const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
@@ -43,7 +64,7 @@ export default function Register() {
         const value = e.target.value;
         setForm((prev) => {
             const next = { ...prev, [key]: value };
-            if (key === 'tenantName' && !subdomainTouched) next.subdomain = slugify(value.replace(/\s+/g, ''));
+            if (key === 'tenantName' && !subdomainTouched) next.subdomain = handleFrom(value);
             return next;
         });
     };
@@ -54,17 +75,19 @@ export default function Register() {
     };
 
     const problems = {
-        subdomain: form.subdomain && form.subdomain.length < 3 ? 'At least 3 characters.' : '',
+        subdomain: form.subdomain && editingHandle ? handleProblem(form.subdomain) : '',
         password: form.password && form.password.length < 8 ? 'At least 8 characters.' : '',
-        confirm: form.confirmPassword && form.confirmPassword !== form.password ? "Doesn't match the password." : '',
     };
 
     const handleSubmit = async (e: FormEvent) => {
         e.preventDefault();
         setError('');
-        if (form.password !== form.confirmPassword) return setError('Passwords do not match.');
         if (form.password.length < 8) return setError('Password must be at least 8 characters.');
-        if (form.subdomain.length < 3) return setError('Subdomain must be at least 3 characters.');
+        const handleIssue = handleProblem(form.subdomain);
+        if (handleIssue) {
+            setEditingHandle(true);
+            return setError(`Your company handle needs a change. ${handleIssue}`);
+        }
         setLoading(true);
         try {
             await register({
@@ -77,7 +100,9 @@ export default function Register() {
             toast.success(`Account created. Check ${form.email} for a verification link.`, { duration: 6000 });
             navigate('/', { replace: true });
         } catch (err) {
-            setError(apiMessage(err, 'Registration failed.'));
+            const message = apiMessage(err, 'Registration failed.');
+            if (/handle/i.test(message)) setEditingHandle(true);
+            setError(message === 'Handle already taken' ? 'Another company already has that handle. Pick a different one below.' : message);
             setLoading(false);
         }
     };
@@ -134,7 +159,21 @@ export default function Register() {
                         />
                     </Field>
                 </div>
-                <Field label="Company name" htmlFor="tenantName">
+                <Field
+                    label="Company name"
+                    htmlFor="tenantName"
+                    hint={
+                        !editingHandle &&
+                        form.subdomain && (
+                            <>
+                                Your handle: <span className="font-mono text-ink-2">{form.subdomain}</span> ·{' '}
+                                <button type="button" onClick={() => setEditingHandle(true)} className="link">
+                                    Change
+                                </button>
+                            </>
+                        )
+                    }
+                >
                     <input
                         id="tenantName"
                         autoComplete="organization"
@@ -146,43 +185,47 @@ export default function Register() {
                         required
                     />
                 </Field>
-                <Field label="Company handle" htmlFor="subdomain" error={problems.subdomain} hint="Lowercase letters, numbers and hyphens. Used for your own workspace address.">
+                {editingHandle && (
+                    <Field label="Company handle" htmlFor="subdomain" error={problems.subdomain} hint="Lowercase letters, numbers and hyphens. Unique to your company.">
+                        <input
+                            id="subdomain"
+                            value={form.subdomain}
+                            onChange={onSubdomain}
+                            className={cn(inputClass, 'font-mono text-[14px]')}
+                            placeholder="acme"
+                            maxLength={50}
+                            required
+                            autoFocus
+                        />
+                    </Field>
+                )}
+                <Field
+                    label="Password"
+                    htmlFor="password"
+                    error={problems.password}
+                    aside={
+                        <button
+                            type="button"
+                            onClick={() => setShowPassword((shown) => !shown)}
+                            aria-controls="password"
+                            aria-pressed={showPassword}
+                            className="hover:text-ink"
+                        >
+                            {showPassword ? 'Hide' : 'Show'}
+                        </button>
+                    }
+                >
                     <input
-                        id="subdomain"
-                        value={form.subdomain}
-                        onChange={onSubdomain}
-                        className={cn(inputClass, 'font-mono text-[14px]')}
-                        placeholder="acme"
-                        maxLength={50}
+                        id="password"
+                        type={showPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        value={form.password}
+                        onChange={set('password')}
+                        className={inputClass}
+                        placeholder="8+ characters"
                         required
                     />
                 </Field>
-                <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Password" htmlFor="password" error={problems.password}>
-                        <input
-                            id="password"
-                            type="password"
-                            autoComplete="new-password"
-                            value={form.password}
-                            onChange={set('password')}
-                            className={inputClass}
-                            placeholder="8+ characters"
-                            required
-                        />
-                    </Field>
-                    <Field label="Confirm" htmlFor="confirmPassword" error={problems.confirm}>
-                        <input
-                            id="confirmPassword"
-                            type="password"
-                            autoComplete="new-password"
-                            value={form.confirmPassword}
-                            onChange={set('confirmPassword')}
-                            className={inputClass}
-                            placeholder="Again"
-                            required
-                        />
-                    </Field>
-                </div>
                 <Button
                     type="submit"
                     variant="primary"
