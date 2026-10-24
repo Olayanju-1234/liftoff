@@ -34,6 +34,7 @@ export class DurableService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(DurableService.name);
   private readonly address: string;
   private readonly token: string | undefined;
+  private readonly namespace: string;
   private readonly activities = new Map<string, ActivityFunction>();
   private worker?: Worker;
   private stopped = false;
@@ -43,6 +44,8 @@ export class DurableService implements OnApplicationBootstrap, OnModuleDestroy {
   constructor(config: ConfigService) {
     this.address = config.get<string>('WORKFLOWD_ADDR')?.trim() ?? '';
     this.token = config.get<string>('WORKFLOWD_TOKEN')?.trim() || undefined;
+    this.namespace =
+      config.get<string>('WORKFLOWD_NAMESPACE')?.trim() || 'default';
   }
 
   get enabled(): boolean {
@@ -65,6 +68,7 @@ export class DurableService implements OnApplicationBootstrap, OnModuleDestroy {
     const worker = new Worker({
       address: this.address,
       token: this.token,
+      namespace: this.namespace,
       workerId: `liftoff-tenant-${hostname()}`,
       sdk: 'liftoff-tenant-service',
     });
@@ -77,7 +81,7 @@ export class DurableService implements OnApplicationBootstrap, OnModuleDestroy {
     this.worker = worker;
     void this.serve(worker);
     this.logger.log(
-      `Durable deliveries on: webhooks and custom steps run on workflowd at ${this.address}`,
+      `Durable deliveries on: webhooks and custom steps run on workflowd at ${this.address}, namespace ${this.namespace}`,
     );
   }
 

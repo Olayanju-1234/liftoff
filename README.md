@@ -559,7 +559,8 @@ migration steps are written up in
 
 **Tenant Service (durable deliveries, optional):**
 - `WORKFLOWD_ADDR`: the HTTP address of a [workflowd](https://github.com/Olayanju-1234/durable-workflow-engine) engine, e.g. `http://127.0.0.1:8233`. When set, company webhooks and custom step requests run as workflows (`src/durable/`): retries, the custom step deadline and the wait for the company's callback live in the engine, so a tenant-service restart mid-retry no longer loses the request. Unset, or with the engine unreachable when a delivery starts, everything runs in memory as before. The 30-second deadline sweep stays on as a backstop. Needs a workflowd 0.2.0 engine or newer, since the workflows use its clock (`ctx.now()`) and its per-attempt timeouts (30 s per delivery attempt).
-- `WORKFLOWD_TOKEN`: the bearer token, for an engine started with `--auth-token-file`.
+- `WORKFLOWD_TOKEN`: the bearer token: the engine's (`--auth-token-file`), or better, a token for liftoff's own namespace, which reaches nothing else on the engine.
+- `WORKFLOWD_NAMESPACE`: the [namespace](https://github.com/Olayanju-1234/durable-workflow-engine/blob/main/docs/adr/0015-namespaces.md) liftoff's workflows, workflow types and worker live in, so liftoff can share an engine with other apps without seeing their work or colliding with their activity names. Unset, it is `default`, which is everything on an engine without namespaces. Any other namespace needs a workflowd 0.4.0 engine or newer. The worker polls the namespace's default task queue: liftoff is the only app in its namespace, so it needs no queue of its own.
 
 **Tenant Service (per-organisation secrets and the internal API):**
 - `ORG_SECRETS_KEY` (32+ chars): encrypts each company's Stripe key at rest. Without it, connecting Stripe answers 503 and billing is `SKIPPED` for everyone.

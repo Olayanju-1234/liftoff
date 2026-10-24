@@ -38,9 +38,13 @@ class FakeWorker {
   }
 }
 
-const enabledService = () => {
+const enabledService = (env: Record<string, string> = {}) => {
   const service = new DurableService(
-    config({ WORKFLOWD_ADDR: 'http://127.0.0.1:8233', WORKFLOWD_TOKEN: 'tok' }),
+    config({
+      WORKFLOWD_ADDR: 'http://127.0.0.1:8233',
+      WORKFLOWD_TOKEN: 'tok',
+      ...env,
+    }),
   );
   service.load = () =>
     ({ Worker: FakeWorker }) as unknown as ReturnType<DurableService['load']>;
@@ -84,12 +88,25 @@ describe('DurableService', () => {
       expect(worker.options).toMatchObject({
         address: 'http://127.0.0.1:8233',
         token: 'tok',
+        namespace: 'default',
       });
       expect(worker.workflows.sort()).toEqual(Object.keys(WORKFLOWS).sort());
       expect(worker.activities).toEqual([
         { name: 'liftoff.demo', opts: { as: 'json' } },
       ]);
       expect(worker.run).toHaveBeenCalled();
+    });
+
+    it('works in WORKFLOWD_NAMESPACE when set, and says so', () => {
+      const log = jest.spyOn(Logger.prototype, 'log');
+      const service = enabledService({ WORKFLOWD_NAMESPACE: ' liftoff ' });
+
+      service.onApplicationBootstrap();
+
+      expect(FakeWorker.last.options).toMatchObject({ namespace: 'liftoff' });
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('namespace liftoff'),
+      );
     });
 
     it('hands each activity its task, for the attempt number and a stable id', async () => {
