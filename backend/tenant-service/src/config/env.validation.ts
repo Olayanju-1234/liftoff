@@ -64,8 +64,13 @@ export const envValidationSchema = Joi.object({
     .uri({ scheme: ['http', 'https'] })
     .optional()
     .allow(''),
-  // Bearer token for an engine started with --auth-token-file.
+  // Bearer token: the engine's (--auth-token-file), or the namespace's own.
   WORKFLOWD_TOKEN: Joi.string().optional().allow(''),
+  // The workflowd namespace (0.4.0+) every call works in. Unset means default.
+  WORKFLOWD_NAMESPACE: Joi.string()
+    .pattern(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/)
+    .optional()
+    .allow(''),
 
   // OAuth — optional; routes 401 if a strategy is enabled without creds.
   GOOGLE_CLIENT_ID: Joi.string().optional().allow(''),

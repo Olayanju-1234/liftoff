@@ -45,3 +45,23 @@ describe('envValidationSchema email settings', () => {
     expect(validate({ INTERNAL_API_TOKEN: 'short' })).toBeDefined();
   });
 });
+
+describe('envValidationSchema workflowd settings', () => {
+  it.each(['', 'default', 'liftoff', 'app-2', 'a'.repeat(63)])(
+    'accepts WORKFLOWD_NAMESPACE %p',
+    (namespace) => {
+      expect(validate({ WORKFLOWD_NAMESPACE: namespace })).toBeUndefined();
+    },
+  );
+
+  it.each([
+    'Liftoff',
+    '-liftoff',
+    'liftoff-',
+    'lift_off',
+    'a/b',
+    'a'.repeat(64),
+  ])('rejects WORKFLOWD_NAMESPACE %p', (namespace) => {
+    expect(validate({ WORKFLOWD_NAMESPACE: namespace })).toBeDefined();
+  });
+});
