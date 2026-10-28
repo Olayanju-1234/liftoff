@@ -68,24 +68,36 @@ export class AppService {
         planId: payload.planId,
         liftoffOrganisationId: config.organisationId,
       };
-      const customer = await stripe.customers.create({
-        name: payload.subdomain,
-        description: `Liftoff tenant ${payload.tenantId}`,
-        metadata,
-      });
+      // A retried step sends the same keys, and Stripe answers with what it created the
+      // first time instead of a second customer or subscription (keys last 24 hours).
+      const customer = await stripe.customers.create(
+        {
+          name: payload.subdomain,
+          description: `Liftoff tenant ${payload.tenantId}`,
+          metadata,
+        },
+        { idempotencyKey: `liftoff-${payload.tenantId}-customer` },
+      );
       this.logger.log(
         `Stripe customer created: ${customer.id} for tenant ${payload.tenantId}`,
       );
 
-      const subscription = await stripe.subscriptions.create({
-        customer: customer.id,
-        items: [{ price: priceId }],
-        trial_period_days: TRIAL_DAYS,
-        metadata,
-        payment_settings: {
-          save_default_payment_method: 'on_subscription',
+      // The price is part of the key: Stripe refuses a reused key whose request changed,
+      // which a company fixing a wrong price before Retry would otherwise run into.
+      const subscription = await stripe.subscriptions.create(
+        {
+          customer: customer.id,
+          items: [{ price: priceId }],
+          trial_period_days: TRIAL_DAYS,
+          metadata,
+          payment_settings: {
+            save_default_payment_method: 'on_subscription',
+          },
         },
-      });
+        {
+          idempotencyKey: `liftoff-${payload.tenantId}-subscription-${priceId}`,
+        },
+      );
       this.logger.log(
         `Stripe subscription created: ${subscription.id} (status=${subscription.status}) for tenant ${payload.tenantId}`,
       );

@@ -19,12 +19,15 @@ import { InternalApiClient } from './internal-api.client';
 
 const mockStripe = {
   customers: {
-    create: jest.fn<Promise<{ id: string }>, [Stripe.CustomerCreateParams]>(),
+    create: jest.fn<
+      Promise<{ id: string }>,
+      [Stripe.CustomerCreateParams, Stripe.RequestOptions?]
+    >(),
   },
   subscriptions: {
     create: jest.fn<
       Promise<Pick<Stripe.Subscription, 'id' | 'status' | 'trial_end'>>,
-      [Stripe.SubscriptionCreateParams]
+      [Stripe.SubscriptionCreateParams, Stripe.RequestOptions?]
     >(),
     cancel: jest.fn<Promise<Pick<Stripe.Subscription, 'status'>>, [string]>(),
     retrieve: jest.fn<Promise<Pick<Stripe.Subscription, 'status'>>, [string]>(),
@@ -135,6 +138,7 @@ describe('AppService', () => {
           liftoffOrganisationId: 'org-1',
         }) as unknown,
       }),
+      expect.anything(),
     );
     const billingActive: TenantBillingActivePayload = {
       tenantId: 'tenant-1',
@@ -163,9 +167,57 @@ describe('AppService', () => {
 
       expect(mockStripe.subscriptions.create).toHaveBeenCalledWith(
         expect.objectContaining({ items: [{ price: `price_${planId}` }] }),
+        expect.anything(),
       );
     },
   );
+
+  it('sends Stripe idempotency keys from the tenant, the subscription one with its price', async () => {
+    await service.handleTenantCredentialsReady(payload);
+
+    expect(mockStripe.customers.create).toHaveBeenCalledWith(
+      expect.anything(),
+      { idempotencyKey: 'liftoff-tenant-1-customer' },
+    );
+    expect(mockStripe.subscriptions.create).toHaveBeenCalledWith(
+      expect.anything(),
+      { idempotencyKey: 'liftoff-tenant-1-subscription-price_pro' },
+    );
+  });
+
+  it('retries a half-finished step with the same keys, so Stripe creates no second customer', async () => {
+    mockStripe.subscriptions.create.mockRejectedValueOnce(
+      new Error('Stripe is having a moment'),
+    );
+
+    const first = await service.handleTenantCredentialsReady(payload);
+    await service.handleTenantCredentialsReady(payload);
+
+    expect(first).toBeInstanceOf(Nack);
+    const [firstCustomer, retryCustomer] =
+      mockStripe.customers.create.mock.calls;
+    expect(retryCustomer[1]).toEqual(firstCustomer[1]);
+    const [firstSub, retrySub] = mockStripe.subscriptions.create.mock.calls;
+    expect(retrySub[1]).toEqual(firstSub[1]);
+    expect(amqp.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('keys the subscription to the new price when the company fixed it before Retry', async () => {
+    await service.handleTenantCredentialsReady(payload);
+    internalApi.billingConfig.mockResolvedValueOnce({
+      ...connected,
+      prices: { ...connected.prices, pro: 'price_pro_fixed' },
+    });
+    await service.handleTenantCredentialsReady(payload);
+
+    const keys = mockStripe.subscriptions.create.mock.calls.map(
+      ([, options]) => options?.idempotencyKey,
+    );
+    expect(keys).toEqual([
+      'liftoff-tenant-1-subscription-price_pro',
+      'liftoff-tenant-1-subscription-price_pro_fixed',
+    ]);
+  });
 
   it('skips billing as not-connected when the company has no Stripe key, without calling Stripe', async () => {
     internalApi.billingConfig.mockResolvedValueOnce({
